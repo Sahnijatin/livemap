@@ -294,7 +294,7 @@ describe('ProjectModel fix round 1', () => {
     expect(m.get('secrets.json')).toBeUndefined();
     expect(m.content('secrets.json')).toBeNull();
     expect(m.get('gen/out.ts')!.imports.local).toEqual(['src/b.ts']);
-    expect(await m.reloadIgnores(['.gitignore'])).toEqual({ files: [], removed: [], dirs: [] });
+    expect(await m.reloadIgnores(['.gitignore'])).toEqual({ files: [], removed: [], dirs: [], created: [] });
   });
 
   it('reloadIgnores reads nested .gitignore files created after their directory was seen', async () => {
@@ -449,5 +449,36 @@ describe('ProjectModel fix round 1', () => {
     expect(m.get('app.ts')!.imports.local).toEqual(['lib/x.ts']);
     expect((await m.flushRelink()).map(f => f.path)).toEqual(['app.ts']);
     expect(m.get('app.ts')!.imports.local).toEqual([]);
+  });
+
+  it('reloadIgnores hands included dirs to the watcher before reading, then indexes files created meanwhile', async () => {
+    put('.gitignore', 'gen/\n');
+    put('gen/a.ts', 'export const a = 1;\n');
+    const m = await scanned();
+    put('.gitignore', '# nothing\n');
+    let seen: string[] = [];
+    const r = await m.reloadIgnores(['.gitignore'], {
+      onIncluded: dirs => { seen = dirs; put('gen/late.ts', 'export const late = 1;\n'); },
+    });
+    expect(seen).toEqual(['gen']);
+    expect(r.files.map(f => f.path)).toEqual(['gen/a.ts']);
+    expect(r.created.map(c => [c.path, c.kind])).toEqual([['gen/late.ts', 'created']]);
+    expect(m.get('gen/late.ts')).toBeDefined();
+  });
+
+  it('a reload that frees room indexes files a truncated scan never reached', async () => {
+    for (const n of ['a', 'b', 'c']) put(`gen/${n}.ts`, `export const ${n} = 1;\n`);
+    put('zz/z.ts', 'export const z = 1;\n');
+    fs.rmSync(path.join(root, 'src'), { recursive: true });
+    fs.rmSync(path.join(root, 'README.md'));
+    fs.rmSync(path.join(root, '.env'));
+    const m = new ProjectModel(root, { limit: 3 });
+    await m.scan();
+    expect(m.truncated).toBe(true);
+    expect(m.get('zz/z.ts')).toBeUndefined();
+    put('.gitignore', 'gen/\n'); // the .gitignore itself takes one slot
+    await m.reloadIgnores(['.gitignore']);
+    expect(m.get('zz/z.ts')).toBeDefined();
+    expect(m.truncated).toBe(false);
   });
 });

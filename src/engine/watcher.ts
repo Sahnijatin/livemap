@@ -105,11 +105,13 @@ export class Watcher extends EventEmitter {
         const paths = [...this.gitignores].sort();
         this.gitignores.clear();
         if (paths.length === 0) return []; // an earlier queued job already took this batch
-        const { files, removed, dirs } = await this.model.reloadIgnores(paths);
-        // Directories that were ignored when chokidar crawled were never watched.
-        if (dirs.length) this.fsw?.add(dirs.map(d => path.join(this.model.root, ...d.split('/'))));
+        const { files, removed, created } = await this.model.reloadIgnores(paths, {
+          // Directories that were ignored when chokidar crawled were never watched; watch them
+          // before the reload reads them (files appearing meanwhile come back in `created`).
+          onIncluded: dirs => this.fsw?.add(dirs.map(d => path.join(this.model.root, ...d.split('/')))),
+        });
         if (!this.stopped && (files.length || removed.length)) this.emit('touched', files, removed);
-        const own: UpdateResult[] = [];
+        const own: UpdateResult[] = [...created];
         for (const p of paths) {
           // Deferred: run() relinks once after the job, not once per created/deleted .gitignore.
           const r = await this.model.update(p, 'change', { deferRelink: true }); // null while its own rules ignore it
