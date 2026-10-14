@@ -47,6 +47,7 @@ export type IgnoreFn = ((rel: string, isDir: boolean) => boolean) & {
  * dirs it ignored (whose .gitignore edits went unseen).
  */
 export function createIgnore(root: string, reuse?: { previous: IgnoreFn; changed: string[] }): IgnoreFn {
+  const defaults = ignore().add(DEFAULT_IGNORES);
   const top = ignore().add(DEFAULT_IGNORES);
   try {
     top.add(readGitignore(root));
@@ -77,21 +78,27 @@ export function createIgnore(root: string, reuse?: { previous: IgnoreFn; changed
   const dirs = new Map<string, boolean>();
 
   /** The rules of the directories from root down to rel's parent, deepest opinion last. */
+  /** The rules of the directories from root down to r's parent, deepest opinion last. */
   const own = (r: string, isDir: boolean): boolean => {
-    const segs = r.split('/');
+    const q = (sub: string): string => (isDir ? `${sub}/` : sub);
     let ignored = false;
-    for (let i = 0; i < segs.length; i++) {
-      const base = segs.slice(0, i).join('/');
-      const ig = level(base);
-      if (!ig) continue;
-      const sub = segs.slice(i).join('/');
-      try {
-        const t = ig.test(isDir ? `${sub}/` : sub);
-        if (t.ignored) ignored = true;
-        else if (t.unignored) ignored = false;
-      } catch {
-        /* a path the matcher cannot express is not ignored by it */
+    let defaultHit: boolean | undefined;
+    // cut is -1 for the root level, then the index of each '/' that ends an ancestor directory.
+    for (let cut = -1; ; ) {
+      const ig = level(cut === -1 ? '' : r.slice(0, cut));
+      if (ig) {
+        try {
+          const t = ig.test(q(r.slice(cut + 1)));
+          if (t.ignored) ignored = true;
+          // Only the root .gitignore may re-include what LiveMap ignores by default
+          // (node_modules, .git, dist...); a nested or vendored one may not.
+          else if (t.unignored && (cut === -1 || !(defaultHit ??= defaults.ignores(q(r))))) ignored = false;
+        } catch {
+          /* a path the matcher cannot express is not ignored by it */
+        }
       }
+      cut = r.indexOf('/', cut + 1);
+      if (cut === -1) break;
     }
     return ignored;
   };

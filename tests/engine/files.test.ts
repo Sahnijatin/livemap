@@ -75,6 +75,17 @@ describe('walk', () => {
     expect(next('b/z', true)).toBe(true);
     expect(ignoreStats.reads - before).toBe(2); // the root's and b's; a's rules are reused
   });
+  it('a nested .gitignore cannot un-ignore the built-in ignores (only the root one can)', async () => {
+    put('sub/.gitignore', '*\n!*/\n!*.js\n');
+    put('sub/node_modules/p/i.js'); put('sub/.git/HEAD.js'); put('sub/app.js');
+    const ig = createIgnore(root);
+    expect(ig('sub/node_modules', true)).toBe(true);
+    expect(ig('sub/.git', true)).toBe(true);
+    expect((await walk(root, ig)).files).toEqual(['sub/.gitignore', 'sub/app.js'].filter(f => !ig(f, false)));
+    expect(ig('sub/app.js', false)).toBe(false);
+    put('.gitignore', '!dist/\n');
+    expect(createIgnore(root)('dist', true)).toBe(false);
+  });
   it('directory patterns need isDir', () => {
     put('.gitignore', 'secret/\n');
     const ig = createIgnore(root);
