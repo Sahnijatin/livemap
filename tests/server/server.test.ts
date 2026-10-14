@@ -195,6 +195,19 @@ describe('startServer: HTTP auth', () => {
     expect((await get(s.port, q)).status).toBe(200);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toMatch(/launch link was used more than once/i);
+    await get(s.port, q);
+    expect(warnings).toHaveLength(1); // once per link, not on every reload
+  });
+
+  it('a browser prefetch or prerender does not spend a launch code', async () => {
+    const s = await boot();
+    const q = s.launchUrl().replace(/^http:\/\/[^/]+/, '');
+    for (const h of [{ 'sec-purpose': 'prefetch;prerender' }, { purpose: 'prefetch' }] as Record<string, string>[]) {
+      const r = await get(s.port, q, h);
+      expect(r.status).toBe(503);
+      expect(r.headers['cache-control']).toBe('no-store');
+    }
+    expect((await get(s.port, q)).status).toBe(302);
   });
 
   it('a launch code expires unused, and opening it late says so', async () => {

@@ -151,7 +151,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
   /** One-time launch codes (see launchUrl). */
-  const launches = new Map<string, { expires: number; spent: boolean }>();
+  const launches = new Map<string, { expires: number; spent: boolean; warned: boolean }>();
 
   /** Room each client may still need for draining its last hello (see sendTracked). */
   const allowances = new WeakMap<WebSocket, number>();
@@ -213,9 +213,13 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     if (isApiPath(url.pathname) && !authenticate(req, url, token)) return json(res, 401, { error: 'unauthorized' });
     if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method not allowed' }, { allow: 'GET, HEAD' });
 
-    // Only a GET spends a launch code, so a HEAD or link check does not lock the browser out.
+    // Only a real navigation spends a launch code: a HEAD, link check or browser prefetch/prerender
+    // (Sec-Purpose / Purpose headers) must not lock the browser out. A prefetch gets a 503 so the
+    // browser discards it and makes the real request when the page is actually opened.
     const launch = req.method === 'GET' && url.pathname === '/' ? url.searchParams.get('launch') : null;
     const entry = launch === null ? undefined : launches.get(launch);
+    const purpose = `${req.headers['sec-purpose'] ?? ''} ${req.headers.purpose ?? ''}`;
+    if (entry && /prefetch|prerender/i.test(purpose)) return json(res, 503, { error: 'not prefetchable' });
     if (entry && Date.now() > entry.expires) {
       launches.delete(launch!);
       if (!entry.spent) opts.warn?.('the browser launch link expired before it was opened. Open the URL printed above instead.');
@@ -224,7 +228,8 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
       res.writeHead(302, { ...BASE_HEADERS, location: `/?t=${token}`, 'content-length': '0' });
       res.end();
       return;
-    } else if (entry) {
+    } else if (entry && !entry.warned) {
+      entry.warned = true;
       opts.warn?.('the browser launch link was used more than once. If you did not open it twice, stop LiveMap and start it again for a new key.');
     }
 
@@ -283,7 +288,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
       const now = Date.now();
       for (const [code, { expires }] of launches) if (expires < now) launches.delete(code);
       const code = newToken();
-      launches.set(code, { expires: now + LAUNCH_TTL_MS, spent: false });
+      launches.set(code, { expires: now + LAUNCH_TTL_MS, spent: false, warned: false });
       return `http://${HOST}:${port}/?launch=${code}`;
     },
     setIndexing(done: number, total: number): void {
