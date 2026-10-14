@@ -91,6 +91,8 @@ export interface StoreState {
   /** Routes, tables, stack, deps, scripts and env for the whole project. */
   domain: DomainIndex;
   domainBase: DomainBase;
+  /** `domain.routes` grouped by file, rebuilt only when the domain changes. */
+  routesByFile: Record<string, ApiRoute[]>;
   /** The center pane's tab, remembered across reloads. */
   tab: CenterTab;
 
@@ -131,7 +133,13 @@ const initial = {
   toast: null,
 };
 
-const freshDomain = () => ({ domain: emptyDomainIndex(), domainBase: baseOf(emptyDomainIndex()) });
+function routesByFileOf(domain: DomainIndex): Record<string, ApiRoute[]> {
+  const out: Record<string, ApiRoute[]> = {};
+  for (const r of domain.routes) (out[r.file] ??= []).push(r);
+  return out;
+}
+
+const freshDomain = () => ({ domain: emptyDomainIndex(), domainBase: baseOf(emptyDomainIndex()), routesByFile: {} });
 
 /** Files after upserting and removing; clears the selection if its file is gone. */
 function upsertFiles(st: StoreState, upserts: FileModel[], removed: string[]): Pick<StoreState, 'files' | 'selected'> {
@@ -171,6 +179,7 @@ export const useStore = create<StoreState>()((set, get) => ({
         set({
           domain,
           domainBase: baseOf(domain),
+          routesByFile: routesByFileOf(domain),
           events,
           sessions,
           control: msg.control ?? { paused: false, flags: [] },
@@ -206,7 +215,7 @@ export const useStore = create<StoreState>()((set, get) => ({
         set({ usedBy: msg.usedBy });
         return;
       case 'domain':
-        set({ domain: msg.domain });
+        set({ domain: msg.domain, routesByFile: routesByFileOf(msg.domain) });
         return;
       case 'indexing':
         set({ indexing: { done: msg.done, total: msg.total } });

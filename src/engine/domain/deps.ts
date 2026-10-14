@@ -1,6 +1,7 @@
 import type { Dep } from '../../shared/types.js';
 import type { Analyzer, DomainFacts } from './index.js';
 import { lineAt } from './util.js';
+import { baseName } from '../paths.js';
 
 type Facts = NonNullable<DomainFacts['deps']>;
 type Parser = (text: string) => Facts;
@@ -266,7 +267,6 @@ const BY_NAME = new Map<string, Parser>([
   ['Podfile', rubyDsl('pod', 'cocoapods')],
 ]);
 
-const baseName = (rel: string): string => rel.slice(rel.lastIndexOf('/') + 1);
 const parserFor = (rel: string): Parser | null => {
   const b = baseName(rel);
   return BY_NAME.get(b) ?? (/^requirements[\w.-]*\.txt$/.test(b) ? requirements : null);

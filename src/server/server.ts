@@ -7,7 +7,7 @@ import type { Watcher } from '../engine/watcher.js';
 import type { AgentHub } from '../agents/hub.js';
 import type { Attributor } from '../agents/attribution.js';
 import { buildUsedBy, type TokenCache } from '../engine/usedby.js';
-import { buildDomainIndex } from '../engine/domain/build-index.js';
+import { buildDomainIndex, newDataRefCache } from '../engine/domain/build-index.js';
 import type { DomainIndex } from '../shared/domain.js';
 import type { ServerMessage, UsedByEntry } from '../shared/protocol.js';
 import type { AgentEvent, AgentSession, Attribution, ChangeSummary, ControlState, FileModel } from '../shared/types.js';
@@ -162,6 +162,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   let lastIndexingSent = 0;
   const changes: ChangeSummary[] = [];
   let usedBy: UsedByEntry[] = [];
+  const dataRefCache = newDataRefCache();
   let usedByAt = 0;
   let usedByTimer: NodeJS.Timeout | null = null;
   let domain: DomainIndex = EMPTY_DOMAIN;
@@ -216,7 +217,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     domainAt = Date.now();
     let next: DomainIndex;
     try {
-      next = buildDomain(model.all(), p => model.content(p));
+      next = buildDomain(model.all(), p => model.content(p), dataRefCache);
     } catch (e) {
       const msg = (e as Error)?.message ?? String(e);
       if (!domainErrors.has(msg)) {

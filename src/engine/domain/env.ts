@@ -3,6 +3,7 @@ import { envKeys } from '../files.js';
 import { isSecretEnvPath } from '../languages.js';
 import type { Analyzer } from './index.js';
 import { maskCommentsAndStrings } from './util.js';
+import { baseName } from '../paths.js';
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const N = '([A-Za-z_][A-Za-z0-9_]*)';
@@ -37,7 +38,6 @@ const PATTERNS: Partial<Record<Lang, RegExp[]>> = {
   java: [new RegExp(`\\bSystem\\.getenv\\(\\s*"${N}"`, 'g')],
 };
 
-const baseName = (rel: string): string => rel.slice(rel.lastIndexOf('/') + 1);
 /** `.env.example`, `.env.sample`, `.env.template`, and the `.env.<x>.example` style variants. */
 export const isEnvTemplate = (rel: string): boolean => !isSecretEnvPath(rel) && /^\.env([._-][\w.-]*)?[._-](example|sample|template)$/i.test(baseName(rel));
 

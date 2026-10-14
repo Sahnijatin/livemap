@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildDomainIndex } from '../../../src/engine/domain/build-index.js';
+import { buildDomainIndex, newDataRefCache } from '../../../src/engine/domain/build-index.js';
 import type { Entity, FileModel, Mount, Route } from '../../../src/shared/types.js';
 
 const fm = (path: string, extra: Partial<FileModel> = {}): FileModel => ({
@@ -357,3 +357,71 @@ describe('review fixes: Flask url_prefix and JS Expo screens', () => {
   });
 });
 
+describe('review fixes: SQL migrations that drop and rename columns', () => {
+  const sql = (path: string, fields: string[], extra: Partial<Entity> = {}): FileModel =>
+    fm(path, { lang: 'sql', entities: [{ name: 'orders', table: 'orders', orm: 'sql', file: path, line: 1, fields: fields.map(n => ({ name: n, type: 'TEXT' })), ...extra }] });
+
+  it('applies later migrations in path order', () => {
+    const idx = buildDomainIndex([
+      sql('db/003_cleanup.sql', [], { partial: true, dropped: ['legacy_code'], renamed: [['name', 'title']] }),
+      sql('db/001_create.sql', ['id', 'legacy_code', 'name']),
+      sql('db/002_status.sql', ['status'], { partial: true }),
+    ], noText);
+    expect(idx.tables[0].fields.map(f => f.name)).toEqual(['id', 'title', 'status']);
+  });
+
+  it('a column dropped and added again comes back', () => {
+    const idx = buildDomainIndex([
+      sql('db/001.sql', ['id', 'note']),
+      sql('db/002.sql', [], { partial: true, dropped: ['note'] }),
+      sql('db/003.sql', ['note'], { partial: true }),
+    ], noText);
+    expect(idx.tables[0].fields.map(f => f.name)).toEqual(['id', 'note']);
+  });
+
+  it('never drops or renames a field an ORM model declares', () => {
+    const idx = buildDomainIndex([
+      fm('prisma/schema.prisma', { lang: 'prisma', entities: [{ name: 'Order', table: 'orders', orm: 'prisma', file: 'prisma/schema.prisma', line: 1, fields: [{ name: 'id', type: 'Int' }, { name: 'name', type: 'String' }] }] }),
+      sql('db/002.sql', [], { partial: true, dropped: ['name'], renamed: [['id', 'key']] }),
+    ], noText);
+    expect(idx.tables[0].fields.map(f => f.name)).toEqual(['id', 'name']);
+  });
+});
+
+
+describe('buildDomainIndex: dataRefs cache', () => {
+  const schema = fm('prisma/schema.prisma', { lang: 'prisma', entities: [user, prismaOrder] });
+  const base = { 'prisma/schema.prisma': 'model Order {}', 'src/a.ts': 'prisma.order.findMany();\n', 'src/b.ts': 'knex("users");\n', 'src/c.ts': 'const x = 1;\n' };
+  const files = [schema, fm('src/a.ts'), fm('src/b.ts'), fm('src/c.ts')];
+
+  it('gives the same answer with and without a cache, and reuses unchanged files', () => {
+    const cache = newDataRefCache();
+    const cold = buildDomainIndex(files, texts(base)).dataRefs;
+    expect(buildDomainIndex(files, texts(base), cache).dataRefs).toEqual(cold);
+    // Poison one cached result: an unchanged file is not rescanned, so the poison shows.
+    cache.files.get('src/c.ts')!.tables = ['poison'];
+    expect(buildDomainIndex(files, texts(base), cache).dataRefs.map(r => r.file)).toEqual(['src/a.ts', 'src/b.ts', 'src/c.ts']);
+  });
+
+  it('rescans a file whose text changed', () => {
+    const cache = newDataRefCache();
+    buildDomainIndex(files, texts(base), cache);
+    const next = buildDomainIndex(files, texts({ ...base, 'src/c.ts': 'prisma.user.findMany();\n' }), cache).dataRefs;
+    expect(next).toContainEqual({ file: 'src/c.ts', tables: ['users'] });
+  });
+
+  it('rescans everything when the set of tables changes', () => {
+    const cache = newDataRefCache();
+    buildDomainIndex(files, texts(base), cache);
+    cache.files.get('src/c.ts')!.tables = ['poison'];
+    const fewer = [fm('prisma/schema.prisma', { lang: 'prisma', entities: [user] }), ...files.slice(1)];
+    expect(buildDomainIndex(fewer, texts(base), cache).dataRefs).toEqual([{ file: 'src/b.ts', tables: ['users'] }]);
+  });
+
+  it('forgets files that are gone', () => {
+    const cache = newDataRefCache();
+    buildDomainIndex(files, texts(base), cache);
+    buildDomainIndex(files.filter(f => f.path !== 'src/b.ts'), texts(base), cache);
+    expect([...cache.files.keys()].sort()).toEqual(['src/a.ts', 'src/c.ts']);
+  });
+});

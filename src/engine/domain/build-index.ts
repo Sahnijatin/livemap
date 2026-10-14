@@ -3,8 +3,8 @@ import type { Dep, Entity, FileModel, Lang, Route } from '../../shared/types.js'
 import { isEnvTemplate } from './env.js';
 import { detectStack } from './stack.js';
 import { defaultExport, filePath } from './util.js';
+import { cmp } from '../paths.js';
 
-const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 /** Mount chains followed above a router file. */
 const MAX_MOUNT_DEPTH = 5;
 /** Distinct mount chains kept per router file, so a hostile mount graph stays small. */
@@ -127,9 +127,14 @@ function buildTables(files: FileModel[]): Table[] {
       if (!e.partial && !modelTable.has(e.name)) modelTable.set(e.name, e.table);
     }
   }
-  // Head first: an ORM entity over SQL migrations (whatever the path order), then other full entities, then fragments.
-  const rank = (e: Entity): number => (e.partial ? 2 : e.orm === 'sql' ? 1 : 0);
-  for (const g of groups.values()) g.sort((a, b) => rank(a.e) - rank(b.e));
+  // ORM models first (they describe the current table), then SQL in migration order: by path (numbered and
+  // timestamped migration names sort in order), then line. The head is the first full entity in that order.
+  const isOrm = (e: Entity): boolean => e.orm !== 'sql';
+  for (const g of groups.values()) {
+    g.sort((a, b) => Number(isOrm(b.e)) - Number(isOrm(a.e)) || cmp(a.file, b.file) || a.e.line - b.e.line);
+    const head = g.findIndex(x => !x.e.partial);
+    if (head > 0) g.unshift(...g.splice(head, 1));
+  }
   // A relation target is reported as the merged table's own `table`; a model name (Room `User::class`, Drizzle
   // `usersTable`) maps through its table; the raw name only when neither matches.
   const keyTable = new Map([...groups].map(([k, g]) => [k, g[0].e.table]));
@@ -140,18 +145,32 @@ function buildTables(files: FileModel[]): Table[] {
   const tables: Table[] = [];
   for (const g of groups.values()) {
     const head = g[0].e;
-    const fields: Table['fields'] = [];
-    const seen = new Set<string>();
-    const relations: Table['relations'] = [];
+    // Fields by lowercased name, in order; `orm` marks fields an ORM model declares (migrations never remove those).
+    const byName = new Map<string, { field: Table['fields'][number]; orm: boolean }>();
     for (const { e, file } of g) {
       for (const fd of e.fields) {
         const k = fd.name.toLowerCase();
-        if (seen.has(k)) continue;
-        seen.add(k);
-        fields.push({ ...fd, file });
-        if (fd.fk) relations.push({ field: fd.name, to: canonical(fd.fk.table), many: false, via: 'fk' });
-        if (fd.relation) relations.push({ field: fd.name, to: canonical(modelTable.get(fd.relation.model) ?? fd.relation.model), many: fd.relation.many, via: 'relation' });
+        if (!byName.has(k)) byName.set(k, { field: { ...fd, file }, orm: isOrm(e) });
       }
+      for (const d of e.dropped ?? []) {
+        const k = d.toLowerCase();
+        if (byName.get(k)?.orm === false) byName.delete(k);
+      }
+      for (const [from, to] of e.renamed ?? []) {
+        const k = from.toLowerCase();
+        const hit = byName.get(k);
+        if (!hit || hit.orm || byName.has(to.toLowerCase())) continue;
+        // Re-insert under the new name at the same position.
+        const entries = [...byName].map(([key, v]) => (key === k ? [to.toLowerCase(), { ...v, field: { ...v.field, name: to } }] as const : [key, v] as const));
+        byName.clear();
+        for (const [key, v] of entries) byName.set(key, v);
+      }
+    }
+    const fields: Table['fields'] = [...byName.values()].map(v => v.field);
+    const relations: Table['relations'] = [];
+    for (const fd of fields) {
+      if (fd.fk) relations.push({ field: fd.name, to: canonical(fd.fk.table), many: false, via: 'fk' });
+      if (fd.relation) relations.push({ field: fd.name, to: canonical(modelTable.get(fd.relation.model) ?? fd.relation.model), many: fd.relation.many, via: 'relation' });
     }
     const sources = g.map(({ e, file }) => ({ file, line: e.line })).sort((a, b) => cmp(a.file, b.file) || a.line - b.line);
     tables.push({ name: head.name, table: head.table, orm: head.orm, sources, fields, relations });
@@ -175,13 +194,24 @@ const addTo = (m: Map<string, Set<string>>, k: string, v: string): void => {
   if (s) s.add(v); else m.set(k, new Set([v]));
 };
 
+/** Per-file table references from the last rebuild, reused while a file's text and the table set are unchanged. */
+export interface DataRefCache {
+  sig?: string;
+  files: Map<string, { text: string; tables: string[] }>;
+}
+
+export const newDataRefCache = (): DataRefCache => ({ files: new Map() });
+
 /**
  * Files that mention a table: its model names (case-sensitive), its table name (as written, lowercase or
  * uppercase; quoted names included) as whole words, or a lowerCamel model accessor on a database client (`prisma.order`).
- * One regex pass per file.
+ * One regex pass per file whose text changed since the last rebuild.
  */
-function buildDataRefs(files: FileModel[], tables: Table[], contents: (p: string) => string | null): DomainIndex['dataRefs'] {
-  if (!tables.length) return [];
+function buildDataRefs(files: FileModel[], tables: Table[], contents: (p: string) => string | null, cache: DataRefCache = newDataRefCache()): DomainIndex['dataRefs'] {
+  if (!tables.length) {
+    cache.files.clear();
+    return [];
+  }
   const words = new Map<string, Set<string>>();
   const accessors = new Map<string, Set<string>>();
   const byKey = new Map(tables.map(t => [t.table.toLowerCase(), t.table]));
@@ -196,11 +226,24 @@ function buildDataRefs(files: FileModel[], tables: Table[], contents: (p: string
   const names = [...new Set([...words.keys(), ...accessors.keys()])].filter(Boolean).sort((x, y) => y.length - x.length || cmp(x, y));
   // One alternation of literal names, built once per rebuild; `$` and `_` count as identifier characters.
   const re = new RegExp(`(?<![\\w$])(?:${names.map(escape).join('|')})(?![\\w$])`, 'g');
+  // The words and accessors decide every result, so a different set invalidates the whole cache.
+  const sig = `${re.source}\0${JSON.stringify([...words].map(([k, v]) => [k, [...v]]))}\0${JSON.stringify([...accessors].map(([k, v]) => [k, [...v]]))}`;
+  if (cache.sig !== sig) {
+    cache.sig = sig;
+    cache.files.clear();
+  }
+  const seen = new Map<string, { text: string; tables: string[] }>();
   const out: DomainIndex['dataRefs'] = [];
   for (const f of files) {
     if (f.entities.length || NO_REF_LANGS.has(f.lang)) continue;
     const text = contents(f.path);
     if (text === null || text.length > MAX_REF_TEXT) continue;
+    const prev = cache.files.get(f.path);
+    if (prev && prev.text === text) {
+      seen.set(f.path, prev);
+      if (prev.tables.length) out.push({ file: f.path, tables: [...prev.tables] });
+      continue;
+    }
     const hit = new Set<string>();
     for (const m of text.matchAll(re)) {
       const w = words.get(m[0]);
@@ -208,8 +251,11 @@ function buildDataRefs(files: FileModel[], tables: Table[], contents: (p: string
       const a = m.index > 0 && text.charCodeAt(m.index - 1) === 46 && dbReceiver(text, m.index - 1) ? accessors.get(m[0]) : undefined;
       if (a) for (const t of a) hit.add(t);
     }
-    if (hit.size) out.push({ file: f.path, tables: [...hit].sort(cmp) });
+    const found = [...hit].sort(cmp);
+    seen.set(f.path, { text, tables: found });
+    if (found.length) out.push({ file: f.path, tables: [...found] });
   }
+  cache.files = seen;
   return out;
 }
 
@@ -230,7 +276,7 @@ function buildEnv(files: FileModel[]): EnvVar[] {
 }
 
 /** The project-wide domain index: mounted routes, merged tables, table references, stack, deps, scripts and env. */
-export function buildDomainIndex(input: FileModel[], contents: (p: string) => string | null): DomainIndex {
+export function buildDomainIndex(input: FileModel[], contents: (p: string) => string | null, cache?: DataRefCache): DomainIndex {
   const files = [...input].sort((a, b) => cmp(a.path, b.path));
   const routes = buildRoutes(files, contents);
   const tables = buildTables(files);
@@ -246,7 +292,7 @@ export function buildDomainIndex(input: FileModel[], contents: (p: string) => st
   for (const r of routes) kinds[r.kind]++;
   return {
     routes, tables,
-    dataRefs: buildDataRefs(files, tables, contents),
+    dataRefs: buildDataRefs(files, tables, contents, cache),
     stack: detectStack(deps, files),
     deps, scripts, env,
     counts: { routes: kinds.api, pages: kinds.page, screens: kinds.screen, tables: tables.length, deps: deps.length, env: env.length },

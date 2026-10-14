@@ -7,6 +7,7 @@ import { scriptBlock } from './symbols/markup.js';
 import { buildIndex, extractImports, indexUpdate, readTsconfigAliases, resolveSpecifier, type FileIndex, type ImportCtx } from './imports.js';
 import { ANALYZERS, analyzeFile, type Analyzer } from './domain/index.js';
 import { createIgnore, insideRoot, parentDir, walk, readForModel, type IgnoreFn, type ReadResult } from './files.js';
+import { cmp } from './paths.js';
 
 export interface UpdateResult {
   path: string;
@@ -32,7 +33,6 @@ function topmost(dirs: string[]): string[] {
 
 /** Files read (or stat-ed) concurrently during a scan or removeDir. */
 const READ_AHEAD = 32;
-const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const sameList = (a: string[], b: string[]): boolean => a.length === b.length && a.every((x, i) => x === b[i]);
 const sameTargets = (a: Mount[], b: Mount[]): boolean => a.length === b.length && a.every((m, i) => m.target === b[i].target);
 

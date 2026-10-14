@@ -55,7 +55,12 @@ function diffEntities(before: Entity[], after: Entity[]): ChangeSummary['entitie
     if (!old) {
       // An ALTER fragment adds columns to a table defined elsewhere: report a table change, not a new table.
       if (!e.partial) out.added.push({ name, fields: e.fields.length, orm: e.orm });
-      else if (e.fields.length) out.changed.push({ name, addedFields: [...keyed(e.fields, f => f.name).keys()], removedFields: [], changedFields: [] });
+      else {
+        // A migration fragment: what it adds, drops and renames (a rename reads as old name out, new name in).
+        const added = [...keyed(e.fields, f => f.name).keys(), ...(e.renamed ?? []).map(([, to]) => to)];
+        const removed = [...(e.dropped ?? []), ...(e.renamed ?? []).map(([from]) => from)];
+        if (added.length || removed.length) out.changed.push({ name, addedFields: added, removedFields: removed, changedFields: [] });
+      }
       continue;
     }
     const of = keyed(old.fields, f => f.name);

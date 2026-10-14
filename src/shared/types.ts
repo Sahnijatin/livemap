@@ -13,8 +13,14 @@ export interface Mount {
   replaces?: true;
 }
 export interface Field { name: string; type: string; line?: number; pk?: true; required?: true; unique?: true; fk?: { table: string; field: string }; relation?: { model: string; many: boolean } }
-/** `partial` marks an ALTER fragment that adds to a table defined elsewhere. */
-export interface Entity { name: string; table: string; orm: string; file: string; line: number; fields: Field[]; partial?: true }
+/**
+ * `partial` marks an ALTER fragment that changes a table defined elsewhere: `fields` it adds, plus the
+ * columns it drops and renames (`[from, to]`), applied in migration order when tables are merged.
+ */
+export interface Entity {
+  name: string; table: string; orm: string; file: string; line: number; fields: Field[]; partial?: true;
+  dropped?: string[]; renamed?: [string, string][];
+}
 export interface Dep { name: string; version: string; eco: string; dev?: boolean; line?: number }
 export interface FileModel {
   path: string; lang: Lang; size: number; lines: number;
