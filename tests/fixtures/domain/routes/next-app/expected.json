@@ -1,0 +1,36 @@
+{
+  "app/(shop)/orders/[id]/route.ts": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/orders/:id",
+        "handler": "GET",
+        "line": 3,
+        "kind": "api",
+        "framework": "next"
+      },
+      {
+        "method": "DELETE",
+        "path": "/orders/:id",
+        "handler": "DELETE",
+        "line": 9,
+        "kind": "api",
+        "framework": "next"
+      }
+    ],
+    "mounts": []
+  },
+  "app/(shop)/products/page.tsx": {
+    "routes": [
+      {
+        "method": "PAGE",
+        "path": "/products",
+        "handler": "ProductsPage",
+        "line": 1,
+        "kind": "page",
+        "framework": "next"
+      }
+    ],
+    "mounts": []
+  }
+}
