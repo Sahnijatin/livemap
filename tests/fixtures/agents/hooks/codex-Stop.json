@@ -1,0 +1,10 @@
+{
+  "session_id": "cx-1",
+  "transcript_path": "/home/u/.codex/sessions/rollout-cx-1.jsonl",
+  "cwd": "/p",
+  "model": "gpt-5-codex",
+  "turn_id": "t1",
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "Done, tests pass."
+}

@@ -1,0 +1,13 @@
+{
+  "conversation_id": "cu-1",
+  "generation_id": "gen-1",
+  "workspace_roots": [
+    "/p"
+  ],
+  "transcript_path": "/home/u/.cursor/t.jsonl",
+  "model": "auto",
+  "hook_event_name": "afterShellExecution",
+  "command": "ls -la",
+  "output": "total 0",
+  "duration": 5
+}

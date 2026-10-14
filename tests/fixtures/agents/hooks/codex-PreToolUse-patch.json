@@ -1,0 +1,13 @@
+{
+  "session_id": "cx-1",
+  "transcript_path": "/home/u/.codex/sessions/rollout-cx-1.jsonl",
+  "cwd": "/p",
+  "model": "gpt-5-codex",
+  "turn_id": "t1",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "apply_patch",
+  "tool_use_id": "call_2",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Update File: src/x.ts\n@@\n-a\n+b\n*** End Patch"
+  }
+}
