@@ -56,6 +56,8 @@ export class ProjectModel {
   private specCache: NonNullable<ImportCtx['specCache']> = new Map();
   /** The live ctx's directory index during a deferred burst (see liveCtx). */
   private liveIndex: FileIndex | null = null;
+  /** The last reloadIgnores threw partway (see reconcileIgnores). */
+  private reloadFailed = false;
   /** A deferred update changed the file set; imports need re-resolving (see update). */
   private relinkPending = false;
 
@@ -175,53 +177,71 @@ export class ProjectModel {
     opts: { onIncluded?: (dirs: string[]) => void } = {},
   ): Promise<{ files: FileModel[]; removed: string[]; created: UpdateResult[] }> {
     return this.serial(async () => {
-      const old = this.isIgnored;
-      const changedDirs = changed.map(parentDir);
-      this.isIgnored = changed.length ? createIgnore(this.root, { previous: old, changed: changedDirs }) : createIgnore(this.root);
-      // A nested .gitignore only affects its own subtree; the root one affects everything, and so
-      // does any change in a truncated model (freed room may be filled from anywhere).
-      const whole = !changed.length || changedDirs.includes('') || this.truncated;
-      const roots = whole ? [''] : topmost(changedDirs);
-      const within = (rel: string): boolean => whole || roots.some(d => rel.startsWith(`${d}/`));
-      const removed: string[] = [];
-      for (const rel of [...this.files.keys()].filter(within).sort(cmp)) {
-        if (!this.isIgnored(rel, false)) continue;
-        this.apply(rel, null);
-        removed.push(rel);
+      try {
+        const result = await this.reconcileIgnores(changed, opts);
+        this.reloadFailed = false;
+        return result;
+      } catch (e) {
+        this.reloadFailed = true; // the rules are already swapped; see reconcileIgnores
+        throw e;
       }
-      const walked = await walk(this.root, this.isIgnored, this.limit, roots, { dirs: true });
-      const dirs = topmost(walked.dirs.filter(d => old(d, true)));
-      if (dirs.length) opts.onIncluded?.(dirs);
-      // Files the old rules ignored come back as a file update. After a truncated scan, other
-      // unindexed files may fill freed room; they may be brand new (with an add event queued that
-      // will now find nothing to do), so they are reported as created changes.
-      const wasTruncated = this.truncated;
-      let full = false; // some file did not fit under the limit
-      const included: string[] = [];
-      const unreached: string[] = [];
-      // Stop reading once the model is full (a truncated model may have thousands unread); files
-      // that fail to read leave their room to later candidates.
-      const fresh = walked.files.filter(rel => !this.files.has(rel) && (old(rel, false) || wasTruncated));
-      const isFull = (): boolean => this.files.size >= this.limit;
-      const done = await this.readEach(fresh, new Map(), async (rel, r) => {
-        if (!r) return;
-        const res = this.apply(rel, r);
-        if (res) { await res; (old(rel, false) ? included : unreached).push(rel); }
-      }, isFull);
-      if (done < fresh.length) full = true;
-      if (whole) this.truncated = walked.truncated || full;
-      else if (full || walked.truncated) this.truncated = true;
-      if (!removed.length && !included.length && !unreached.length) return { files: [], removed, created: [] };
-      const touched = this.relink([]);
-      const byPath = new Map<string, FileModel>();
-      for (const rel of included) byPath.set(rel, this.files.get(rel)!);
-      const isUnreached = new Set(unreached);
-      for (const f of touched) if (!isUnreached.has(f.path)) byPath.set(f.path, f);
-      const created: UpdateResult[] = unreached.map(rel => ({
-        path: rel, kind: 'created', before: null, after: this.files.get(rel) ?? null, beforeText: null, afterText: this.texts.get(rel) ?? null, touched: [],
-      }));
-      return { files: [...byPath.values()].sort((x, y) => cmp(x.path, y.path)), removed, created };
     });
+  }
+
+  private async reconcileIgnores(
+    changed: string[],
+    opts: { onIncluded?: (dirs: string[]) => void },
+  ): Promise<{ files: FileModel[]; removed: string[]; created: UpdateResult[] }> {
+    const old = this.isIgnored;
+    const changedDirs = changed.map(parentDir);
+    this.isIgnored = changed.length ? createIgnore(this.root, { previous: old, changed: changedDirs }) : createIgnore(this.root);
+    // A nested .gitignore only affects its own subtree; the root one affects everything.
+    const rootChanged = !changed.length || changedDirs.includes('');
+    const subtrees = rootChanged ? [''] : topmost(changedDirs);
+    const within = (rel: string): boolean => rootChanged || subtrees.some(d => rel.startsWith(`${d}/`));
+    const removed: string[] = [];
+    for (const rel of [...this.files.keys()].filter(within).sort(cmp)) {
+      if (!this.isIgnored(rel, false)) continue;
+      this.apply(rel, null);
+      removed.push(rel);
+    }
+    // In a truncated model, room freed in a subtree may be filled from anywhere.
+    const whole = rootChanged || (this.truncated && removed.length > 0);
+    const roots = whole ? [''] : subtrees;
+    const walked = await walk(this.root, this.isIgnored, this.limit, roots, { dirs: true });
+    const dirs = topmost(walked.dirs.filter(d => old(d, true)));
+    if (dirs.length) opts.onIncluded?.(dirs);
+    // Files the old rules ignored come back as a file update. After a truncated scan, other
+    // unindexed files may fill freed room; they may be brand new (with an add event queued that
+    // will now find nothing to do), so they are reported as created changes. After a reload
+    // failed partway, `old` is already the new rules, so every unindexed file is reconsidered.
+    const repair = this.reloadFailed;
+    const wasTruncated = this.truncated;
+    let full = false; // some file did not fit under the limit
+    const included: string[] = [];
+    const unreached: string[] = [];
+    // Stop reading once the model is full (a truncated model may have thousands unread); files
+    // that fail to read leave their room to later candidates.
+    const fresh = walked.files.filter(rel => !this.files.has(rel) && (old(rel, false) || wasTruncated || repair));
+    const isFull = (): boolean => this.files.size >= this.limit;
+    const done = await this.readEach(fresh, new Map(), async (rel, r) => {
+      if (!r) return;
+      const res = this.apply(rel, r);
+      if (res) { await res; (old(rel, false) || repair ? included : unreached).push(rel); }
+    }, isFull);
+    if (done < fresh.length) full = true;
+    if (whole) this.truncated = walked.truncated || full;
+    else if (full || walked.truncated) this.truncated = true;
+    if (!removed.length && !included.length && !unreached.length) return { files: [], removed, created: [] };
+    const touched = this.relink([]);
+    const byPath = new Map<string, FileModel>();
+    for (const rel of included) byPath.set(rel, this.files.get(rel)!);
+    const isUnreached = new Set(unreached);
+    for (const f of touched) if (!isUnreached.has(f.path)) byPath.set(f.path, f);
+    const created: UpdateResult[] = unreached.map(rel => ({
+      path: rel, kind: 'created', before: null, after: this.files.get(rel) ?? null, beforeText: null, afterText: this.texts.get(rel) ?? null, touched: [],
+    }));
+    return { files: [...byPath.values()].sort((x, y) => cmp(x.path, y.path)), removed, created };
   }
 
   /** Marks the file set changed; the rest of the burst resolves against the live set. */

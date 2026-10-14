@@ -156,8 +156,9 @@ export async function walk(
   const dirs: string[] = [];
   let truncated = false;
 
+  // With opts.dirs, directories are still reported past the file limit (files are not).
   async function visit(dirRel: string): Promise<void> {
-    if (truncated) return;
+    if (truncated && !opts.dirs) return;
     let entries;
     try {
       entries = await fs.readdir(path.join(root, ...dirRel.split('/').filter(Boolean)), { withFileTypes: true });
@@ -167,14 +168,14 @@ export async function walk(
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     ignored.prime?.(dirRel, entries.some(e => e.name === '.gitignore'));
     for (const e of entries) {
-      if (truncated) return;
+      if (truncated && !opts.dirs) return;
       if (e.isSymbolicLink()) continue;
       const rel = (dirRel ? `${dirRel}/` : '') + e.name;
       if (e.isDirectory()) {
         if (!ignored(rel, true)) { if (opts.dirs) dirs.push(rel); await visit(rel); }
       } else if (e.isFile()) {
-        if (isTempName(rel) || ignored(rel, false)) continue;
-        if (files.length >= limit) { truncated = true; return; }
+        if (truncated || isTempName(rel) || ignored(rel, false)) continue;
+        if (files.length >= limit) { truncated = true; if (opts.dirs) continue; return; }
         files.push(rel);
       }
     }

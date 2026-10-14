@@ -370,4 +370,15 @@ describe('Watcher', () => {
     await waitFor(() => reload.mock.calls.length >= 2, 4000);
     expect(reload.mock.calls[1][0]).toEqual(['a/.gitignore', 'b/.gitignore']);
   });
+
+  it('retries a failed rules reload on its own', async () => {
+    put('a/.gitignore', 'x/\n');
+    await startWatcher();
+    const real = model.reloadIgnores.bind(model);
+    const reload = vi.spyOn(model, 'reloadIgnores').mockImplementationOnce(async () => { throw new Error('reload failed'); })
+      .mockImplementation(real);
+    put('a/.gitignore', 'y/\n');
+    await waitFor(() => reload.mock.calls.length >= 2, 5000);
+    expect(reload.mock.calls[1][0]).toEqual(['a/.gitignore']);
+  });
 });

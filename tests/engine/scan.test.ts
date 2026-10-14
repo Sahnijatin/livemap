@@ -159,4 +159,33 @@ describe('ProjectModel.scan', () => {
     await m.reloadIgnores(['src/.gitignore']);
     expect(m.truncated).toBe(true);
   });
+
+  it('after a reload fails partway, the next one indexes the files it should have', async () => {
+    put('.gitignore', 'gen/\n');
+    for (let i = 0; i < 3; i++) put(`gen/g${i}.ts`, `export const g${i} = ${i};\n`);
+    const m = new ProjectModel(root);
+    await m.scan();
+    put('.gitignore', '# nothing\n');
+    const apply = (m as unknown as { apply: (...a: unknown[]) => unknown }).apply.bind(m);
+    const spy = vi.spyOn(m as unknown as { apply: (...a: unknown[]) => unknown }, 'apply').mockImplementation((rel, r) => {
+      if (rel === 'gen/g1.ts') throw new Error('build failed');
+      return apply(rel, r);
+    });
+    await expect(m.reloadIgnores(['.gitignore'])).rejects.toThrow('build failed');
+    spy.mockRestore();
+    await m.reloadIgnores(['.gitignore']);
+    expect(m.all().map(f => f.path).filter(p => p.startsWith('gen/'))).toEqual(['gen/g0.ts', 'gen/g1.ts', 'gen/g2.ts']);
+  });
+
+  it('the reload walk reports included directories even past the file limit', async () => {
+    put('.gitignore', 'zzz/\n');
+    for (let i = 0; i < 6; i++) put(`a/f${i}.ts`, `export const f${i} = ${i};\n`);
+    put('zzz/z.ts', 'export const z = 1;\n');
+    const m = new ProjectModel(root, { limit: 4 });
+    await m.scan();
+    put('.gitignore', '# nothing\n');
+    let dirs: string[] = [];
+    await m.reloadIgnores(['.gitignore'], { onIncluded: d => { dirs = d; } });
+    expect(dirs).toEqual(['zzz']);
+  });
 });

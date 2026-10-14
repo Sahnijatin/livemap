@@ -7,6 +7,8 @@ import { buildChange } from './differ.js';
 import { isTempName, parentDir } from './files.js';
 
 type FileEvent = 'add' | 'change' | 'unlink';
+/** Automatic tries for a failed rules reload before waiting for the next .gitignore event. */
+const MAX_RELOAD_ATTEMPTS = 3;
 
 export interface WatcherOptions {
   debounceMs?: number;
@@ -35,6 +37,8 @@ export class Watcher extends EventEmitter {
   private queue: Promise<void> = Promise.resolve();
   /** .gitignore files changed since the last rules reload. */
   private gitignores = new Set<string>();
+  /** Consecutive failed rules reloads (see scheduleIgnores). */
+  private reloadAttempts = 0;
   /** Jobs whose debounce fired but that have not started running. */
   private waiting = 0;
   private nextId = 1;
@@ -110,39 +114,48 @@ export class Watcher extends EventEmitter {
       if (this.gitignoreSkipped(rel)) return;
       // One debounced reload for every .gitignore touched together (a checkout can change dozens).
       this.gitignores.add(rel);
-      this.schedule('ignores', async () => {
-        const paths = [...this.gitignores].sort();
-        this.gitignores.clear();
-        if (paths.length === 0) return []; // an earlier queued job already took this batch
-        let reloaded: Awaited<ReturnType<ProjectModel['reloadIgnores']>>;
-        try {
-          reloaded = await this.model.reloadIgnores(paths, {
-            // Directories that were ignored when chokidar crawled were never watched; watch them
-            // before the reload reads them. chokidar's crawl of them reports every file it finds
-            // (ignoreInitial is off), so files created meanwhile get their own add events.
-            onIncluded: dirs => this.watchIncluded(dirs),
-          });
-        } catch (e) {
-          for (const p of paths) this.gitignores.add(p); // retried with the next .gitignore event
-          throw e;
-        }
-        const { files, removed, created } = reloaded;
-        // A throwing listener must not lose the .gitignore files' own changes below.
-        if (!this.stopped && (files.length || removed.length)) {
-          try { this.emit('touched', files, removed); } catch (e) { this.fail(e); }
-        }
-        const own: UpdateResult[] = [...created];
-        for (const p of paths) {
-          // Deferred: run() relinks once after the job, not once per created/deleted .gitignore.
-          const r = await this.model.update(p, 'change', { deferRelink: true }); // null while its own rules ignore it
-          if (r) own.push(r);
-        }
-        return own;
-      });
+      this.reloadAttempts = 0;
+      this.scheduleIgnores();
       return;
     }
     if (this.model.ignored(rel)) return;
     this.schedule(`f:${rel}`, deferRelink => this.model.update(rel, ev, { deferRelink }).then(r => (r ? [r] : [])));
+  }
+
+  /** Reloads the rules for every pending .gitignore path in one debounced job. */
+  private scheduleIgnores(): void {
+    this.schedule('ignores', async () => {
+      const paths = [...this.gitignores].sort();
+      this.gitignores.clear();
+      if (paths.length === 0) return []; // an earlier queued job already took this batch
+      let reloaded: Awaited<ReturnType<ProjectModel['reloadIgnores']>>;
+      try {
+        reloaded = await this.model.reloadIgnores(paths, {
+          // Directories that were ignored when chokidar crawled were never watched; watch them
+          // before the reload reads them. chokidar's crawl of them reports every file it finds
+          // (ignoreInitial is off), so files created meanwhile get their own add events.
+          onIncluded: dirs => this.watchIncluded(dirs),
+        });
+      } catch (e) {
+        // Retry on its own, a few times; after that, with the next .gitignore event.
+        for (const p of paths) this.gitignores.add(p);
+        if (++this.reloadAttempts < MAX_RELOAD_ATTEMPTS) this.scheduleIgnores();
+        throw e;
+      }
+      this.reloadAttempts = 0;
+      const { files, removed, created } = reloaded;
+      // A throwing listener must not lose the .gitignore files' own changes below.
+      if (!this.stopped && (files.length || removed.length)) {
+        try { this.emit('touched', files, removed); } catch (e) { this.fail(e); }
+      }
+      const own: UpdateResult[] = [...created];
+      for (const p of paths) {
+        // Deferred: run() relinks once after the job, not once per created/deleted .gitignore.
+        const r = await this.model.update(p, 'change', { deferRelink: true }); // null while its own rules ignore it
+        if (r) own.push(r);
+      }
+      return own;
+    });
   }
 
   private onDir(p: string): void {
