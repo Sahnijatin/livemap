@@ -272,4 +272,25 @@ describe('Watcher', () => {
     expect(reload).toHaveBeenCalledTimes(1);
     void w;
   });
+
+  it('watches a newly included directory that is still empty', async () => {
+    put('.gitignore', 'gen/\n');
+    fs.mkdirSync(path.join(root, 'gen'));
+    await startWatcher();
+    put('.gitignore', '# nothing\n');
+    await waitFor(() => changes.some(c => c.change.path === '.gitignore'));
+    await sleep(200);
+    put('gen/x.ts', 'export const x = 1;\n');
+    await waitFor(() => model.get('gen/x.ts') !== undefined, 4000);
+  });
+
+  it('deleting several .gitignore files relinks once, not once per file', async () => {
+    for (let i = 0; i < 6; i++) put(`q${i}/.gitignore`, 'tmp/\n');
+    await startWatcher();
+    const relink = vi.spyOn(model as unknown as { relink: (skip: string[]) => FileModel[] }, 'relink');
+    for (let i = 0; i < 6; i++) fs.rmSync(path.join(root, `q${i}/.gitignore`));
+    await waitFor(() => changes.filter(c => c.change.kind === 'deleted').length >= 6);
+    await sleep(100);
+    expect(relink.mock.calls.length).toBeLessThanOrEqual(2);
+  });
 });

@@ -287,14 +287,14 @@ describe('ProjectModel fix round 1', () => {
     const m = await scanned();
     expect(m.get('gen/out.ts')).toBeUndefined();
     put('.gitignore', 'secrets.json\n');
-    const r = await m.reloadIgnores();
+    const r = await m.reloadIgnores(['.gitignore']);
     expect(r.removed).toEqual(['secrets.json']);
     expect(r.files.map(f => f.path)).toEqual(['gen/out.ts']);
     expect(r.files[0].imports.local).toEqual(['src/b.ts']);
     expect(m.get('secrets.json')).toBeUndefined();
     expect(m.content('secrets.json')).toBeNull();
     expect(m.get('gen/out.ts')!.imports.local).toEqual(['src/b.ts']);
-    expect(await m.reloadIgnores()).toEqual({ files: [], removed: [] });
+    expect(await m.reloadIgnores(['.gitignore'])).toEqual({ files: [], removed: [], dirs: [] });
   });
 
   it('reloadIgnores reads nested .gitignore files created after their directory was seen', async () => {
@@ -302,7 +302,7 @@ describe('ProjectModel fix round 1', () => {
     put('pkg/keep.ts', 'export const k = 1;\n');
     expect(m.ignored('pkg/generated/x.ts')).toBe(false);
     put('pkg/.gitignore', 'generated/\n');
-    await m.reloadIgnores();
+    await m.reloadIgnores(['pkg/.gitignore']);
     expect(m.ignored('pkg/generated/x.ts')).toBe(true);
   });
 
@@ -386,5 +386,24 @@ describe('ProjectModel fix round 1', () => {
     await m.update('src/a.ts', 'change');
     expect(m.get('src/a.ts')!.flags.tooLarge).toBe(true);
     expect(cache.has('src/a.ts')).toBe(false);
+  });
+
+  it('reloadIgnores leaves new, never-ignored files to their own events', async () => {
+    const m = await scanned();
+    put('fresh.ts', 'export const fresh = 1;\n'); // its add event is still queued
+    put('.gitignore', 'nothing/\n');
+    const r = await m.reloadIgnores(['.gitignore']);
+    expect(r.files.map(f => f.path)).not.toContain('fresh.ts');
+    expect((await m.update('fresh.ts', 'add'))!.kind).toBe('created');
+  });
+
+  it('reloadIgnores reports the topmost newly included directories, empty ones too', async () => {
+    put('.gitignore', 'gen/\nlogs/\n');
+    put('gen/a/x.ts', 'export const x = 1;\n');
+    fs.mkdirSync(path.join(root, 'logs/empty'), { recursive: true });
+    const m = await scanned();
+    put('.gitignore', '# nothing\n');
+    const r = await m.reloadIgnores(['.gitignore']);
+    expect(r.dirs).toEqual(['gen', 'logs']);
   });
 });

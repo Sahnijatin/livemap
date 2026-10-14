@@ -5,7 +5,7 @@ import { langOf } from './languages.js';
 import { fileSymbols } from './symbols/index.js';
 import { scriptBlock } from './symbols/markup.js';
 import { buildIndex, extractImports, indexUpdate, readTsconfigAliases, type FileIndex, type ImportCtx } from './imports.js';
-import { createIgnore, walk, readForModel, type ReadResult } from './files.js';
+import { createIgnore, walk, readForModel, type IgnoreFn, type ReadResult } from './files.js';
 
 export interface UpdateResult {
   path: string;
@@ -39,7 +39,7 @@ export class ProjectModel {
   private texts = new Map<string, string>();
   /** Last clean-parse symbols per file; null until a file first parses cleanly. */
   private lastGood = new Map<string, CodeSymbol[] | null>();
-  private isIgnored: (rel: string, isDir: boolean) => boolean;
+  private isIgnored: IgnoreFn;
   private ctx: ImportCtx;
   private queue: Promise<unknown> = Promise.resolve();
   /** Parsed JS/TS import specifiers per file (see ImportCtx.specCache). */
@@ -153,33 +153,44 @@ export class ProjectModel {
   }
 
   /**
-   * Re-reads every .gitignore and reconciles the model with the new rules: files now ignored are
-   * dropped, files now included are read, then imports are re-resolved once. Nothing changed on
-   * disk, so the result is a file update (upserted models and removed paths), not change entries.
+   * Re-reads the .gitignore files at `changed` (all of them when empty) and reconciles the model
+   * with the new rules: files now ignored are dropped, files the old rules ignored are read, then
+   * imports are re-resolved once. Nothing changed on disk, so the result is a file update
+   * (upserted models, removed paths) rather than change entries; files that are merely new are
+   * left to their own add events. `dirs` are the topmost newly included directories, which the
+   * watcher did not watch before.
    */
-  reloadIgnores(): Promise<{ files: FileModel[]; removed: string[] }> {
+  reloadIgnores(changed: string[] = []): Promise<{ files: FileModel[]; removed: string[]; dirs: string[] }> {
     return this.serial(async () => {
-      this.isIgnored = createIgnore(this.root);
+      const old = this.isIgnored;
+      const changedDirs = changed.map(p => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''));
+      this.isIgnored = changed.length ? createIgnore(this.root, { previous: old, changed: changedDirs }) : createIgnore(this.root);
       const removed: string[] = [];
       for (const rel of [...this.files.keys()].sort(cmp)) {
         if (!this.isIgnored(rel, false)) continue;
         this.apply(rel, null);
         removed.push(rel);
       }
-      const { files } = await walk(this.root, this.isIgnored, this.limit);
-      const fresh = files.filter(rel => !this.files.has(rel));
+      const walked = await walk(this.root, this.isIgnored, this.limit);
+      const included = new Set(walked.dirs.filter(d => old(d, true)));
+      const dirs = [...included].filter(d => {
+        for (let p = path.posix.dirname(d); p !== '.'; p = path.posix.dirname(p)) if (included.has(p)) return false;
+        return true;
+      });
+      const fresh = walked.files.filter(rel => !this.files.has(rel) && old(rel, false));
       const added: string[] = [];
       await this.readEach(fresh, new Map(), async (rel, r) => {
-        if (!r || this.files.size >= this.limit) { if (r) this.truncated = true; return; }
+        if (!r) return;
+        if (this.files.size >= this.limit) { this.truncated = true; return; }
         const res = this.apply(rel, r);
         if (res) { await res; added.push(rel); }
       });
-      if (!removed.length && !added.length) return { files: [], removed };
+      if (!removed.length && !added.length) return { files: [], removed, dirs };
       const touched = this.relink([]);
       const byPath = new Map<string, FileModel>();
       for (const rel of added) byPath.set(rel, this.files.get(rel)!);
       for (const f of touched) byPath.set(f.path, f);
-      return { files: [...byPath.values()].sort((x, y) => cmp(x.path, y.path)), removed };
+      return { files: [...byPath.values()].sort((x, y) => cmp(x.path, y.path)), removed, dirs };
     });
   }
 

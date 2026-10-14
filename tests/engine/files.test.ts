@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { DEFAULT_IGNORES, createIgnore, walk, readForModel, envKeys, isTempName } from '../../src/engine/files.js';
+import { DEFAULT_IGNORES, createIgnore, walk, readForModel, envKeys, isTempName, ignoreStats } from '../../src/engine/files.js';
 
 let root: string;
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-files-')); });
@@ -54,6 +54,26 @@ describe('walk', () => {
     expect(ig('pkg/gen', true)).toBe(true);
     expect(ig('pkg/b.local.ts', false)).toBe(true);
     expect(ig('other/b.local.ts', false)).toBe(false);
+  });
+  it('the walk tells the matcher which directories have no .gitignore, so it never probes them', async () => {
+    for (let i = 0; i < 30; i++) put(`d${i}/sub/f.ts`);
+    put('d3/.gitignore', 'x/\n');
+    const before = ignoreStats.reads;
+    await walk(root, createIgnore(root));
+    expect(ignoreStats.reads - before).toBeLessThanOrEqual(2); // the root's and d3's
+  });
+  it('a rebuilt matcher reuses the rules of directories whose .gitignore did not change', () => {
+    put('a/.gitignore', 'x/\n'); put('b/.gitignore', 'y/\n');
+    const first = createIgnore(root);
+    expect(first('a/x/1.ts', false)).toBe(true);
+    expect(first('b/y/1.ts', false)).toBe(true);
+    put('b/.gitignore', 'z/\n');
+    const before = ignoreStats.reads;
+    const next = createIgnore(root, { previous: first, changed: ['b'] });
+    expect(next('a/x', true)).toBe(true);
+    expect(next('b/y', true)).toBe(false);
+    expect(next('b/z', true)).toBe(true);
+    expect(ignoreStats.reads - before).toBe(2); // the root's and b's; a's rules are reused
   });
   it('directory patterns need isDir', () => {
     put('.gitignore', 'secret/\n');

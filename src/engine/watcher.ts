@@ -104,12 +104,14 @@ export class Watcher extends EventEmitter {
       this.schedule('ignores', async () => {
         const paths = [...this.gitignores].sort();
         this.gitignores.clear();
-        const { files, removed } = await this.model.reloadIgnores();
-        this.watchIncluded(files.map(f => f.path));
+        const { files, removed, dirs } = await this.model.reloadIgnores(paths);
+        // Directories that were ignored when chokidar crawled were never watched.
+        if (dirs.length) this.fsw?.add(dirs.map(d => path.join(this.model.root, ...d.split('/'))));
         if (!this.stopped && (files.length || removed.length)) this.emit('touched', files, removed);
         const own: UpdateResult[] = [];
         for (const p of paths) {
-          const r = await this.model.update(p, 'change'); // null while its own rules ignore it
+          // Deferred: run() relinks once after the job, not once per created/deleted .gitignore.
+          const r = await this.model.update(p, 'change', { deferRelink: true }); // null while its own rules ignore it
           if (r) own.push(r);
         }
         return own;
@@ -124,27 +126,6 @@ export class Watcher extends EventEmitter {
     const rel = this.rel(p);
     if (!rel || this.model.ignored(rel, true)) return;
     this.schedule(`d:${rel}`, () => this.model.removeDir(rel));
-  }
-
-  /**
-   * Directories that were ignored when chokidar crawled them are not watched. For each newly
-   * included file, watch its topmost unwatched ancestor, which covers that whole subtree.
-   */
-  private watchIncluded(paths: string[]): void {
-    const fsw = this.fsw;
-    if (!fsw || paths.length === 0) return;
-    const watched = new Set(Object.keys(fsw.getWatched()));
-    const add = new Set<string>();
-    for (const rel of paths) {
-      let top: string | null = null;
-      for (let dir = path.posix.dirname(rel); dir !== '.'; dir = path.posix.dirname(dir)) {
-        const abs = path.join(this.model.root, ...dir.split('/'));
-        if (watched.has(abs)) break;
-        top = abs;
-      }
-      if (top) add.add(top);
-    }
-    if (add.size) fsw.add([...add]);
   }
 
   private schedule(key: string, job: (deferRelink: boolean) => Promise<UpdateResult[]>): void {

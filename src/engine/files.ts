@@ -23,19 +23,35 @@ export function isTempName(rel: string): boolean {
 
 type Ignore = ReturnType<typeof ignore>;
 
+export const ignoreStats = { reads: 0 };
+
+/** Matcher for project-relative paths, from createIgnore. */
+export type IgnoreFn = ((rel: string, isDir: boolean) => boolean) & {
+  /** Records whether a directory has a .gitignore, from a listing already in hand (no probe). */
+  prime(dir: string, hasGitignore: boolean): void;
+  /** Rules read so far per directory (null: none); a rebuilt matcher reuses unchanged ones. */
+  readonly levels: ReadonlyMap<string, Ignore | null>;
+};
+
 /**
  * Built-in ignores plus every `.gitignore` in the tree, each scoped to its own directory as git
  * does: a deeper file's rules win, and nothing under an ignored directory can be re-included.
- * Nested files are read on first use and cached for the life of the matcher.
+ * Nested files are read on first use (or skipped when `prime` said there is none) and cached for
+ * the life of the matcher. `reuse` keeps a previous matcher's rules except for `changed` dirs.
  */
-export function createIgnore(root: string): (rel: string, isDir: boolean) => boolean {
+export function createIgnore(root: string, reuse?: { previous: IgnoreFn; changed: string[] }): IgnoreFn {
   const top = ignore().add(DEFAULT_IGNORES);
   try {
     top.add(readGitignore(root));
   } catch {
     /* no .gitignore */
   }
-  const levels = new Map<string, Ignore | null>([['', top]]);
+  const levels = new Map<string, Ignore | null>();
+  if (reuse) {
+    const changed = new Set(reuse.changed);
+    for (const [dir, ig] of reuse.previous.levels) if (dir !== '' && !changed.has(dir)) levels.set(dir, ig);
+  }
+  levels.set('', top);
   const level = (dir: string): Ignore | null => {
     let ig = levels.get(dir);
     if (ig === undefined) {
@@ -80,24 +96,36 @@ export function createIgnore(root: string): (rel: string, isDir: boolean) => boo
     return own(r, isDir);
   };
 
-  return (rel, isDir) => {
+  const matcher = (rel: string, isDir: boolean): boolean => {
     const r = rel.replace(/^\.\//, '').replace(/\/+$/, '');
     if (!r) return false;
     if (path.isAbsolute(r) || r === '..' || r.startsWith('../')) return true;
     return check(r, isDir);
   };
+  return Object.assign(matcher, {
+    prime(dir: string, hasGitignore: boolean): void {
+      if (!hasGitignore && !levels.has(dir)) levels.set(dir, null);
+    },
+    levels,
+  });
 }
 
 function readGitignore(dir: string): string {
+  ignoreStats.reads++;
   return readFileSync(path.join(dir, '.gitignore'), 'utf8');
 }
 
+/**
+ * Every non-ignored regular file (sorted) and every directory visited below the root. Passing a
+ * matcher from createIgnore lets the walk tell it which directories have no .gitignore.
+ */
 export async function walk(
   root: string,
-  ignored: (rel: string, isDir: boolean) => boolean,
+  ignored: ((rel: string, isDir: boolean) => boolean) & { prime?: IgnoreFn['prime'] },
   limit = 25000,
-): Promise<{ files: string[]; truncated: boolean }> {
+): Promise<{ files: string[]; dirs: string[]; truncated: boolean }> {
   const files: string[] = [];
+  const dirs: string[] = [];
   let truncated = false;
 
   async function visit(dirRel: string): Promise<void> {
@@ -109,12 +137,13 @@ export async function walk(
       return;
     }
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    ignored.prime?.(dirRel, entries.some(e => e.name === '.gitignore'));
     for (const e of entries) {
       if (truncated) return;
       if (e.isSymbolicLink()) continue;
       const rel = (dirRel ? `${dirRel}/` : '') + e.name;
       if (e.isDirectory()) {
-        if (!ignored(rel, true)) await visit(rel);
+        if (!ignored(rel, true)) { dirs.push(rel); await visit(rel); }
       } else if (e.isFile()) {
         if (isTempName(rel) || ignored(rel, false)) continue;
         if (files.length >= limit) { truncated = true; return; }
@@ -125,7 +154,7 @@ export async function walk(
 
   await visit('');
   files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return { files, truncated };
+  return { files, dirs, truncated };
 }
 
 /** Variable names only; values (including multi-line quoted ones) are never returned. */
