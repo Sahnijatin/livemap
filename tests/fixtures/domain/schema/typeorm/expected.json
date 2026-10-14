@@ -1,0 +1,22 @@
+{
+  "entities/Order.ts": [
+    { "name": "Order", "table": "orders", "orm": "typeorm", "file": "entities/Order.ts", "line": 6, "fields": [
+      { "name": "id", "type": "string", "line": 8, "pk": true, "required": true },
+      { "name": "total", "type": "number", "line": 11, "required": true },
+      { "name": "note", "type": "string", "line": 14 },
+      { "name": "code", "type": "string", "line": 17, "unique": true, "required": true },
+      { "name": "discount", "type": "number", "line": 20 },
+      { "name": "coupon", "type": "string | null", "line": 23 },
+      { "name": "user", "type": "User", "line": 27, "relation": { "model": "User", "many": false } },
+      { "name": "items", "type": "OrderItem[]", "line": 30, "relation": { "model": "OrderItem", "many": true } },
+      { "name": "status", "type": "string", "line": 33, "required": true }
+    ] }
+  ],
+  "entities/User.ts": [
+    { "name": "User", "table": "User", "orm": "typeorm", "file": "entities/User.ts", "line": 4, "fields": [
+      { "name": "id", "type": "number", "line": 6, "pk": true, "required": true },
+      { "name": "email", "type": "string", "line": 9, "required": true },
+      { "name": "roles", "type": "Role[]", "line": 12, "relation": { "model": "Role", "many": true } }
+    ] }
+  ]
+}

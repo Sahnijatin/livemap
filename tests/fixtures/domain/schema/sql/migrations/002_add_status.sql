@@ -1,0 +1,6 @@
+ALTER TABLE orders ADD COLUMN status TEXT NOT NULL;
+
+ALTER TABLE IF EXISTS public.orders
+  ADD COLUMN shipped_at TIMESTAMP,
+  ADD CONSTRAINT orders_user_fk FOREIGN KEY (user_id) REFERENCES users (id) ON UPDATE CASCADE;
+ALTER TABLE orders DROP COLUMN note;

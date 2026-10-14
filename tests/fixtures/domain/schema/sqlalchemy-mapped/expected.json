@@ -1,0 +1,22 @@
+{
+  "models.py": [
+    { "name": "User", "table": "users", "orm": "sqlalchemy", "file": "models.py", "line": 11, "fields": [
+      { "name": "id", "type": "int", "line": 14, "pk": true, "required": true },
+      { "name": "email", "type": "str", "line": 15, "unique": true, "required": true },
+      { "name": "nickname", "type": "str", "line": 16 },
+      { "name": "bio", "type": "str", "line": 17 },
+      { "name": "items", "type": "list[Item]", "line": 18, "relation": { "model": "Item", "many": true } }
+    ] },
+    { "name": "Item", "table": "items", "orm": "sqlalchemy", "file": "models.py", "line": 21, "fields": [
+      { "name": "id", "type": "int", "line": 24, "pk": true, "required": true },
+      { "name": "owner_id", "type": "int", "line": 25, "required": true, "fk": { "table": "users", "field": "id" } },
+      { "name": "title", "type": "str", "line": 26 },
+      { "name": "owner", "type": "User", "line": 27, "relation": { "model": "User", "many": false } },
+      { "name": "tags", "type": "List[Tag]", "line": 28, "relation": { "model": "Tag", "many": true } }
+    ] },
+    { "name": "AuditLog", "table": "audit_log", "orm": "sqlalchemy", "file": "models.py", "line": 31, "fields": [
+      { "name": "id", "type": "int", "line": 32, "pk": true, "required": true },
+      { "name": "item_id", "type": "int", "line": 33, "required": true, "fk": { "table": "items", "field": "id" } }
+    ] }
+  ]
+}
