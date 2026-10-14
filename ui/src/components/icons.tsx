@@ -116,6 +116,9 @@ export const PencilIcon = () => (
   <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="M13.5 6.5l4 4" /></svg>
 );
 
+export const MapIcon = () => (
+  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2" /><rect x="14" y="14" width="7" height="7" rx="2" /><path d="M10 6.5h4a3 3 0 0 1 3 3V14" /></svg>
+);
 export const SchemaIcon = () => (
   <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="3" /><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3" /></svg>
 );
