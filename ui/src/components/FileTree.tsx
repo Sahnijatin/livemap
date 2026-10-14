@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import clsx from 'clsx';
 import { useStore } from '../store';
+import { isNarrow } from '../media';
 import { LAYERS } from '../layers';
 import { latestChange, type SymbolTag } from '../changes';
 import { dirName, useLiveRecent } from '../recent';
@@ -12,7 +13,6 @@ const POP_MS = 700;
 const EMPTY_TAGS = new Map<string, SymbolTag>();
 const NO_LIMITS: Record<string, number> = {};
 const attr = (s: string): string => s.replace(/["\\]/g, '\\$&');
-const isNarrow = (): boolean => window.matchMedia?.('(max-width:1080px)').matches ?? false;
 
 export function FileTree() {
   const files = useStore(s => s.files);

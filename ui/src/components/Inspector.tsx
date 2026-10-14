@@ -11,6 +11,7 @@ import { FlagBox } from './FlagBox';
 import { LiveSession } from './LiveSession';
 import { Avatar } from './Avatar';
 import { KindBadge, LayerTile, layerVars } from './icons';
+import { MethodPill } from './MethodPill';
 
 function FileChip({ path, note }: { path: string; note?: string }) {
   const file = useStore(s => s.files[path]);
@@ -55,6 +56,77 @@ function WhyItChanged({ path }: { path: string }) {
         </div>
       ) : <div className="muted">No changes since LiveMap started.</div>}
     </div>
+  );
+}
+
+/** Routes, tables, table references and env var names for one file, each section only when it has items. */
+function DomainSections({ file }: { file: FileModel }) {
+  const domain = useStore(s => s.domain);
+  const { revealLine } = useStore.getState();
+  const path = file.path;
+  const routes = useMemo(() => domain.routes.filter(r => r.file === path).sort((a, b) => a.line - b.line), [domain.routes, path]);
+  const defined = useMemo(() => domain.tables.flatMap(t => {
+    const src = t.sources.find(x => x.file === path);
+    return src ? [{ t, line: src.line, fields: t.fields.filter(f => f.file === path).length }] : [];
+  }), [domain.tables, path]);
+  const uses = useMemo(() => {
+    const names = domain.dataRefs.find(d => d.file === path)?.tables ?? [];
+    const byName = new Map(domain.tables.map(t => [t.table.toLowerCase(), t]));
+    return names.map(n => ({ name: n, src: byName.get(n.toLowerCase())?.sources[0] }));
+  }, [domain.dataRefs, domain.tables, path]);
+  const env = file.env;
+  return (
+    <>
+      {routes.length > 0 && (
+        <div className="sec">
+          <h4>Routes in this file · {routes.length}</h4>
+          <div className="symlist">
+            {routes.map(r => (
+              <button type="button" className="sym rt-row" key={r.id} onClick={() => revealLine(path, r.line)} title={r.mountedVia?.length ? `Mounted via ${r.mountedVia.join(', ')}` : r.fullPath}>
+                <MethodPill method={r.method} />
+                <code>{r.fullPath}</code>
+                <span className="ln">:{r.line}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {defined.length > 0 && (
+        <div className="sec">
+          <h4>Tables defined here · {defined.length}</h4>
+          <div className="symlist">
+            {defined.map(({ t, line, fields }) => (
+              <button type="button" className="sym" key={t.table} onClick={() => revealLine(path, line)} title={t.table}>
+                <span className="kb k-tbl" aria-hidden="true">T</span>
+                <code>{t.name}</code>
+                <span className="ln">{fields} {fields === 1 ? 'field' : 'fields'}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {uses.length > 0 && (
+        <div className="sec">
+          <h4>Uses tables</h4>
+          <div className="chips">
+            {uses.map(u => (
+              <button type="button" className="chip tchip" key={u.name} disabled={!u.src} onClick={() => u.src && revealLine(u.src.file, u.src.line)} title={u.src ? `Defined in ${u.src.file}:${u.src.line}` : u.name}>
+                <i /><span>{u.name}</span>
+              </button>
+            ))}
+          </div>
+          <div className="muted snote">Matched by name, so approximate.</div>
+        </div>
+      )}
+      {env.length > 0 && (
+        <div className="sec">
+          <h4>Env vars · {env.length}</h4>
+          <div className="chips">
+            {env.map(n => <span className="chip envchip" key={n}><span>{n}</span></span>)}
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -134,6 +206,8 @@ function FileDetail({ file }: { file: FileModel }) {
           </div>
         </div>
       )}
+
+      <DomainSections file={file} />
 
       <div className="sec">
         <h4>Uses</h4>
