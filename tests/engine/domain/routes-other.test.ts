@@ -145,3 +145,13 @@ describe('routes-other analyzer', () => {
     }
   });
 });
+
+describe('review fixes: Flask blueprint prefixes', () => {
+  it('marks routes with the blueprint\'s own prefix and mounts with an explicit url_prefix', () => {
+    const bp = analyzeFile('orders.py', 'python', "from flask import Blueprint\nbp = Blueprint('o', __name__, url_prefix='/orders')\n@bp.get('/<int:id>')\ndef one(id):\n    pass\n");
+    expect(bp.routes).toMatchObject([{ path: '/orders/:id', basePrefix: '/orders' }]);
+    const app = analyzeFile('app.py', 'python', "from flask import Flask\nfrom .orders import bp\napp = Flask(__name__)\napp.register_blueprint(bp, url_prefix='/api')\napp.register_blueprint(bp)\n");
+    expect(app.mounts!.map(m => [m.prefix, m.replaces ?? false])).toEqual([['/api', true], ['/', false]]);
+  });
+});
+

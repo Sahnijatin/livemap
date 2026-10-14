@@ -14,7 +14,9 @@ const MAX_REF_TEXT = 1_000_000;
 /** Languages never scanned for table references: docs, config, styles, markup and non-code files. */
 const NO_REF_LANGS = new Set<Lang>(['markdown', 'json', 'yaml', 'toml', 'text', 'css', 'html', 'secret', 'other']);
 
-interface Chain { prefix: string; via: string[] }
+/** `replaces`: the mount directly on the router replaces its routes' own (Flask blueprint) prefix. */
+interface Chain { prefix: string; via: string[]; replaces?: boolean }
+type Incoming = { from: string; prefix: string; replaces?: boolean };
 
 /** `prefix` + `path` for normalized route paths: the root path adds nothing. */
 function join(prefix: string, path: string): string {
@@ -24,7 +26,7 @@ function join(prefix: string, path: string): string {
 }
 
 /** Every mount prefix chain above `file`, outermost mount first; cycle-safe and capped at MAX_MOUNT_DEPTH mounts. */
-function chainsOf(file: string, byTarget: Map<string, { from: string; prefix: string }[]>, seen: Set<string>, depth: number): Chain[] {
+function chainsOf(file: string, byTarget: Map<string, Incoming[]>, seen: Set<string>, depth: number): Chain[] {
   const incoming = depth < MAX_MOUNT_DEPTH ? (byTarget.get(file) ?? []).filter(m => !seen.has(m.from)) : [];
   if (!incoming.length) return [{ prefix: '', via: [] }];
   const out: Chain[] = [];
@@ -33,7 +35,7 @@ function chainsOf(file: string, byTarget: Map<string, { from: string; prefix: st
     seen.add(m.from);
     for (const c of chainsOf(m.from, byTarget, seen, depth + 1)) {
       if (out.length >= MAX_CHAINS) break;
-      out.push({ prefix: join(c.prefix, m.prefix), via: [...c.via, m.from] });
+      out.push({ prefix: join(c.prefix, m.prefix), via: [...c.via, m.from], ...(m.replaces ? { replaces: true } : {}) });
     }
     seen.delete(m.from);
   }
@@ -48,16 +50,19 @@ function expoPromotions(files: FileModel[], contents: (p: string) => string | nu
   for (const f of files) {
     const segs = f.path.split('/');
     const app = segs.lastIndexOf('app');
-    if (segs[segs.length - 1] === '_layout.tsx' && app >= 0 && app < segs.length - 1) layouts.push({ dir: segs.slice(0, -1).join('/') + '/', app });
+    if (/^_layout\.[jt]sx?$/.test(segs[segs.length - 1]) && app >= 0 && app < segs.length - 1) layouts.push({ dir: segs.slice(0, -1).join('/') + '/', app });
   }
   if (!layouts.length) return [];
   const out: { file: string; route: Route }[] = [];
   for (const f of files) {
-    if (f.routes.length || !f.path.endsWith('.tsx')) continue;
+    // .tsx/.jsx files are screens; .ts/.js only with a default export (others are helpers).
+    const ext = /\.(tsx|jsx|ts|js)$/.exec(f.path)?.[1];
+    if (f.routes.length || !ext) continue;
     const layout = layouts.find(l => f.path.startsWith(l.dir));
     if (!layout) continue;
+    if ((ext === 'ts' || ext === 'js') && !/\bexport\s+default\b/.test(contents(f.path) ?? '')) continue;
     const segs = f.path.split('/');
-    const name = segs[segs.length - 1].slice(0, -'.tsx'.length);
+    const name = segs[segs.length - 1].slice(0, -(ext.length + 1));
     if (name.startsWith('_') || name.includes('+') || name === 'page' || /\.(test|spec|d)$/.test(name)) continue;
     const parts = [...segs.slice(layout.app + 1, -1), name];
     if (name === 'index') parts.pop();
@@ -72,12 +77,13 @@ function expoPromotions(files: FileModel[], contents: (p: string) => string | nu
 
 function buildRoutes(files: FileModel[], contents: (p: string) => string | null): ApiRoute[] {
   const hasNext = files.some(f => f.deps?.deps.some(d => d.eco === 'npm' && d.name === 'next'));
-  const byTarget = new Map<string, { from: string; prefix: string }[]>();
+  const byTarget = new Map<string, Incoming[]>();
   for (const f of files) {
     for (const m of f.mounts ?? []) {
       if (!m.target) continue;
+      const entry: Incoming = { from: f.path, prefix: m.prefix, ...(m.replaces ? { replaces: true } : {}) };
       const list = byTarget.get(m.target);
-      if (list) list.push({ from: f.path, prefix: m.prefix }); else byTarget.set(m.target, [{ from: f.path, prefix: m.prefix }]);
+      if (list) list.push(entry); else byTarget.set(m.target, [entry]);
     }
   }
   const out: ApiRoute[] = [];
@@ -92,7 +98,8 @@ function buildRoutes(files: FileModel[], contents: (p: string) => string | null)
     let list = chains.get(file);
     if (!list) chains.set(file, list = chainsOf(file, byTarget, new Set([file]), 0));
     for (const c of list) {
-      const fullPath = join(c.prefix, r.path);
+      const own = c.replaces && r.basePrefix && (r.path === r.basePrefix || r.path.startsWith(`${r.basePrefix}/`));
+      const fullPath = join(c.prefix, own ? r.path.slice(r.basePrefix!.length) || '/' : r.path);
       const id = routeId(r, fullPath, file);
       const prev = byId.get(id);
       // Two mounting files reaching one router at the same prefix chain give one route mounted via both.

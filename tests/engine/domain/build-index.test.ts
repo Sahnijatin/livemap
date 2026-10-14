@@ -324,3 +324,36 @@ describe('buildDomainIndex: performance (Review Focus 4)', () => {
     expect(ms).toBeLessThan(250);
   });
 });
+
+describe('review fixes: Flask url_prefix and JS Expo screens', () => {
+  const flask = (method: string, path: string, basePrefix?: string): Route =>
+    ({ method, path, line: 1, kind: 'api', framework: 'flask', ...(basePrefix ? { basePrefix } : {}) });
+  const fmount = (prefix: string, target: string, replaces?: true): Mount => ({ prefix, spec: '.orders', target, line: 1, framework: 'flask', ...(replaces ? { replaces } : {}) });
+
+  it('register_blueprint(url_prefix=...) replaces the blueprint\'s own prefix, as Flask does', () => {
+    const idx = buildDomainIndex([
+      fm('app.py', { lang: 'python', mounts: [fmount('/api', 'orders.py', true)] }),
+      fm('orders.py', { lang: 'python', routes: [flask('GET', '/orders', '/orders'), flask('POST', '/orders/:id/cancel', '/orders')] }),
+    ], noText);
+    expect(idx.routes.map(r => r.fullPath)).toEqual(['/api', '/api/:id/cancel']);
+  });
+
+  it('without url_prefix the blueprint keeps its own prefix', () => {
+    const idx = buildDomainIndex([
+      fm('app.py', { lang: 'python', mounts: [fmount('', 'orders.py')] }),
+      fm('orders.py', { lang: 'python', routes: [flask('GET', '/orders', '/orders')] }),
+    ], noText);
+    expect(idx.routes.map(r => r.fullPath)).toEqual(['/orders']);
+  });
+
+  it('promotes JavaScript Expo screens: .jsx always, .js with a default export', () => {
+    const idx = buildDomainIndex([
+      fm('app/_layout.jsx', { lang: 'javascript' }),
+      fm('app/settings.jsx', { lang: 'javascript' }),
+      fm('app/(tabs)/index.js', { lang: 'javascript' }),
+      fm('app/helpers.js', { lang: 'javascript' }),
+    ], texts({ 'app/(tabs)/index.js': 'export default function Home() {}\n', 'app/helpers.js': 'export const x = 1;\n' }));
+    expect(idx.routes.map(r => [r.fullPath, r.file])).toEqual([['/', 'app/(tabs)/index.js'], ['/settings', 'app/settings.jsx']]);
+  });
+});
+

@@ -62,7 +62,9 @@ function diffEntities(before: Entity[], after: Entity[]): ChangeSummary['entitie
     const nf = keyed(e.fields, f => f.name);
     const addedFields = [...nf.keys()].filter(n => !of.has(n));
     const removedFields = [...of.keys()].filter(n => !nf.has(n));
-    const changedFields = [...nf.keys()].filter(n => of.has(n) && JSON.stringify(of.get(n)) !== JSON.stringify(nf.get(n)));
+    // A field that only moved to another line is unchanged.
+    const sameField = (x: object | undefined, y: object | undefined) => JSON.stringify({ ...x, line: 0 }) === JSON.stringify({ ...y, line: 0 });
+    const changedFields = [...nf.keys()].filter(n => of.has(n) && !sameField(of.get(n), nf.get(n)));
     if (addedFields.length || removedFields.length || changedFields.length) out.changed.push({ name, addedFields, removedFields, changedFields });
   }
   for (const [name, e] of b) {

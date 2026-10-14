@@ -1,9 +1,17 @@
 export type Lang = 'typescript'|'tsx'|'javascript'|'python'|'go'|'rust'|'java'|'kotlin'|'csharp'|'php'|'ruby'|'swift'|'c'|'cpp'|'dart'|'vue'|'svelte'|'sql'|'prisma'|'markdown'|'json'|'yaml'|'toml'|'css'|'html'|'shell'|'text'|'secret'|'other';
 export type SymbolKind = 'function'|'method'|'class'|'component'|'hook'|'interface'|'type'|'enum'|'struct'|'trait'|'impl'|'module'|'namespace'|'variable'|'heading';
 export interface CodeSymbol { name: string; qname: string; kind: SymbolKind; signature: string; line: number; endLine: number; exported: boolean; hash: string; children: CodeSymbol[] }
-export interface Route { method: string; path: string; handler?: string; line: number; kind: 'api' | 'page' | 'screen'; framework: string }
+export interface Route {
+  method: string; path: string; handler?: string; line: number; kind: 'api' | 'page' | 'screen'; framework: string;
+  /** Flask: the Blueprint's own url_prefix, already in `path`; a register_blueprint url_prefix replaces it. */
+  basePrefix?: string;
+}
 /** A router mounted under a prefix; `target` is the resolved root-relative file, null when unresolved. */
-export interface Mount { prefix: string; spec: string; target: string | null; line: number; framework: string }
+export interface Mount {
+  prefix: string; spec: string; target: string | null; line: number; framework: string;
+  /** Flask register_blueprint with an explicit url_prefix: it replaces the blueprint's own prefix. */
+  replaces?: true;
+}
 export interface Field { name: string; type: string; line?: number; pk?: true; required?: true; unique?: true; fk?: { table: string; field: string }; relation?: { model: string; many: boolean } }
 /** `partial` marks an ALTER fragment that adds to a table defined elsewhere. */
 export interface Entity { name: string; table: string; orm: string; file: string; line: number; fields: Field[]; partial?: true }

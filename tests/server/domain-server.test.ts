@@ -146,3 +146,25 @@ describe('server: domain index', () => {
     }
   });
 });
+
+describe('review fixes: domain refresh on touched and reset', () => {
+  it('rebuilds the domain index after files arrive without a change (watcher "touched")', async () => {
+    const { c } = await boot();
+    await waitFor(() => ofType(c, 'hello').length >= 1);
+    put('src/routes/extra.ts', ROUTER(['/extra']));
+    await model.update('src/routes/extra.ts', 'add', { deferRelink: true }); // no change event goes out for it
+    watcher.emit('touched', [model.get('src/routes/extra.ts')!], []);
+    await waitFor(() => ofType(c, 'domain').some(m => m.domain.routes.some(r => r.path === '/extra')), 3000);
+  });
+
+  it('a reset sends a hello with a freshly built domain index', async () => {
+    const { c } = await boot();
+    await waitFor(() => ofType(c, 'hello').length >= 1);
+    put('src/routes/late.ts', ROUTER(['/late']));
+    await model.update('src/routes/late.ts', 'add', { deferRelink: true });
+    watcher.emit('reset');
+    await waitFor(() => ofType(c, 'hello').length >= 2);
+    expect(ofType(c, 'hello')[1].domain.routes.some(r => r.path === '/late')).toBe(true);
+  });
+});
+

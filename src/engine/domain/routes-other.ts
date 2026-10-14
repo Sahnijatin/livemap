@@ -33,10 +33,11 @@ const rawPath = (p: string): string => { const t = ('/' + p).replace(/\/{2,}/g, 
 const singular = (w: string): string =>
   w.endsWith('ies') ? w.slice(0, -3) + 'y' : /(?:ss|x|ch|sh)es$/.test(w) ? w.slice(0, -2) : w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w;
 
-function route(out: Facts, src: Src, method: string, path: string, handler: string | undefined, index: number, framework: string): void {
+function route(out: Facts, src: Src, method: string, path: string, handler: string | undefined, index: number, framework: string): Route {
   const r: Route = { method, path, line: lineAt(src.code, index), kind: 'api', framework };
   if (handler) r.handler = handler;
   out.routes.push(r);
+  return r;
 }
 
 // ---------------------------------------------------------------- Python: FastAPI, Flask, Django
@@ -124,7 +125,11 @@ function python(src: Src, out: Facts): void {
     const listed = kwarg(args, 'methods');
     const methods = verb === 'route' || verb === 'api_route' ? (listed ? strs(listed).map(x => x.toUpperCase()) : ['GET']) : [verb.toUpperCase()];
     const handler = pyDef(src, end);
-    for (const method of methods) route(out, src, method, normPath(r.prefix + '/' + path), handler, m.index, r.fw);
+    const base = r.fw === 'flask' && r.prefix ? normPath(r.prefix) : null;
+    for (const method of methods) {
+      const added = route(out, src, method, normPath(r.prefix + '/' + path), handler, m.index, r.fw);
+      if (base && base !== '/') added.basePrefix = base;
+    }
   }
   for (const m of src.scan.matchAll(PY_MOUNT)) {
     if (scanBudget() <= 0) break;
@@ -132,8 +137,13 @@ function python(src: Src, out: Facts): void {
     const { args } = split(src, m.index + m[0].length - 1);
     const spec = pySpec(args[0], imp);
     if (!spec) continue;
-    const prefix = str(kwarg(args, fw === 'fastapi' ? 'prefix' : 'url_prefix')) ?? '';
-    out.mounts.push({ prefix: normPath((recv.get(m[1])?.prefix ?? '') + '/' + prefix), spec, line: lineAt(src.code, m.index), framework: fw });
+    const given = str(kwarg(args, fw === 'fastapi' ? 'prefix' : 'url_prefix'));
+    const prefix = given ?? '';
+    out.mounts.push({
+      prefix: normPath((recv.get(m[1])?.prefix ?? '') + '/' + prefix), spec, line: lineAt(src.code, m.index), framework: fw,
+      // In Flask an explicit url_prefix replaces the blueprint's own (FastAPI's prefixes add up).
+      ...(fw === 'flask' && given !== null ? { replaces: true as const } : {}),
+    });
   }
 }
 
@@ -382,7 +392,7 @@ function rails(src: Src, out: Facts): void {
   const stack: RbFrame[] = [{ prefix: '', module: '' }];
   const top = (): RbFrame => stack[stack.length - 1];
   const re = new RegExp(RB_TOKEN.source, 'gm');
-  const add = (method: string, path: string, handler: string | undefined, index: number): void => route(out, src, method, normPath(path), handler, index, 'rails');
+  const add = (method: string, path: string, handler: string | undefined, index: number): void => { route(out, src, method, normPath(path), handler, index, 'rails'); };
   for (let m = re.exec(src.scan); m; m = re.exec(src.scan)) {
     if (scanBudget() <= 0) break;
     const cur = top();

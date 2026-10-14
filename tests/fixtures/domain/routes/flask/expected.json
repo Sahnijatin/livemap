@@ -4,34 +4,34 @@
       {
         "method": "GET",
         "path": "/",
-        "handler": "index",
         "line": 10,
         "kind": "api",
-        "framework": "flask"
+        "framework": "flask",
+        "handler": "index"
       },
       {
         "method": "GET",
         "path": "/login",
-        "handler": "login",
         "line": 15,
         "kind": "api",
-        "framework": "flask"
+        "framework": "flask",
+        "handler": "login"
       },
       {
         "method": "POST",
         "path": "/login",
-        "handler": "login",
         "line": 15,
         "kind": "api",
-        "framework": "flask"
+        "framework": "flask",
+        "handler": "login"
       },
       {
         "method": "GET",
         "path": "/users/:user_id",
-        "handler": "user",
         "line": 20,
         "kind": "api",
-        "framework": "flask"
+        "framework": "flask",
+        "handler": "user"
       }
     ],
     "mounts": [
@@ -39,7 +39,8 @@
         "prefix": "/api",
         "spec": ".orders",
         "line": 6,
-        "framework": "flask"
+        "framework": "flask",
+        "replaces": true
       },
       {
         "prefix": "/",
@@ -54,34 +55,38 @@
       {
         "method": "GET",
         "path": "/orders",
-        "handler": "list_orders",
         "line": 6,
         "kind": "api",
-        "framework": "flask"
+        "framework": "flask",
+        "handler": "list_orders",
+        "basePrefix": "/orders"
       },
       {
         "method": "POST",
         "path": "/orders/:id/cancel",
-        "handler": "cancel",
         "line": 11,
         "kind": "api",
-        "framework": "flask"
+        "framework": "flask",
+        "handler": "cancel",
+        "basePrefix": "/orders"
       },
       {
         "method": "PATCH",
         "path": "/orders/:rest",
-        "handler": "other",
         "line": 16,
         "kind": "api",
-        "framework": "flask"
+        "framework": "flask",
+        "handler": "other",
+        "basePrefix": "/orders"
       },
       {
         "method": "PUT",
         "path": "/orders/:rest",
-        "handler": "other",
         "line": 16,
         "kind": "api",
-        "framework": "flask"
+        "framework": "flask",
+        "handler": "other",
+        "basePrefix": "/orders"
       }
     ],
     "mounts": []

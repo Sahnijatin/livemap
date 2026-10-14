@@ -124,6 +124,13 @@ describe('buildChange', () => {
     expect(JSON.stringify(c)).not.toContain('=1');
   });
 
+  it('a field that only moved to another line is not changed', () => {
+    const base: FileModel = { path: 's.prisma', lang: 'prisma', size: 0, lines: 0, symbols: [], imports: { local: [], external: [] }, routes: [], entities: [], env: [], flags: {} };
+    const ent = (offset: number) => ({ name: 'User', table: 'users', orm: 'prisma', file: 's.prisma', line: 1, fields: [{ name: 'id', type: 'Int', line: 2 + offset }, { name: 'email', type: 'String', line: 3 + offset }] });
+    const c = buildChange({ path: 's.prisma', kind: 'modified', before: { ...base, entities: [ent(0)] }, after: { ...base, entities: [ent(1)] }, beforeText: '', afterText: '', touched: [] }, 1);
+    expect(c.entities.changed).toEqual([]);
+  });
+
   it('diffs routes, entities, deps', () => {
     const base: FileModel = { path: 'r.ts', lang: 'typescript', size: 0, lines: 0, symbols: [], imports: { local: [], external: [] }, routes: [], entities: [], env: [], flags: {} };
     const ent = (fields: string[]) => ({ name: 'User', table: 'users', orm: 'prisma', file: 'r.ts', line: 1, fields: fields.map(n => ({ name: n, type: 'String' })) });

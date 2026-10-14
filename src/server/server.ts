@@ -263,11 +263,13 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     if (!isReady) return; // hello will carry the state
     broadcast({ type: 'files', files, removed });
     scheduleUsedBy();
+    scheduleDomain(); // routes and tables can arrive this way (re-indexing, mounts resolving after a burst)
   };
   watcher.on('touched', onTouched);
   const onReset = (): void => {
     if (!isReady) return; // hello will carry the state
     computeUsedBy();
+    computeDomain();
     broadcast(hello());
   };
   watcher.on('reset', onReset);
