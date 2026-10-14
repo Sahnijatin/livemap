@@ -21,27 +21,75 @@ export function isTempName(rel: string): boolean {
   return TEMP_SUFFIX.test(base) || TEMP_PREFIX.test(base);
 }
 
+type Ignore = ReturnType<typeof ignore>;
+
+/**
+ * Built-in ignores plus every `.gitignore` in the tree, each scoped to its own directory as git
+ * does: a deeper file's rules win, and nothing under an ignored directory can be re-included.
+ * Nested files are read on first use and cached for the life of the matcher.
+ */
 export function createIgnore(root: string): (rel: string, isDir: boolean) => boolean {
-  const ig = ignore().add(DEFAULT_IGNORES);
+  const top = ignore().add(DEFAULT_IGNORES);
   try {
-    ig.add(readGitignore(root));
+    top.add(readGitignore(root));
   } catch {
     /* no .gitignore */
   }
+  const levels = new Map<string, Ignore | null>([['', top]]);
+  const level = (dir: string): Ignore | null => {
+    let ig = levels.get(dir);
+    if (ig === undefined) {
+      try {
+        ig = ignore().add(readGitignore(path.join(root, ...dir.split('/'))));
+      } catch {
+        ig = null;
+      }
+      levels.set(dir, ig);
+    }
+    return ig;
+  };
+  const dirs = new Map<string, boolean>();
+
+  /** The rules of the directories from root down to rel's parent, deepest opinion last. */
+  const own = (r: string, isDir: boolean): boolean => {
+    const segs = r.split('/');
+    let ignored = false;
+    for (let i = 0; i < segs.length; i++) {
+      const base = segs.slice(0, i).join('/');
+      const ig = level(base);
+      if (!ig) continue;
+      const sub = segs.slice(i).join('/');
+      try {
+        const t = ig.test(isDir ? `${sub}/` : sub);
+        if (t.ignored) ignored = true;
+        else if (t.unignored) ignored = false;
+      } catch {
+        /* a path the matcher cannot express is not ignored by it */
+      }
+    }
+    return ignored;
+  };
+  const check = (r: string, isDir: boolean): boolean => {
+    const slash = r.lastIndexOf('/');
+    if (slash > 0) {
+      const parent = r.slice(0, slash);
+      let p = dirs.get(parent);
+      if (p === undefined) { p = check(parent, true); dirs.set(parent, p); }
+      if (p) return true;
+    }
+    return own(r, isDir);
+  };
+
   return (rel, isDir) => {
     const r = rel.replace(/^\.\//, '').replace(/\/+$/, '');
     if (!r) return false;
     if (path.isAbsolute(r) || r === '..' || r.startsWith('../')) return true;
-    try {
-      return ig.ignores(isDir ? `${r}/` : r);
-    } catch {
-      return false;
-    }
+    return check(r, isDir);
   };
 }
 
-function readGitignore(root: string): string {
-  return readFileSync(path.join(root, '.gitignore'), 'utf8');
+function readGitignore(dir: string): string {
+  return readFileSync(path.join(dir, '.gitignore'), 'utf8');
 }
 
 export async function walk(

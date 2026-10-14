@@ -41,6 +41,20 @@ describe('walk', () => {
     expect(r.files).toHaveLength(3);
     expect(r.truncated).toBe(true);
   });
+  it('honors nested .gitignore files, scoped to their directory, with deeper rules winning', async () => {
+    put('.gitignore', '*.secret\n');
+    put('pkg/.gitignore', 'gen/\n*.local.ts\n!ok.secret\n');
+    put('pkg/gen/x.ts'); put('pkg/a.local.ts'); put('pkg/keep.ts'); put('pkg/ok.secret'); put('pkg/no.secret');
+    put('other/a.local.ts'); put('other/ok.secret');
+    const ig = createIgnore(root);
+    const { files } = await walk(root, ig);
+    expect(files).toEqual(['.gitignore', 'other/a.local.ts', 'pkg/.gitignore', 'pkg/keep.ts', 'pkg/ok.secret']);
+    // Single-path checks (the watcher's view) agree, including files inside an ignored directory.
+    expect(ig('pkg/gen/y.ts', false)).toBe(true);
+    expect(ig('pkg/gen', true)).toBe(true);
+    expect(ig('pkg/b.local.ts', false)).toBe(true);
+    expect(ig('other/b.local.ts', false)).toBe(false);
+  });
   it('directory patterns need isDir', () => {
     put('.gitignore', 'secret/\n');
     const ig = createIgnore(root);
