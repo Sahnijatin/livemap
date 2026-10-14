@@ -15,7 +15,7 @@ let root: Root;
 let renders: string[];
 
 const hello = (files: ReturnType<typeof file>[]) => ({
-  type: 'hello' as const, root: '/p/shop', name: 'shop', files, changes: [], usedBy: [], indexing: false,
+  type: 'hello' as const, root: '/p/shop', name: 'shop', files, changes: [], usedBy: [], indexing: false, events: [], sessions: [], control: { paused: false, flags: [] },
 });
 const rows = () => host.querySelectorAll('.frow').length;
 
@@ -189,6 +189,7 @@ describe('FileRow badges', () => {
     expect(dot.getAttribute('title')).toMatch(/parse error/i);
     expect(x().querySelector('.b-edit')).not.toBeNull();
     expect(x().querySelector('.fmeta')).toBeNull();
+    expect(host.querySelector('[data-file="a/x.ts"] .b-edit')).not.toBeNull();
     expect(host.querySelector('[data-file="a/y.ts"] .fmeta')!.textContent).toBe('1');
   });
 });

@@ -79,3 +79,39 @@ export const PanelIcon = () => (
 export const LockIcon = () => (
   <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2.5" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
 );
+
+export const PauseIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="4.5" width="4" height="15" rx="1.2" /><rect x="14" y="4.5" width="4" height="15" rx="1.2" /></svg>
+);
+
+export const PlayIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l13-7.5z" /></svg>
+);
+
+export const FlagIcon = () => (
+  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5" /></svg>
+);
+
+export const GitIcon = () => (
+  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><circle cx="6" cy="6" r="2.5" /><circle cx="6" cy="18" r="2.5" /><circle cx="18" cy="8" r="2.5" /><path d="M6 8.5v7M18 10.5c0 4-6 3.5-11 6" /></svg>
+);
+
+export const CheckIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+);
+
+export const CrossIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11" /></svg>
+);
+
+export const ArrowDownIcon = () => (
+  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6" /></svg>
+);
+
+export const PulseIcon = () => (
+  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><path d="M4 12h4l3-7 3 14 3-7h3" /></svg>
+);
+
+export const PencilIcon = () => (
+  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="M13.5 6.5l4 4" /></svg>
+);
