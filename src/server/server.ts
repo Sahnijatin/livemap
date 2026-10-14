@@ -163,8 +163,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     if (!isReady) return; // hello will carry the state
     const own = model.get(change.path);
     const files = own ? [own, ...touched.filter(f => f.path !== own.path)] : touched;
-    broadcast({ type: 'change', change });
-    broadcast({ type: 'files', files, removed: change.kind === 'deleted' ? [change.path] : [] });
+    broadcast({ type: 'change', change, files, removed: change.kind === 'deleted' ? [change.path] : [] });
     scheduleUsedBy();
   };
   watcher.on('change', onChange);

@@ -29,18 +29,33 @@ describe('store.apply', () => {
     expect(st.files['c.ts']).toBe(c);
   });
 
+  it('a change applies its file updates in the same state update', () => {
+    const s = useStore.getState();
+    s.apply(hello());
+    const f2 = file('b.ts', [], { lines: 7 });
+    let updates = 0;
+    const unsub = useStore.subscribe(() => { updates++; });
+    s.apply({ type: 'change', change: change('b.ts', 'modified'), files: [f2], removed: ['a.ts'] });
+    unsub();
+    expect(updates).toBe(1);
+    const st = useStore.getState();
+    expect(st.files['b.ts']).toBe(f2);
+    expect(st.files['a.ts']).toBeUndefined();
+    expect(st.recent['b.ts'].kind).toBe('modified');
+  });
+
   it('change records recent kind, auto-expands the file and keeps the last 2,000 changes', () => {
     const s = useStore.getState();
     s.apply(hello());
-    s.apply({ type: 'change', change: change('a.ts', 'created') });
+    s.apply({ type: 'change', files: [], removed: [], change: change('a.ts', 'created') });
     let st = useStore.getState();
     expect(st.recent['a.ts'].kind).toBe('created');
     expect(st.expanded['a.ts']).toBe(true);
-    s.apply({ type: 'change', change: change('a.ts', 'modified') });
+    s.apply({ type: 'change', files: [], removed: [], change: change('a.ts', 'modified') });
     expect(useStore.getState().recent['a.ts'].kind).toBe('modified');
 
     s.apply(hello());
-    for (let i = 0; i < 2001; i++) s.apply({ type: 'change', change: change(`f${i}.ts`) });
+    for (let i = 0; i < 2001; i++) s.apply({ type: 'change', files: [], removed: [], change: change(`f${i}.ts`) });
     st = useStore.getState();
     expect(MAX_CHANGES).toBe(2000);
     expect(st.changes).toHaveLength(2000);
@@ -51,9 +66,9 @@ describe('store.apply', () => {
   it('a deleted change removes recent[path]; a removed selected path resets selected on the next files message', () => {
     const s = useStore.getState();
     s.apply(hello());
-    s.apply({ type: 'change', change: change('a.ts', 'modified') });
+    s.apply({ type: 'change', files: [], removed: [], change: change('a.ts', 'modified') });
     s.select('a.ts');
-    s.apply({ type: 'change', change: change('a.ts', 'deleted') });
+    s.apply({ type: 'change', files: [], removed: [], change: change('a.ts', 'deleted') });
     let st = useStore.getState();
     expect(st.recent['a.ts']).toBeUndefined();
     expect(st.selected).toBe('a.ts');

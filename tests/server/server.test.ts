@@ -312,15 +312,12 @@ describe('startServer: WebSocket', () => {
     put(root, 'src/c.ts', 'import { b } from "./b";\nexport const c = b * 2;\n');
     await waitFor(() => ofType(c, 'change').length >= 1, 1000);
     expect(Date.now() - t0).toBeLessThan(1000);
-    const change = ofType(c, 'change')[0].change;
-    expect(change).toMatchObject({ path: 'src/c.ts', kind: 'created' });
-    await waitFor(() => ofType(c, 'files').length >= 1);
-    const files = ofType(c, 'files')[0];
-    expect(files.files.map(f => f.path)).toContain('src/c.ts');
-    expect(files.removed).toEqual([]);
-    const iChange = c.msgs.findIndex(m => m.type === 'change');
-    const iFiles = c.msgs.findIndex(m => m.type === 'files');
-    expect(iChange).toBeLessThan(iFiles);
+    const msg = ofType(c, 'change')[0];
+    expect(msg.change).toMatchObject({ path: 'src/c.ts', kind: 'created' });
+    // The change carries its file updates, so the UI applies both at once (one render, one fetch).
+    expect(msg.files.map(f => f.path)).toContain('src/c.ts');
+    expect(msg.removed).toEqual([]);
+    expect(ofType(c, 'files')).toEqual([]);
     await waitFor(() => ofType(c, 'usedBy').some(m => m.usedBy.some(e => e.file === 'src/b.ts' && e.usedIn.includes('src/c.ts'))), 3000);
   });
 
@@ -338,7 +335,7 @@ describe('startServer: WebSocket', () => {
     const c = connect(s.port, `?t=${s.token}`);
     await waitFor(() => c.msgs.length >= 1);
     fs.rmSync(path.join(root, 'src/a.ts'));
-    await waitFor(() => ofType(c, 'files').some(m => m.removed.includes('src/a.ts')));
+    await waitFor(() => ofType(c, 'change').some(m => m.removed.includes('src/a.ts')));
     const late = connect(s.port, `?t=${s.token}`);
     await waitFor(() => late.msgs.length >= 1);
     const hello = late.msgs[0];
