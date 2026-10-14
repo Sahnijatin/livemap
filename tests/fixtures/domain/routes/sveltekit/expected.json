@@ -1,0 +1,35 @@
+{
+  "src/routes/api/items/[id]/+server.ts": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/api/items/:id",
+        "handler": "GET",
+        "line": 4,
+        "kind": "api",
+        "framework": "sveltekit"
+      },
+      {
+        "method": "PATCH",
+        "path": "/api/items/:id",
+        "handler": "PATCH",
+        "line": 6,
+        "kind": "api",
+        "framework": "sveltekit"
+      }
+    ],
+    "mounts": []
+  },
+  "src/routes/(app)/items/+page.svelte": {
+    "routes": [
+      {
+        "method": "PAGE",
+        "path": "/items",
+        "line": 1,
+        "kind": "page",
+        "framework": "sveltekit"
+      }
+    ],
+    "mounts": []
+  }
+}

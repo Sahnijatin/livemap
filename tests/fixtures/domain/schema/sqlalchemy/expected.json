@@ -1,0 +1,27 @@
+{
+  "app/models.py": [
+    { "name": "User", "table": "users", "orm": "sqlalchemy", "file": "app/models.py", "line": 11, "fields": [
+      { "name": "id", "type": "Integer", "line": 14, "pk": true, "required": true },
+      { "name": "email", "type": "String", "line": 15, "required": true, "unique": true },
+      { "name": "full_name", "type": "String", "line": 16 },
+      { "name": "orders", "type": "Order[]", "line": 17, "relation": { "model": "Order", "many": true } },
+      { "name": "active", "type": "Boolean", "line": 23 }
+    ] },
+    { "name": "Order", "table": "orders", "orm": "sqlalchemy", "file": "app/models.py", "line": 27, "fields": [
+      { "name": "created_at", "type": "DateTime", "line": 8, "required": true },
+      { "name": "id", "type": "Integer", "line": 33, "pk": true, "required": true },
+      { "name": "user_id", "type": "Integer", "line": 34, "required": true, "fk": { "table": "users", "field": "id" } },
+      { "name": "total", "type": "Numeric", "line": 36 },
+      { "name": "user", "type": "User", "line": 37, "relation": { "model": "User", "many": false } },
+      { "name": "tags", "type": "Tag[]", "line": 38, "relation": { "model": "Tag", "many": true } }
+    ] }
+  ],
+  "shop/tables.py": [
+    { "name": "OrderItem", "table": "order_item", "orm": "sqlalchemy", "file": "shop/tables.py", "line": 6, "fields": [
+      { "name": "id", "type": "Integer", "line": 7, "pk": true, "required": true },
+      { "name": "order_id", "type": "Integer", "line": 8, "fk": { "table": "orders", "field": "id" } },
+      { "name": "sku", "type": "String", "line": 9, "unique": true, "required": true },
+      { "name": "order", "type": "Order", "line": 10, "relation": { "model": "Order", "many": false } }
+    ] }
+  ]
+}

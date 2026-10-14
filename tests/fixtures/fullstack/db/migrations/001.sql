@@ -1,0 +1,19 @@
+CREATE TABLE users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  name TEXT
+);
+
+CREATE TABLE orders (
+  id TEXT PRIMARY KEY,
+  "userId" TEXT NOT NULL REFERENCES users(id),
+  total DOUBLE PRECISION NOT NULL,
+  "createdAt" TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE order_items (
+  id TEXT PRIMARY KEY,
+  "orderId" TEXT NOT NULL REFERENCES orders(id),
+  sku TEXT NOT NULL,
+  quantity INTEGER NOT NULL
+);

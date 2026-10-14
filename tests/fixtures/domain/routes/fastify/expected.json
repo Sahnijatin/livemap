@@ -1,0 +1,67 @@
+{
+  "server.ts": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/items",
+        "handler": "listItems",
+        "line": 6,
+        "kind": "api",
+        "framework": "fastify"
+      },
+      {
+        "method": "GET",
+        "path": "/items/:id",
+        "handler": "inline",
+        "line": 7,
+        "kind": "api",
+        "framework": "fastify"
+      },
+      {
+        "method": "HEAD",
+        "path": "/items/:id",
+        "handler": "inline",
+        "line": 7,
+        "kind": "api",
+        "framework": "fastify"
+      },
+      {
+        "method": "POST",
+        "path": "/items",
+        "handler": "createItem",
+        "line": 12,
+        "kind": "api",
+        "framework": "fastify"
+      }
+    ],
+    "mounts": [
+      {
+        "prefix": "/admin",
+        "spec": "./routes/admin",
+        "line": 14,
+        "framework": "fastify"
+      }
+    ]
+  },
+  "routes/admin.ts": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/stats",
+        "handler": "inline",
+        "line": 4,
+        "kind": "api",
+        "framework": "fastify"
+      },
+      {
+        "method": "DELETE",
+        "path": "/cache/:key",
+        "handler": "clearCache",
+        "line": 5,
+        "kind": "api",
+        "framework": "fastify"
+      }
+    ],
+    "mounts": []
+  }
+}

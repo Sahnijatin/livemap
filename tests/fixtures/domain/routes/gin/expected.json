@@ -1,0 +1,55 @@
+{
+  "main.go": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/ping",
+        "handler": "ping",
+        "line": 7,
+        "kind": "api",
+        "framework": "gin"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/orders/:id",
+        "handler": "handlers.GetOrder",
+        "line": 11,
+        "kind": "api",
+        "framework": "gin"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/orders",
+        "handler": "handlers.CreateOrder",
+        "line": 12,
+        "kind": "api",
+        "framework": "gin"
+      },
+      {
+        "method": "DELETE",
+        "path": "/api/orders/:id",
+        "handler": "inline",
+        "line": 14,
+        "kind": "api",
+        "framework": "gin"
+      },
+      {
+        "method": "ANY",
+        "path": "/proxy/:path*",
+        "handler": "proxy",
+        "line": 15,
+        "kind": "api",
+        "framework": "gin"
+      },
+      {
+        "method": "PUT",
+        "path": "/settings",
+        "handler": "saveSettings",
+        "line": 20,
+        "kind": "api",
+        "framework": "gin"
+      }
+    ],
+    "mounts": []
+  }
+}

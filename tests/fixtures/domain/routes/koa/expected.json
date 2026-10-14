@@ -1,0 +1,30 @@
+{
+  "router.js": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/books",
+        "handler": "listBooks",
+        "line": 6,
+        "kind": "api",
+        "framework": "koa"
+      },
+      {
+        "method": "POST",
+        "path": "/books/:id/loans",
+        "handler": "inline",
+        "line": 7,
+        "kind": "api",
+        "framework": "koa"
+      }
+    ],
+    "mounts": [
+      {
+        "prefix": "/users",
+        "spec": "./users",
+        "line": 10,
+        "framework": "koa"
+      }
+    ]
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "src/navigation/AppNavigator.tsx": [
+    {
+      "method": "SCREEN",
+      "path": "Home",
+      "handler": "HomeScreen",
+      "line": 11,
+      "kind": "screen",
+      "framework": "react-navigation"
+    },
+    {
+      "method": "SCREEN",
+      "path": "Orders",
+      "handler": "OrdersScreen",
+      "line": 12,
+      "kind": "screen",
+      "framework": "react-navigation"
+    },
+    {
+      "method": "SCREEN",
+      "path": "Tabs",
+      "handler": "Tabs",
+      "line": 24,
+      "kind": "screen",
+      "framework": "react-navigation"
+    },
+    {
+      "method": "SCREEN",
+      "path": "OrderDetail",
+      "handler": "OrderDetailScreen",
+      "line": 25,
+      "kind": "screen",
+      "framework": "react-navigation"
+    },
+    {
+      "method": "SCREEN",
+      "path": "Modal",
+      "line": 26,
+      "kind": "screen",
+      "framework": "react-navigation"
+    }
+  ]
+}

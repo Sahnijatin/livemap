@@ -1,0 +1,188 @@
+{
+  "routes/web.php": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/",
+        "handler": "inline",
+        "line": 6,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "GET",
+        "path": "/orders",
+        "handler": "OrderController@index",
+        "line": 10,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "POST",
+        "path": "/orders",
+        "handler": "OrderController@store",
+        "line": 11,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "DELETE",
+        "path": "/photos/:photo",
+        "handler": "PhotoController@destroy",
+        "line": 12,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "GET",
+        "path": "/photos",
+        "handler": "PhotoController@index",
+        "line": 12,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "GET",
+        "path": "/photos/create",
+        "handler": "PhotoController@create",
+        "line": 12,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "GET",
+        "path": "/photos/:photo",
+        "handler": "PhotoController@show",
+        "line": 12,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "GET",
+        "path": "/photos/:photo/edit",
+        "handler": "PhotoController@edit",
+        "line": 12,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "POST",
+        "path": "/photos",
+        "handler": "PhotoController@store",
+        "line": 12,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "PUT",
+        "path": "/photos/:photo",
+        "handler": "PhotoController@update",
+        "line": 12,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "GET",
+        "path": "/tags",
+        "handler": "TagController@index",
+        "line": 13,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "GET",
+        "path": "/tags/:tag",
+        "handler": "TagController@show",
+        "line": 13,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "GET",
+        "path": "/admin/users/:user",
+        "handler": "AdminController@user",
+        "line": 16,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "GET",
+        "path": "/admin/reports/daily",
+        "handler": "DailyReport",
+        "line": 18,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "POST",
+        "path": "/admin/reports/daily",
+        "handler": "DailyReport",
+        "line": 18,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "ANY",
+        "path": "/fallback",
+        "handler": "inline",
+        "line": 24,
+        "kind": "api",
+        "framework": "laravel"
+      }
+    ],
+    "mounts": []
+  },
+  "routes/api.php": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/api/user",
+        "handler": "UserController@show",
+        "line": 5,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "DELETE",
+        "path": "/api/orders/:order",
+        "handler": "Api\\OrderController@destroy",
+        "line": 6,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "GET",
+        "path": "/api/orders",
+        "handler": "Api\\OrderController@index",
+        "line": 6,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "GET",
+        "path": "/api/orders/:order",
+        "handler": "Api\\OrderController@show",
+        "line": 6,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "POST",
+        "path": "/api/orders",
+        "handler": "Api\\OrderController@store",
+        "line": 6,
+        "kind": "api",
+        "framework": "laravel"
+      },
+      {
+        "method": "PUT",
+        "path": "/api/orders/:order",
+        "handler": "Api\\OrderController@update",
+        "line": 6,
+        "kind": "api",
+        "framework": "laravel"
+      }
+    ],
+    "mounts": []
+  }
+}

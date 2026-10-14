@@ -7,6 +7,8 @@ import type { Watcher } from '../engine/watcher.js';
 import type { AgentHub } from '../agents/hub.js';
 import type { Attributor } from '../agents/attribution.js';
 import { buildUsedBy, type TokenCache } from '../engine/usedby.js';
+import { buildDomainIndex } from '../engine/domain/build-index.js';
+import type { DomainIndex } from '../shared/domain.js';
 import type { ServerMessage, UsedByEntry } from '../shared/protocol.js';
 import type { AgentEvent, AgentSession, Attribution, ChangeSummary, ControlState, FileModel } from '../shared/types.js';
 import { authenticate, hostAllowed, newToken, originAllowed } from './auth.js';
@@ -24,6 +26,8 @@ export interface ServerOptions {
   hub?: AgentHub;
   /** Links file changes to agent actions; changes go out unattributed without it. */
   attributor?: Attributor;
+  /** Domain index builder; tests inject a failing one. */
+  buildDomain?: typeof buildDomainIndex;
   /** Security warnings for the person running LiveMap (the CLI prints them to stderr). */
   warn?: (message: string) => void;
 }
@@ -56,6 +60,11 @@ const PORT_TRIES = 20;
 const MAX_CHANGES = 500;
 const HELLO_EVENTS = 500;
 const USED_BY_INTERVAL_MS = 1000;
+const DOMAIN_INTERVAL_MS = 1000;
+const EMPTY_DOMAIN: DomainIndex = {
+  routes: [], tables: [], dataRefs: [], stack: [], deps: [], scripts: [], env: [],
+  counts: { routes: 0, pages: 0, screens: 0, tables: 0, deps: 0, env: 0 },
+};
 const INDEXING_INTERVAL_MS = 100;
 const WS_UNAUTHORIZED = 4401;
 const REUSED_LINK = 'the browser launch link was used more than once. If you did not open it twice, stop LiveMap and start it again for a new key.';
@@ -144,7 +153,7 @@ function reject(socket: Duplex, status: number, text: string): void {
 }
 
 export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
-  const { model, watcher, uiDir, hub, attributor } = opts;
+  const { model, watcher, uiDir, hub, attributor, buildDomain = buildDomainIndex } = opts;
   const token = opts.token ?? newToken();
   const name = path.basename(model.root);
 
@@ -155,6 +164,11 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   let usedBy: UsedByEntry[] = [];
   let usedByAt = 0;
   let usedByTimer: NodeJS.Timeout | null = null;
+  let domain: DomainIndex = EMPTY_DOMAIN;
+  let domainJson = JSON.stringify(EMPTY_DOMAIN);
+  const domainErrors = new Set<string>();
+  let domainAt = 0;
+  let domainTimer: NodeJS.Timeout | null = null;
   const usedByTokens: TokenCache = new Map();
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
@@ -168,14 +182,16 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     const text = JSON.stringify(msg);
     sendTracked(ws, text, helloBytesOf(msg, text), allowances);
   };
+  const broadcastText = (text: string, helloBytes: number | null = null): void => {
+    for (const ws of wss.clients) sendTracked(ws, text, helloBytes, allowances);
+  };
   const broadcast = (msg: ServerMessage): void => {
     if (wss.clients.size === 0) return;
     const text = JSON.stringify(msg);
-    const helloBytes = helloBytesOf(msg, text); // once, not per client
-    for (const ws of wss.clients) sendTracked(ws, text, helloBytes, allowances);
+    broadcastText(text, helloBytesOf(msg, text)); // measured once, not per client
   };
   const hello = (): ServerMessage => ({
-    type: 'hello', root: model.root, name, files: model.all(), changes: [...changes], usedBy, indexing: false,
+    type: 'hello', root: model.root, name, files: model.all(), changes: [...changes], usedBy, domain, indexing: false,
     events: hub ? hub.events(HELLO_EVENTS) : [], sessions: hub ? hub.sessions() : [], control: hub ? hub.control.state() : { paused: false, flags: [] },
   });
   const computeUsedBy = (): void => {
@@ -189,6 +205,40 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
       usedByTimer = null;
       computeUsedBy();
       broadcast({ type: 'usedBy', usedBy });
+    }, wait);
+  };
+
+  /**
+   * Rebuilds the domain index; true when it differs from the last one (by JSON). A failing build keeps the
+   * last good index and logs each distinct error once.
+   */
+  const computeDomain = (): boolean => {
+    domainAt = Date.now();
+    let next: DomainIndex;
+    try {
+      next = buildDomain(model.all(), p => model.content(p));
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e);
+      if (!domainErrors.has(msg)) {
+        domainErrors.add(msg);
+        process.stderr.write(`livemap: domain index failed: ${msg}\n`);
+      }
+      return false;
+    }
+    const text = JSON.stringify(next);
+    if (text === domainJson) return false;
+    domain = next;
+    domainJson = text;
+    return true;
+  };
+  // Rebuilt only in this trailing timer, never in the change handler, so saves are not held up.
+  const scheduleDomain = (): void => {
+    if (domainTimer) return;
+    const wait = Math.max(0, domainAt + DOMAIN_INTERVAL_MS - Date.now());
+    domainTimer = setTimeout(() => {
+      domainTimer = null;
+      // The index is sent from the JSON already built for the comparison.
+      if (computeDomain() && wss.clients.size) broadcastText(`{"type":"domain","domain":${domainJson}}`);
     }, wait);
   };
 
@@ -206,17 +256,20 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     const files = own ? [own, ...touched.filter(f => f.path !== own.path)] : touched;
     broadcast({ type: 'change', change, files, removed: change.kind === 'deleted' ? [change.path] : [] });
     scheduleUsedBy();
+    scheduleDomain();
   };
   watcher.on('change', onChange);
   const onTouched = (files: FileModel[], removed: string[] = []): void => {
     if (!isReady) return; // hello will carry the state
     broadcast({ type: 'files', files, removed });
     scheduleUsedBy();
+    scheduleDomain(); // routes and tables can arrive this way (re-indexing, mounts resolving after a burst)
   };
   watcher.on('touched', onTouched);
   const onReset = (): void => {
     if (!isReady) return; // hello will carry the state
     computeUsedBy();
+    computeDomain();
     broadcast(hello());
   };
   watcher.on('reset', onReset);
@@ -342,6 +395,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     ready(): void {
       if (isReady) return;
       computeUsedBy();
+      computeDomain();
       isReady = true;
       broadcast(hello());
     },
@@ -355,6 +409,8 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
       watcher.off('reset', onReset);
       if (usedByTimer) clearTimeout(usedByTimer);
       usedByTimer = null;
+      if (domainTimer) clearTimeout(domainTimer);
+      domainTimer = null;
       for (const ws of wss.clients) ws.terminate();
       await new Promise<void>(resolve => wss.close(() => resolve()));
       server.closeAllConnections?.();

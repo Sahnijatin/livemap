@@ -1,0 +1,45 @@
+{
+  "migrations/001_create.sql": [
+    { "name": "users", "table": "users", "orm": "sql", "file": "migrations/001_create.sql", "line": 4, "fields": [
+      { "name": "id", "type": "SERIAL", "line": 5, "pk": true, "required": true },
+      { "name": "email", "type": "VARCHAR", "line": 6, "required": true, "unique": true },
+      { "name": "name", "type": "TEXT", "line": 7 },
+      { "name": "created_at", "type": "TIMESTAMP", "line": 8 }
+    ] },
+    { "name": "orders", "table": "orders", "orm": "sql", "file": "migrations/001_create.sql", "line": 11, "fields": [
+      { "name": "id", "type": "BIGSERIAL", "line": 12, "pk": true, "required": true },
+      { "name": "user_id", "type": "INTEGER", "line": 13, "required": true, "fk": { "table": "users", "field": "id" } },
+      { "name": "total", "type": "NUMERIC", "line": 14, "required": true },
+      { "name": "note", "type": "TEXT", "line": 15 },
+      { "name": "coupon_code", "type": "VARCHAR", "line": 16, "unique": true, "fk": { "table": "coupons", "field": "code" } }
+    ] },
+    { "name": "order_items", "table": "order_items", "orm": "sql", "file": "migrations/001_create.sql", "line": 22, "fields": [
+      { "name": "order_id", "type": "INT", "line": 23, "pk": true, "required": true, "fk": { "table": "orders", "field": "id" } },
+      { "name": "sku", "type": "NVARCHAR", "line": 24, "pk": true, "required": true },
+      { "name": "qty", "type": "INT", "line": 25 }
+    ] }
+  ],
+  "migrations/002_add_status.sql": [
+    { "name": "orders", "table": "orders", "orm": "sql", "file": "migrations/002_add_status.sql", "line": 1, "partial": true, "fields": [
+      { "name": "status", "type": "TEXT", "line": 1, "required": true },
+      { "name": "shipped_at", "type": "TIMESTAMP", "line": 4 },
+      { "name": "user_id", "type": "", "line": 5, "fk": { "table": "users", "field": "id" } }
+    ] }
+  ],
+  "migrations/1700000000000-create-carts.ts": [
+    { "name": "carts", "table": "carts", "orm": "sql", "file": "migrations/1700000000000-create-carts.ts", "line": 3, "fields": [
+      { "name": "id", "type": "UUID", "line": 4, "pk": true, "required": true },
+      { "name": "user_id", "type": "INT", "line": 5, "fk": { "table": "users", "field": "id" } },
+      { "name": "total", "type": "NUMERIC", "line": 7, "required": true }
+    ] },
+    { "name": "cart_notes", "table": "cart_notes", "orm": "sql", "file": "migrations/1700000000000-create-carts.ts", "line": 8, "fields": [
+      { "name": "body", "type": "TEXT", "line": 8 }
+    ] }
+  ],
+  "migrations/0002_items.py": [
+    { "name": "items", "table": "items", "orm": "sql", "file": "migrations/0002_items.py", "line": 3, "fields": [
+      { "name": "id", "type": "INTEGER", "line": 4, "pk": true, "required": true },
+      { "name": "name", "type": "TEXT", "line": 5, "required": true }
+    ] }
+  ]
+}

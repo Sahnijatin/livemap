@@ -1,0 +1,54 @@
+// shop schema
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Status {
+  PENDING
+  PAID
+}
+
+model User {
+  id     String  @id @default(cuid())
+  email  String  @unique
+  name   String?
+  orders Order[]
+
+  @@map("users")
+}
+
+/// An order placed by a user.
+model Order {
+  id       String   @id
+  customer String
+  total    Float
+  status   Status   @default(PENDING)
+  userId   String   @map("user_id")
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items    OrderItem[]
+  tags     String[]
+  // note  String
+}
+
+model OrderItem {
+  orderId String
+  sku     String
+  qty     Int    @default(1)
+  order   Order  @relation(fields: [orderId], references: [id])
+
+  @@id([orderId, sku])
+  @@map(name: "order_items")
+}
+
+view Revenue {
+  total Float
+}
+
+type Address {
+  street String
+}

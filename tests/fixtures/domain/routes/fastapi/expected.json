@@ -1,0 +1,87 @@
+{
+  "main.py": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/health",
+        "handler": "health",
+        "line": 13,
+        "kind": "api",
+        "framework": "fastapi"
+      },
+      {
+        "method": "GET",
+        "path": "/ping",
+        "handler": "ping",
+        "line": 19,
+        "kind": "api",
+        "framework": "fastapi"
+      },
+      {
+        "method": "POST",
+        "path": "/ping",
+        "handler": "ping",
+        "line": 19,
+        "kind": "api",
+        "framework": "fastapi"
+      }
+    ],
+    "mounts": [
+      {
+        "prefix": "/api",
+        "spec": ".routers.orders",
+        "line": 8,
+        "framework": "fastapi"
+      },
+      {
+        "prefix": "/",
+        "spec": "app.routers.users",
+        "line": 9,
+        "framework": "fastapi"
+      },
+      {
+        "prefix": "/v2",
+        "spec": "api.v2.reports",
+        "line": 10,
+        "framework": "fastapi"
+      }
+    ]
+  },
+  "routers/orders.py": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/orders",
+        "handler": "list_orders",
+        "line": 6,
+        "kind": "api",
+        "framework": "fastapi"
+      },
+      {
+        "method": "GET",
+        "path": "/orders/:order_id",
+        "handler": "get_order",
+        "line": 11,
+        "kind": "api",
+        "framework": "fastapi"
+      },
+      {
+        "method": "POST",
+        "path": "/orders",
+        "handler": "create_order",
+        "line": 16,
+        "kind": "api",
+        "framework": "fastapi"
+      },
+      {
+        "method": "DELETE",
+        "path": "/orders/:order_id",
+        "handler": "delete_order",
+        "line": 22,
+        "kind": "api",
+        "framework": "fastapi"
+      }
+    ],
+    "mounts": []
+  }
+}

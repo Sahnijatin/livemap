@@ -1,9 +1,59 @@
 import { create } from 'zustand';
+import type { ApiRoute, DomainIndex, Table } from '@shared/domain.js';
 import type { ServerMessage, UsedByEntry } from '@shared/protocol.js';
-import type { AgentEvent, AgentSession, ChangeSummary, ControlState, FileModel } from '@shared/types.js';
+import type { AgentEvent, AgentSession, ChangeSummary, ControlState, Dep, FileModel } from '@shared/types.js';
 
 export const MAX_CHANGES = 2000;
 export const MAX_EVENTS = 2000;
+
+export type CenterTab = 'activity' | 'schema' | 'api' | 'stack';
+export const CENTER_TABS: CenterTab[] = ['activity', 'schema', 'api', 'stack'];
+const TAB_KEY = 'livemap-tab';
+
+/** The remembered center tab; `activity` when storage is empty, unavailable or throws. */
+export function loadTab(): CenterTab {
+  try {
+    const t = globalThis.localStorage?.getItem(TAB_KEY);
+    return CENTER_TABS.includes(t as CenterTab) ? (t as CenterTab) : 'activity';
+  } catch {
+    return 'activity';
+  }
+}
+
+function saveTab(t: CenterTab): void {
+  try {
+    globalThis.localStorage?.setItem(TAB_KEY, t);
+  } catch {
+    // Private mode or blocked storage: the tab lasts for this page only.
+  }
+}
+
+/** Identity of a dependency for "new since hello": its manifest and name. */
+export const depKey = (d: Dep & { file: string }): string => `${d.file}\u0000${d.name}`;
+
+/** Identity of a table across domain updates: its merged table name, case-insensitive. */
+export const tableKey = (t: Pick<Table, 'table'>): string => t.table.toLowerCase();
+/** Identity of a column for "new since hello": its table and name, case-insensitive. */
+export const fieldKey = (t: Pick<Table, 'table'>, f: { name: string }): string => `${tableKey(t)}\u0000${f.name.toLowerCase()}`;
+/** Identity of a route for "new since hello": method, full path and file, without the line (edits above it move the line). */
+export const routeBaseKey = (r: Pick<ApiRoute, 'method' | 'fullPath' | 'file'>): string => `${r.method} ${r.fullPath} ${r.file}`;
+
+export function emptyDomainIndex(): DomainIndex {
+  return { routes: [], tables: [], dataRefs: [], stack: [], deps: [], scripts: [], env: [], counts: { routes: 0, pages: 0, screens: 0, tables: 0, deps: 0, env: 0 } };
+}
+
+/** Tech ids, dep keys, table keys, field keys and route keys present in the last hello; later items not in these sets are "new". */
+export interface DomainBase { stack: Set<string>; deps: Set<string>; tables: Set<string>; fields: Set<string>; routes: Set<string> }
+
+function baseOf(d: DomainIndex): DomainBase {
+  return {
+    stack: new Set(d.stack.map(t => t.id)),
+    deps: new Set(d.deps.map(depKey)),
+    tables: new Set(d.tables.map(tableKey)),
+    fields: new Set(d.tables.flatMap(t => t.fields.map(f => fieldKey(t, f)))),
+    routes: new Set(d.routes.map(routeBaseKey)),
+  };
+}
 
 export type RecentKind = 'created' | 'modified';
 export type ConnectionState = 'connecting' | 'open' | 'closed' | 'unauthorized';
@@ -38,6 +88,11 @@ export interface StoreState {
   liveAfterId: number;
   /** A short message shown at the top of the window (seq makes repeats fire). */
   toast: { text: string; tone: 'info' | 'error'; seq: number } | null;
+  /** Routes, tables, stack, deps, scripts and env for the whole project. */
+  domain: DomainIndex;
+  domainBase: DomainBase;
+  /** The center pane's tab, remembered across reloads. */
+  tab: CenterTab;
 
   apply(msg: ServerMessage): void;
   select(path: string | null): void;
@@ -48,6 +103,7 @@ export interface StoreState {
   clearReveal(): void;
   setPanel(panel: StoreState['panel']): void;
   showToast(text: string, tone?: 'info' | 'error'): void;
+  setTab(t: CenterTab): void;
   reset(): void;
 }
 
@@ -75,6 +131,8 @@ const initial = {
   toast: null,
 };
 
+const freshDomain = () => ({ domain: emptyDomainIndex(), domainBase: baseOf(emptyDomainIndex()) });
+
 /** Files after upserting and removing; clears the selection if its file is gone. */
 function upsertFiles(st: StoreState, upserts: FileModel[], removed: string[]): Pick<StoreState, 'files' | 'selected'> {
   const files = { ...st.files };
@@ -90,6 +148,8 @@ function recordRecent(recent: StoreState['recent'], c: ChangeSummary): void {
 
 export const useStore = create<StoreState>()((set, get) => ({
   ...initial,
+  ...freshDomain(),
+  tab: loadTab(),
 
   apply(msg) {
     switch (msg.type) {
@@ -106,7 +166,11 @@ export const useStore = create<StoreState>()((set, get) => ({
         const events = (msg.events ?? []).slice(-MAX_EVENTS);
         const sessions: Record<string, AgentSession> = {};
         for (const x of msg.sessions ?? []) sessions[x.id] = x;
+        // Tolerate a hello without a domain (older server).
+        const domain = msg.domain ?? emptyDomainIndex();
         set({
+          domain,
+          domainBase: baseOf(domain),
           events,
           sessions,
           control: msg.control ?? { paused: false, flags: [] },
@@ -140,6 +204,9 @@ export const useStore = create<StoreState>()((set, get) => ({
       }
       case 'usedBy':
         set({ usedBy: msg.usedBy });
+        return;
+      case 'domain':
+        set({ domain: msg.domain });
         return;
       case 'indexing':
         set({ indexing: { done: msg.done, total: msg.total } });
@@ -203,7 +270,12 @@ export const useStore = create<StoreState>()((set, get) => ({
     set({ toast: { text, tone, seq: (get().toast?.seq ?? 0) + 1 } });
   },
 
+  setTab(tab) {
+    set({ tab });
+    saveTab(tab);
+  },
+
   reset() {
-    set({ ...initial, files: {}, changes: [], usedBy: [], recent: {}, expanded: {}, events: [], sessions: {}, control: { paused: false, flags: [] } });
+    set({ ...initial, ...freshDomain(), tab: 'activity', files: {}, changes: [], usedBy: [], recent: {}, expanded: {}, events: [], sessions: {}, control: { paused: false, flags: [] } });
   },
 }));

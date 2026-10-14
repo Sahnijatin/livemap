@@ -1,0 +1,46 @@
+{
+  "index.ts": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/api/health",
+        "handler": "inline",
+        "line": 6,
+        "kind": "api",
+        "framework": "hono"
+      },
+      {
+        "method": "PURGE",
+        "path": "/api/cache",
+        "handler": "purgeCache",
+        "line": 7,
+        "kind": "api",
+        "framework": "hono"
+      },
+      {
+        "method": "PATCH",
+        "path": "/api/profile",
+        "handler": "updateProfile",
+        "line": 8,
+        "kind": "api",
+        "framework": "hono"
+      },
+      {
+        "method": "PUT",
+        "path": "/api/profile",
+        "handler": "updateProfile",
+        "line": 8,
+        "kind": "api",
+        "framework": "hono"
+      }
+    ],
+    "mounts": [
+      {
+        "prefix": "/api/orders",
+        "spec": "./orders",
+        "line": 9,
+        "framework": "hono"
+      }
+    ]
+  }
+}

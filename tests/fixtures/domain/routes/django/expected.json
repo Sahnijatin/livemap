@@ -1,0 +1,56 @@
+{
+  "urls.py": {
+    "routes": [
+      {
+        "method": "ANY",
+        "path": "/",
+        "handler": "views.index",
+        "line": 5,
+        "kind": "api",
+        "framework": "django"
+      },
+      {
+        "method": "ANY",
+        "path": "/orders/:pk",
+        "handler": "views.detail",
+        "line": 6,
+        "kind": "api",
+        "framework": "django"
+      },
+      {
+        "method": "ANY",
+        "path": "/orders/:slug/edit",
+        "handler": "views.OrderEdit",
+        "line": 7,
+        "kind": "api",
+        "framework": "django"
+      },
+      {
+        "method": "ANY",
+        "path": "/archive/(?P<year>[0-9]{4})",
+        "handler": "views.archive",
+        "line": 8,
+        "kind": "api",
+        "framework": "django"
+      }
+    ],
+    "mounts": [
+      {
+        "prefix": "/api",
+        "spec": "orders.urls",
+        "line": 9,
+        "framework": "django"
+      },
+      {
+        "prefix": "/accounts",
+        "spec": "accounts.urls",
+        "line": 10,
+        "framework": "django"
+      }
+    ]
+  },
+  "views.py": {
+    "routes": [],
+    "mounts": []
+  }
+}

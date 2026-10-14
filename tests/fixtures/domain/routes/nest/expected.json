@@ -1,0 +1,39 @@
+{
+  "orders.controller.ts": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/orders",
+        "handler": "findAll",
+        "line": 8,
+        "kind": "api",
+        "framework": "nest"
+      },
+      {
+        "method": "GET",
+        "path": "/orders/:id",
+        "handler": "findOne",
+        "line": 13,
+        "kind": "api",
+        "framework": "nest"
+      },
+      {
+        "method": "POST",
+        "path": "/orders",
+        "handler": "create",
+        "line": 18,
+        "kind": "api",
+        "framework": "nest"
+      },
+      {
+        "method": "DELETE",
+        "path": "/admin/orders/:id",
+        "handler": "purge",
+        "line": 30,
+        "kind": "api",
+        "framework": "nest"
+      }
+    ],
+    "mounts": []
+  }
+}

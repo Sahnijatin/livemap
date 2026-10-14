@@ -1,0 +1,108 @@
+{
+  "OrderController.java": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/api/orders",
+        "handler": "list",
+        "line": 9,
+        "kind": "api",
+        "framework": "spring"
+      },
+      {
+        "method": "GET",
+        "path": "/api/orders/:id",
+        "handler": "get",
+        "line": 12,
+        "kind": "api",
+        "framework": "spring"
+      },
+      {
+        "method": "POST",
+        "path": "/api/orders",
+        "handler": "create",
+        "line": 15,
+        "kind": "api",
+        "framework": "spring"
+      },
+      {
+        "method": "POST",
+        "path": "/api/orders/:id/cancel",
+        "handler": "cancel",
+        "line": 19,
+        "kind": "api",
+        "framework": "spring"
+      },
+      {
+        "method": "GET",
+        "path": "/api/orders/search",
+        "handler": "search",
+        "line": 22,
+        "kind": "api",
+        "framework": "spring"
+      },
+      {
+        "method": "HEAD",
+        "path": "/api/orders/search",
+        "handler": "search",
+        "line": 22,
+        "kind": "api",
+        "framework": "spring"
+      },
+      {
+        "method": "DELETE",
+        "path": "/api/orders/:id",
+        "handler": "delete",
+        "line": 26,
+        "kind": "api",
+        "framework": "spring"
+      }
+    ],
+    "mounts": []
+  },
+  "UserController.kt": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/users/:id",
+        "handler": "get",
+        "line": 7,
+        "kind": "api",
+        "framework": "spring"
+      },
+      {
+        "method": "PUT",
+        "path": "/users/:id",
+        "handler": "update",
+        "line": 10,
+        "kind": "api",
+        "framework": "spring"
+      },
+      {
+        "method": "PUT",
+        "path": "/users/:id/profile",
+        "handler": "update",
+        "line": 10,
+        "kind": "api",
+        "framework": "spring"
+      },
+      {
+        "method": "ANY",
+        "path": "/users/export",
+        "handler": "export",
+        "line": 13,
+        "kind": "api",
+        "framework": "spring"
+      },
+      {
+        "method": "GET",
+        "path": "/plain",
+        "handler": "plain",
+        "line": 18,
+        "kind": "api",
+        "framework": "spring"
+      }
+    ],
+    "mounts": []
+  }
+}

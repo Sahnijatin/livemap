@@ -1,0 +1,21 @@
+{
+  "Models/Order.swift": [
+    { "name": "Order", "table": "Order", "orm": "swiftdata", "file": "Models/Order.swift", "line": 5, "fields": [
+      { "name": "code", "type": "String", "line": 6, "unique": true, "required": true },
+      { "name": "id", "type": "UUID", "line": 7, "required": true },
+      { "name": "note", "type": "String", "line": 8 },
+      { "name": "items", "type": "[Item]", "line": 9, "relation": { "model": "Item", "many": true } },
+      { "name": "user", "type": "User", "line": 10, "relation": { "model": "User", "many": false } },
+      { "name": "createdAt", "type": "Date", "line": 11, "required": true },
+      { "name": "payments", "type": "[Payment]", "line": 16, "relation": { "model": "Payment", "many": true } },
+      { "name": "tags", "type": "[String]", "line": 17, "required": true }
+    ] },
+    { "name": "Item", "table": "Item", "orm": "swiftdata", "file": "Models/Order.swift", "line": 28, "fields": [
+      { "name": "price", "type": "Double", "line": 29, "required": true },
+      { "name": "order", "type": "Order", "line": 30, "relation": { "model": "Order", "many": false } }
+    ] },
+    { "name": "User", "table": "User", "orm": "swiftdata", "file": "Models/Order.swift", "line": 34, "fields": [
+      { "name": "name", "type": "String", "line": 35, "required": true }
+    ] }
+  ]
+}

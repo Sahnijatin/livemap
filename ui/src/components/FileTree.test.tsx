@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../store';
-import { file, sym, change } from '../fixtures';
+import { file, sym, change, emptyDomain } from '../fixtures';
 import { FileTree } from './FileTree';
 import { rowRenderProbe } from './FileRow';
 import { DIR_BATCH, ROW_BUDGET } from '../treeModel';
@@ -15,7 +15,7 @@ let root: Root;
 let renders: string[];
 
 const hello = (files: ReturnType<typeof file>[]) => ({
-  type: 'hello' as const, root: '/p/shop', name: 'shop', files, changes: [], usedBy: [], indexing: false, events: [], sessions: [], control: { paused: false, flags: [] },
+  type: 'hello' as const, root: '/p/shop', name: 'shop', files, changes: [], usedBy: [], domain: emptyDomain(), indexing: false, events: [], sessions: [], control: { paused: false, flags: [] },
 });
 const rows = () => host.querySelectorAll('.frow').length;
 

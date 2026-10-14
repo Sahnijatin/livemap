@@ -1,0 +1,19 @@
+{
+  "db/schema.ts": [
+    { "name": "users", "table": "users", "orm": "drizzle", "file": "db/schema.ts", "line": 4, "fields": [
+      { "name": "id", "type": "serial", "line": 5, "pk": true, "required": true },
+      { "name": "email", "type": "varchar", "line": 6, "required": true, "unique": true },
+      { "name": "name", "type": "text", "line": 7 }
+    ] },
+    { "name": "orders", "table": "orders", "orm": "drizzle", "file": "db/schema.ts", "line": 11, "fields": [
+      { "name": "id", "type": "serial", "line": 12, "pk": true, "required": true },
+      { "name": "userId", "type": "integer", "line": 13, "required": true, "fk": { "table": "users", "field": "id" } },
+      { "name": "total", "type": "numeric", "line": 16, "required": true },
+      { "name": "created_at", "type": "timestamp", "line": 17 }
+    ] },
+    { "name": "items", "table": "order_items", "orm": "drizzle", "file": "db/schema.ts", "line": 21, "fields": [
+      { "name": "orderId", "type": "integer", "line": 22, "fk": { "table": "orders", "field": "id" } },
+      { "name": "sku", "type": "text", "line": 23, "required": true }
+    ] }
+  ]
+}

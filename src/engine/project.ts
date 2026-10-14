@@ -1,10 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { CodeSymbol, FileModel } from '../shared/types.js';
+import type { CodeSymbol, FileModel, Mount } from '../shared/types.js';
 import { langOf } from './languages.js';
 import { fileSymbols } from './symbols/index.js';
 import { scriptBlock } from './symbols/markup.js';
-import { buildIndex, extractImports, indexUpdate, readTsconfigAliases, type FileIndex, type ImportCtx } from './imports.js';
+import { buildIndex, extractImports, indexUpdate, readTsconfigAliases, resolveSpecifier, type FileIndex, type ImportCtx } from './imports.js';
+import { ANALYZERS, analyzeFile, type Analyzer } from './domain/index.js';
 import { createIgnore, insideRoot, parentDir, walk, readForModel, type IgnoreFn, type ReadResult } from './files.js';
 
 export interface UpdateResult {
@@ -14,7 +15,7 @@ export interface UpdateResult {
   after: FileModel | null;
   beforeText: string | null;
   afterText: string | null;
-  /** Other files whose resolved local imports changed because of this update. */
+  /** Other files whose resolved local imports or mount targets changed because of this update. */
   touched: FileModel[];
 }
 
@@ -33,6 +34,7 @@ function topmost(dirs: string[]): string[] {
 const READ_AHEAD = 32;
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const sameList = (a: string[], b: string[]): boolean => a.length === b.length && a.every((x, i) => x === b[i]);
+const sameTargets = (a: Mount[], b: Mount[]): boolean => a.length === b.length && a.every((m, i) => m.target === b[i].target);
 
 export function countLines(text: string): number {
   if (!text) return 0;
@@ -51,6 +53,7 @@ export class ProjectModel {
   private lastGood = new Map<string, CodeSymbol[] | null>();
   private isIgnored: IgnoreFn;
   private ctx: ImportCtx;
+  private analyzers: Analyzer[];
   private queue: Promise<unknown> = Promise.resolve();
   /** Parsed JS/TS import specifiers per file (see ImportCtx.specCache). */
   private specCache: NonNullable<ImportCtx['specCache']> = new Map();
@@ -59,9 +62,10 @@ export class ProjectModel {
   /** A deferred update changed the file set; imports need re-resolving (see update). */
   private relinkPending = false;
 
-  constructor(root: string, opts: { limit?: number } = {}) {
+  constructor(root: string, opts: { limit?: number; analyzers?: Analyzer[] } = {}) {
     this.root = root;
     this.limit = opts.limit ?? 25000;
+    this.analyzers = opts.analyzers ?? ANALYZERS;
     this.isIgnored = createIgnore(root);
     this.ctx = this.makeCtx([]);
   }
@@ -360,13 +364,21 @@ export class ProjectModel {
       return { ...base, flags: r.kind === 'binary' ? { binary: true } : { tooLarge: true } };
     }
     const { symbols, parseError } = await this.symbolsFor(rel, base.lang, r.text);
+    const { mounts, deps, ...facts } = analyzeFile(rel, base.lang, r.text, this.analyzers);
     return {
       ...base,
+      ...facts,
+      ...(mounts.length ? { mounts: mounts.map(m => ({ ...m, target: this.mountTarget(rel, base.lang, m.spec) })) } : {}),
+      ...(deps ? { deps } : {}),
       lines: countLines(r.text),
       symbols,
       imports: this.importsFor(rel, base.lang, r.text),
       flags: parseError ? { parseError: true } : {},
     };
+  }
+
+  private mountTarget(rel: string, lang: FileModel['lang'], spec: string): string | null {
+    return resolveSpecifier(rel, lang, spec, this.ctx);
   }
 
   /** R7: flag only a transition from a clean parse to a failed one, keeping the last good symbols. */
@@ -387,7 +399,10 @@ export class ProjectModel {
     return extractImports(rel, lang, code, this.ctx);
   }
 
-  /** Re-resolves every text file's imports; returns the files (other than `skip`) whose local imports changed. */
+  /**
+   * Re-resolves every text file's imports and mount targets; returns the files (other than `skip`)
+   * whose local imports or mount targets changed.
+   */
   private relink(skip: string[]): FileModel[] {
     this.relinkPending = false;
     this.liveIndex = null;
@@ -397,9 +412,11 @@ export class ProjectModel {
       const f = this.files.get(rel);
       if (!f) continue;
       const imports = this.importsFor(rel, f.lang, text);
-      const changed = !sameList(f.imports.local, imports.local);
+      const mounts = f.mounts?.map(m => ({ ...m, target: this.mountTarget(rel, f.lang, m.spec) }));
+      const mountsChanged = !!mounts && !sameTargets(f.mounts!, mounts);
+      const changed = !sameList(f.imports.local, imports.local) || mountsChanged;
       if (changed || !sameList(f.imports.external, imports.external)) {
-        const next = { ...f, imports };
+        const next = { ...f, imports, ...(mountsChanged ? { mounts } : {}) };
         this.files.set(rel, next);
         if (changed && !skip.includes(rel)) touched.push(next);
       }

@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { useStore, MAX_CHANGES, MAX_EVENTS } from './store';
-import { file, change, event, session } from './fixtures';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type { DomainIndex } from '@shared/domain.js';
+import { useStore, MAX_CHANGES, MAX_EVENTS, loadTab, depKey, tableKey, fieldKey, routeBaseKey } from './store';
+import { file, change, event, session, emptyDomain } from './fixtures';
 
 const hello = (files = [file('a.ts'), file('b.ts'), file('c.ts')]) => ({
-  type: 'hello' as const, root: '/p/shop', name: 'shop', files, changes: [], usedBy: [], indexing: false, events: [], sessions: [], control: { paused: false, flags: [] },
+  type: 'hello' as const, root: '/p/shop', name: 'shop', files, changes: [], usedBy: [], domain: emptyDomain(), indexing: false, events: [], sessions: [], control: { paused: false, flags: [] },
 });
 
 beforeEach(() => useStore.getState().reset());
@@ -11,7 +12,7 @@ beforeEach(() => useStore.getState().reset());
 describe('store.apply', () => {
   it('hello replaces everything; files upserts and removes', () => {
     const s = useStore.getState();
-    s.apply({ type: 'hello', root: '/old', name: 'old', files: [file('zzz.ts')], changes: [change('zzz.ts')], usedBy: [{ file: 'zzz.ts', symbol: 'x', usedIn: [] }], indexing: false, events: [], sessions: [], control: { paused: false, flags: [] } });
+    s.apply({ type: 'hello', root: '/old', name: 'old', files: [file('zzz.ts')], changes: [change('zzz.ts')], usedBy: [{ file: 'zzz.ts', symbol: 'x', usedIn: [] }], domain: emptyDomain(), indexing: false, events: [], sessions: [], control: { paused: false, flags: [] } });
     s.apply(hello());
     let st = useStore.getState();
     expect(st.name).toBe('shop');
@@ -153,5 +154,87 @@ describe('store.apply', () => {
     expect(Object.keys(st.sessions)).toEqual(['new']);
     expect(st.control).toEqual({ paused: false, flags: [] });
     expect(st.liveAfterId).toBe(9);
+  });
+});
+
+const domainWith = (extra: Partial<DomainIndex>): DomainIndex => ({ ...emptyDomain(), ...extra });
+const zod = { name: 'zod', version: '^3.23.0', eco: 'npm', file: 'package.json' };
+const next = { id: 'nextjs', name: 'Next.js', category: 'frontend' as const, source: 'package.json' };
+
+describe('store domain', () => {
+  it('hello and domain messages set the domain; hello records the baseline for "new" items', () => {
+    const s = useStore.getState();
+    expect(s.domain).toEqual(emptyDomain());
+    s.apply({ ...hello(), domain: domainWith({ stack: [next], deps: [zod] }) });
+    let st = useStore.getState();
+    expect(st.domain.stack).toEqual([next]);
+    expect(st.domainBase.stack.has('nextjs')).toBe(true);
+    expect(st.domainBase.deps.has(depKey(zod))).toBe(true);
+
+    const prisma = { id: 'prisma', name: 'Prisma', category: 'orm' as const, source: 'package.json' };
+    const added = { name: '@prisma/client', version: '^5.0.0', eco: 'npm', file: 'package.json' };
+    s.apply({ type: 'domain', domain: domainWith({ stack: [next, prisma], deps: [zod, added] }) });
+    st = useStore.getState();
+    expect(st.domain.stack.map(t => t.id)).toEqual(['nextjs', 'prisma']);
+    expect(st.domainBase.stack.has('prisma')).toBe(false);
+    expect(st.domainBase.deps.has(depKey(added))).toBe(false);
+  });
+
+  it('hello records table and field keys as the baseline; later tables and fields are not in it', () => {
+    const f = (name: string) => ({ name, type: 'String', file: 'prisma/schema.prisma' });
+    const user = { name: 'User', table: 'User', orm: 'prisma', sources: [{ file: 'prisma/schema.prisma', line: 1 }], fields: [f('id')], relations: [] };
+    const s = useStore.getState();
+    s.apply({ ...hello(), domain: domainWith({ tables: [user] }) });
+    let st = useStore.getState();
+    expect(tableKey(user)).toBe('user');
+    expect(st.domainBase.tables.has('user')).toBe(true);
+    expect(st.domainBase.fields.has(fieldKey(user, user.fields[0]))).toBe(true);
+
+    const grown = { ...user, fields: [f('id'), f('email')] };
+    const order = { ...user, name: 'Order', table: 'orders', fields: [f('id')] };
+    s.apply({ type: 'domain', domain: domainWith({ tables: [grown, order] }) });
+    st = useStore.getState();
+    expect(st.domainBase.tables.has('orders')).toBe(false);
+    expect(st.domainBase.fields.has(fieldKey(grown, grown.fields[1]))).toBe(false);
+  });
+
+  it('hello records route keys (method, path, file) as the baseline; a moved line is not new, a new route is', () => {
+    const r = (path: string, line: number) => ({ id: `GET ${path} a.ts:${line}`, method: 'GET', path, fullPath: path, line, kind: 'api' as const, framework: 'express', file: 'a.ts' });
+    const s = useStore.getState();
+    s.apply({ ...hello(), domain: domainWith({ routes: [r('/a', 1)] }) });
+    s.apply({ type: 'domain', domain: domainWith({ routes: [r('/a', 5), r('/b', 6)] }) });
+    const st = useStore.getState();
+    expect(st.domainBase.routes.has(routeBaseKey(r('/a', 5)))).toBe(true);
+    expect(st.domainBase.routes.has(routeBaseKey(r('/b', 6)))).toBe(false);
+  });
+
+  it('a hello without a domain falls back to an empty one', () => {
+    const { domain: _d, ...rest } = hello();
+    useStore.getState().apply(rest as ReturnType<typeof hello>);
+    expect(useStore.getState().domain).toEqual(emptyDomain());
+  });
+});
+
+describe('store tab', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('defaults to activity, persists the tab and reads it back', () => {
+    const mem = new Map<string, string>();
+    vi.stubGlobal('localStorage', { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v) });
+    expect(useStore.getState().tab).toBe('activity');
+    expect(loadTab()).toBe('activity');
+    useStore.getState().setTab('stack');
+    expect(useStore.getState().tab).toBe('stack');
+    expect(loadTab()).toBe('stack');
+    mem.set('livemap-tab', 'nonsense');
+    expect(loadTab()).toBe('activity');
+  });
+
+  it('survives a localStorage that throws', () => {
+    const boom = () => { throw new Error('denied'); };
+    vi.stubGlobal('localStorage', { getItem: boom, setItem: boom });
+    expect(loadTab()).toBe('activity');
+    useStore.getState().setTab('schema');
+    expect(useStore.getState().tab).toBe('schema');
   });
 });

@@ -1,0 +1,255 @@
+{
+  "config/routes.rb": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/",
+        "handler": "pages#home",
+        "line": 2,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "GET",
+        "path": "/about",
+        "handler": "pages#about",
+        "line": 3,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "POST",
+        "path": "/login",
+        "handler": "sessions#create",
+        "line": 4,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "DELETE",
+        "path": "/orders/:id",
+        "handler": "orders#destroy",
+        "line": 5,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "GET",
+        "path": "/orders",
+        "handler": "orders#index",
+        "line": 5,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "GET",
+        "path": "/orders/:id",
+        "handler": "orders#show",
+        "line": 5,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "GET",
+        "path": "/orders/new",
+        "handler": "orders#new",
+        "line": 5,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "GET",
+        "path": "/orders/:id/edit",
+        "handler": "orders#edit",
+        "line": 5,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "PATCH",
+        "path": "/orders/:id",
+        "handler": "orders#update",
+        "line": 5,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "POST",
+        "path": "/orders",
+        "handler": "orders#create",
+        "line": 5,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "GET",
+        "path": "/products",
+        "handler": "products#index",
+        "line": 6,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "GET",
+        "path": "/products/:id",
+        "handler": "products#show",
+        "line": 6,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/users",
+        "handler": "api/v1/users#index",
+        "line": 10,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/users/:id",
+        "handler": "api/v1/users#show",
+        "line": 10,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "PATCH",
+        "path": "/api/v1/users/:id",
+        "handler": "api/v1/users#update",
+        "line": 10,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/users",
+        "handler": "api/v1/users#create",
+        "line": 10,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/status",
+        "handler": "api/v1/status#show",
+        "line": 11,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "DELETE",
+        "path": "/api/sessions/:id",
+        "handler": "api/sessions#destroy",
+        "line": 13,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "DELETE",
+        "path": "/invoices/:id",
+        "handler": "invoices#destroy",
+        "line": 20,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "GET",
+        "path": "/invoices",
+        "handler": "invoices#index",
+        "line": 20,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "GET",
+        "path": "/invoices/:id",
+        "handler": "invoices#show",
+        "line": 20,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "GET",
+        "path": "/invoices/new",
+        "handler": "invoices#new",
+        "line": 20,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "GET",
+        "path": "/invoices/:id/edit",
+        "handler": "invoices#edit",
+        "line": 20,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "PATCH",
+        "path": "/invoices/:id",
+        "handler": "invoices#update",
+        "line": 20,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "POST",
+        "path": "/invoices",
+        "handler": "invoices#create",
+        "line": 20,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "PATCH",
+        "path": "/invoices/:id/ship",
+        "handler": "invoices#ship",
+        "line": 22,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "GET",
+        "path": "/invoices/:invoice_id/items",
+        "handler": "items#index",
+        "line": 24,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "GET",
+        "path": "/profile",
+        "handler": "profiles#show",
+        "line": 26,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "PATCH",
+        "path": "/profile",
+        "handler": "profiles#update",
+        "line": 26,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "GET",
+        "path": "/search",
+        "handler": "search#run",
+        "line": 27,
+        "kind": "api",
+        "framework": "rails"
+      },
+      {
+        "method": "POST",
+        "path": "/search",
+        "handler": "search#run",
+        "line": 27,
+        "kind": "api",
+        "framework": "rails"
+      }
+    ],
+    "mounts": []
+  }
+}

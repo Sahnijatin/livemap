@@ -1,0 +1,16 @@
+{
+  "models.py": [
+    { "name": "User", "table": "user", "orm": "sqlmodel", "file": "models.py", "line": 11, "fields": [
+      { "name": "email", "type": "str", "line": 7, "unique": true, "required": true },
+      { "name": "name", "type": "str", "line": 8 },
+      { "name": "id", "type": "int", "line": 12, "pk": true, "required": true },
+      { "name": "orders", "type": "list[Order]", "line": 13, "relation": { "model": "Order", "many": true } }
+    ] },
+    { "name": "Order", "table": "orders", "orm": "sqlmodel", "file": "models.py", "line": 17, "fields": [
+      { "name": "id", "type": "int", "line": 20, "pk": true, "required": true },
+      { "name": "total", "type": "float", "line": 21, "required": true },
+      { "name": "user_id", "type": "int", "line": 22, "required": true, "fk": { "table": "user", "field": "id" } },
+      { "name": "user", "type": "User", "line": 23, "relation": { "model": "User", "many": false } }
+    ] }
+  ]
+}

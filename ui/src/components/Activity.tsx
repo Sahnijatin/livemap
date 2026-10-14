@@ -110,13 +110,12 @@ function EmptyFeed() {
   );
 }
 
-/** Center pane: the "Now" hero, then one feed of agent events and file changes in time order. */
-export function Activity() {
+/** The Activity tab: the "Now" hero, then one feed of agent events and file changes in time order. */
+export function Activity({ active = true }: { active?: boolean }) {
   const events = useStore(s => s.events);
   const changes = useStore(s => s.changes);
   const sessions = useStore(s => s.sessions);
   const liveAfterId = useStore(s => s.liveAfterId);
-  const anyWorking = useMemo(() => Object.values(sessions).some(s => s.agent !== 'git' && s.status === 'working'), [sessions]);
 
   const items = useMemo(() => buildFeed(events, changes), [events, changes]);
   const [limit, setLimit] = useState(FEED_PAGE);
@@ -129,6 +128,10 @@ export function Activity() {
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [away, setAway] = useState(false);
+  // The reader's offset, kept while the tab is hidden (a display:none box loses its scrollTop).
+  const lastTop = useRef(0);
+  const shown = useRef(active);
+  shown.current = active;
 
   const toBottom = useCallback(() => {
     const el = scroller.current;
@@ -137,11 +140,20 @@ export function Activity() {
 
   const onScroll = useCallback(() => {
     const el = scroller.current;
-    if (!el) return;
+    if (!el || !shown.current) return;
+    lastTop.current = el.scrollTop;
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_PX;
     stick.current = near;
     setAway(!near);
   }, []);
+
+  // Coming back to the tab: pinned readers see the latest, others return to where they were.
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!active || !el) return;
+    if (stick.current) toBottom();
+    else el.scrollTop = lastTop.current;
+  }, [active, toBottom]);
 
   // New items keep the feed pinned while the reader is at the bottom.
   const lastKey = items.length ? items[items.length - 1].key : '';
@@ -168,11 +180,7 @@ export function Activity() {
   };
 
   return (
-    <main className="center" aria-label="Activity">
-      <div className="c-head">
-        <span className="c-title"><PulseIcon /><span>Activity</span>{anyWorking && <i className="dotlive" aria-hidden="true" />}</span>
-        <span className="c-meta">{items.length ? `${items.length.toLocaleString()} ${items.length === 1 ? 'item' : 'items'}` : ''}</span>
-      </div>
+    <>
       <div className="actv" ref={scroller} onScroll={onScroll}>
         <div className="actwrap">
           <Hero />
@@ -199,6 +207,6 @@ export function Activity() {
       <button type="button" className={clsx('jump', away && 'show')} onClick={jump} tabIndex={away ? 0 : -1} aria-hidden={!away}>
         <ArrowDownIcon />Jump to latest
       </button>
-    </main>
+    </>
   );
 }

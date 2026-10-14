@@ -4,7 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { AgentSession } from '@shared/types.js';
 import { useStore } from '../store';
-import { session } from '../fixtures';
+import { session, emptyDomain } from '../fixtures';
 import { AgentChips } from './AgentChips';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -14,7 +14,7 @@ let root: Root;
 
 function mount(sessions: AgentSession[], paused: boolean) {
   useStore.getState().apply({
-    type: 'hello', root: '/p/shop', name: 'shop', files: [], changes: [], usedBy: [], indexing: false,
+    type: 'hello', root: '/p/shop', name: 'shop', files: [], changes: [], usedBy: [], domain: emptyDomain(), indexing: false,
     events: [], sessions, control: { paused, flags: [] },
   });
   act(() => root.render(<AgentChips />));

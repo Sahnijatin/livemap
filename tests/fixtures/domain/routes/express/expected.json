@@ -1,0 +1,87 @@
+{
+  "index.ts": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/health",
+        "handler": "inline",
+        "line": 15,
+        "kind": "api",
+        "framework": "express"
+      },
+      {
+        "method": "PUT",
+        "path": "/settings/:key",
+        "handler": "saveSetting",
+        "line": 18,
+        "kind": "api",
+        "framework": "express"
+      }
+    ],
+    "mounts": [
+      {
+        "prefix": "/api",
+        "spec": "./routes/orders",
+        "line": 10,
+        "framework": "express"
+      },
+      {
+        "prefix": "/users",
+        "spec": "./routes/users",
+        "line": 11,
+        "framework": "express"
+      },
+      {
+        "prefix": "/legacy",
+        "spec": "./routes/legacy",
+        "line": 12,
+        "framework": "express"
+      }
+    ]
+  },
+  "routes/orders.ts": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/orders",
+        "handler": "listOrders",
+        "line": 8,
+        "kind": "api",
+        "framework": "express"
+      },
+      {
+        "method": "POST",
+        "path": "/orders",
+        "handler": "createOrder",
+        "line": 9,
+        "kind": "api",
+        "framework": "express"
+      },
+      {
+        "method": "GET",
+        "path": "/orders/:id",
+        "handler": "getOrder",
+        "line": 12,
+        "kind": "api",
+        "framework": "express"
+      },
+      {
+        "method": "DELETE",
+        "path": "/orders/:id",
+        "handler": "inline",
+        "line": 13,
+        "kind": "api",
+        "framework": "express"
+      },
+      {
+        "method": "ANY",
+        "path": "/ping",
+        "handler": "inline",
+        "line": 17,
+        "kind": "api",
+        "framework": "express"
+      }
+    ],
+    "mounts": []
+  }
+}

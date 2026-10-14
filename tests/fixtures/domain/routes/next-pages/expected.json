@@ -1,0 +1,41 @@
+{
+  "pages/api/orders/index.ts": {
+    "routes": [
+      {
+        "method": "ANY",
+        "path": "/api/orders",
+        "handler": "handler",
+        "line": 3,
+        "kind": "api",
+        "framework": "next"
+      }
+    ],
+    "mounts": []
+  },
+  "pages/index.tsx": {
+    "routes": [
+      {
+        "method": "PAGE",
+        "path": "/",
+        "handler": "Home",
+        "line": 1,
+        "kind": "page",
+        "framework": "next"
+      }
+    ],
+    "mounts": []
+  },
+  "pages/blog/[slug].tsx": {
+    "routes": [
+      {
+        "method": "PAGE",
+        "path": "/blog/:slug",
+        "handler": "Post",
+        "line": 1,
+        "kind": "page",
+        "framework": "next"
+      }
+    ],
+    "mounts": []
+  }
+}

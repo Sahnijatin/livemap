@@ -4,7 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { AgentEvent } from '@shared/types.js';
 import { useStore } from '../store';
-import { change, event, session } from '../fixtures';
+import { change, event, session, emptyDomain } from '../fixtures';
 import { Activity } from './Activity';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -31,7 +31,7 @@ const created = change('src/orders.ts', 'created', {
 
 function mount() {
   useStore.getState().apply({
-    type: 'hello', root: '/p/shop', name: 'shop', files: [], changes: [created], usedBy: [], indexing: false,
+    type: 'hello', root: '/p/shop', name: 'shop', files: [], changes: [created], usedBy: [], domain: emptyDomain(), indexing: false,
     events, sessions: [s1], control: { paused: false, flags: [] },
   });
   act(() => root.render(<Activity />));
@@ -79,6 +79,22 @@ describe('Activity', () => {
     expect(useStore.getState().selected).toBe('src/orders.ts');
   });
 
+  it('shows a new route at its full mounted path from the domain index, else at its file path', () => {
+    const route = { method: 'DELETE', path: '/orders/:id', line: 9, kind: 'api' as const, framework: 'express', handler: 'removeOrder' };
+    const added = change('src/routes/orders.ts', 'modified', { at: T + 6000, routes: { added: [route, { ...route, method: 'PUT', line: 10 }], removed: [] } });
+    useStore.getState().apply({
+      type: 'hello', root: '/p/shop', name: 'shop', files: [], changes: [added], usedBy: [], domain: emptyDomain(), indexing: false,
+      events: [], sessions: [], control: { paused: false, flags: [] },
+    });
+    act(() => root.render(<Activity />));
+    const codes = () => [...host.querySelectorAll('.f-chg .fact')].filter(f => f.querySelector('.tg')?.textContent === 'Route').map(f => f.querySelector('code')?.textContent);
+    expect(codes()).toEqual(['DELETE /orders/:id', 'PUT /orders/:id']);
+    const full = { ...route, id: 'DELETE /api/orders/:id src/routes/orders.ts:9', file: 'src/routes/orders.ts', fullPath: '/api/orders/:id', mountedVia: ['src/index.ts'] };
+    const elsewhere = { ...full, id: 'x', file: 'src/other.ts', fullPath: '/other/orders/:id' };
+    act(() => useStore.getState().apply({ type: 'domain', domain: { ...emptyDomain(), routes: [full, elsewhere] } }));
+    expect(codes()).toEqual(['DELETE /api/orders/:id', 'PUT /orders/:id']);
+  });
+
   it('orders the feed by time, merging events and changes', () => {
     mount();
     const order = [...host.querySelectorAll('.f-prompt, .f-msg, .f-tool, .f-chg')].map(n => n.className.split(' ').find(c => c.startsWith('f-')));
@@ -109,7 +125,7 @@ describe('Activity', () => {
     for (let i = 1; i <= 600; i++) many.push(event({ id: 1000 + i, at: T + i, type: 'message', text: `step ${i}` }));
     many.push(event({ id: 1601, at: T + 601, type: 'thinking', text: 'Considering the schema' }));
     useStore.getState().apply({
-      type: 'hello', root: '/p/shop', name: 'shop', files: [], changes: [], usedBy: [], indexing: false,
+      type: 'hello', root: '/p/shop', name: 'shop', files: [], changes: [], usedBy: [], domain: emptyDomain(), indexing: false,
       events: many, sessions: [s1], control: { paused: false, flags: [] },
     });
     act(() => root.render(<Activity />));
@@ -125,7 +141,7 @@ describe('Activity', () => {
 
   const mountWith = (extra: AgentEvent[], sessions = [s1], paused = false) => {
     useStore.getState().apply({
-      type: 'hello', root: '/p/shop', name: 'shop', files: [], changes: [], usedBy: [], indexing: false,
+      type: 'hello', root: '/p/shop', name: 'shop', files: [], changes: [], usedBy: [], domain: emptyDomain(), indexing: false,
       events: extra, sessions, control: { paused, flags: [] },
     });
     act(() => root.render(<Activity />));
@@ -156,5 +172,20 @@ describe('Activity', () => {
     mountWith([], [session({ id: 'u', hooks: false, status: 'working' })], true);
     expect(host.querySelector('.hero')?.className).not.toContain('paused');
     expect(host.querySelector('.hero .lbl')?.textContent).not.toContain('Paused');
+  });
+
+  it('restores the reader\'s scroll position when the tab is shown again', () => {
+    mount();
+    const el = host.querySelector<HTMLDivElement>('.actv')!;
+    Object.defineProperty(el, 'scrollHeight', { value: 2000, configurable: true });
+    Object.defineProperty(el, 'clientHeight', { value: 400, configurable: true });
+    el.scrollTop = 300;
+    act(() => { el.dispatchEvent(new Event('scroll')); });
+    act(() => root.render(<Activity active={false} />));
+    // Browsers reset the scroll offset of a display:none box (and may fire scroll).
+    el.scrollTop = 0;
+    act(() => { el.dispatchEvent(new Event('scroll')); });
+    act(() => root.render(<Activity active />));
+    expect(el.scrollTop).toBe(300);
   });
 });

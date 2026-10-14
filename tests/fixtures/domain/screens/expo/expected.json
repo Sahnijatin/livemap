@@ -1,0 +1,25 @@
+{
+  "app/_layout.tsx": [],
+  "app/+not-found.tsx": [],
+  "app/settings.tsx": [],
+  "app/(tabs)/index.tsx": [
+    {
+      "method": "SCREEN",
+      "path": "/",
+      "handler": "HomeScreen",
+      "line": 3,
+      "kind": "screen",
+      "framework": "expo-router"
+    }
+  ],
+  "app/(tabs)/orders/[id].tsx": [
+    {
+      "method": "SCREEN",
+      "path": "/orders/:id",
+      "handler": "OrderScreen",
+      "line": 8,
+      "kind": "screen",
+      "framework": "expo-router"
+    }
+  ]
+}

@@ -162,36 +162,40 @@ function longestFirst(aliases: ImportCtx['aliases']): ImportCtx['aliases'] {
   return sorted;
 }
 
+type JsTarget = { local: string | null } | { external: string };
+
+/** One JS/TS specifier: a project file (null when it does not resolve or is a URL) or a package name. */
+function resolveJs(dir: string, spec: string, ctx: ImportCtx): JsTarget {
+  if (spec.startsWith('./') || spec.startsWith('../') || spec === '.' || spec === '..') {
+    return { local: resolveJsPath(join(dir, spec), ctx) };
+  }
+  for (const [prefix, targets] of longestFirst(ctx.aliases)) {
+    if (spec !== prefix && !spec.startsWith(prefix + '/')) continue;
+    const rest = spec.slice(prefix.length).replace(/^\//, '');
+    for (const t of targets) {
+      const r = resolveJsPath(join(t, rest), ctx);
+      if (r) return { local: r };
+    }
+    return { local: null };
+  }
+  if (spec.startsWith('@/') || spec.startsWith('~/')) {
+    const rest = spec.slice(2);
+    for (const root of ['src', 'app', '']) {
+      const r = resolveJsPath(join(root, rest), ctx);
+      if (r) return { local: r };
+    }
+    return { local: null };
+  }
+  if (spec.startsWith('/') || /^[a-z]+:\/\//i.test(spec)) return { local: null };
+  return { external: packageName(spec) };
+}
+
 function jsImports(path: string, src: string, ctx: ImportCtx, local: Set<string>, external: Set<string>): void {
   const dir = parentDir(path);
   for (const spec of jsSpecs(path, src, ctx.specCache)) {
-    if (spec.startsWith('./') || spec.startsWith('../') || spec === '.' || spec === '..') {
-      const r = resolveJsPath(join(dir, spec), ctx);
-      if (r) local.add(r);
-      continue;
-    }
-    let aliased = false;
-    for (const [prefix, targets] of longestFirst(ctx.aliases)) {
-      if (spec !== prefix && !spec.startsWith(prefix + '/')) continue;
-      aliased = true;
-      const rest = spec.slice(prefix.length).replace(/^\//, '');
-      for (const t of targets) {
-        const r = resolveJsPath(join(t, rest), ctx);
-        if (r) { local.add(r); break; }
-      }
-      break;
-    }
-    if (aliased) continue;
-    if (spec.startsWith('@/') || spec.startsWith('~/')) {
-      const rest = spec.slice(2);
-      for (const root of ['src', 'app', '']) {
-        const r = resolveJsPath(join(root, rest), ctx);
-        if (r) { local.add(r); break; }
-      }
-      continue;
-    }
-    if (spec.startsWith('/') || /^[a-z]+:\/\//i.test(spec)) continue;
-    external.add(packageName(spec));
+    const t = resolveJs(dir, spec, ctx);
+    if ('external' in t) external.add(t.external);
+    else if (t.local) local.add(t.local);
   }
 }
 
@@ -201,16 +205,24 @@ function pyModule(base: string, ctx: ImportCtx): string | null {
   return null;
 }
 
+/** Candidate directories for a dotted module: relative to `dir` (rel leading dots) or to the roots. */
+function pyBases(dir: string, mod: string, rel: number): string[] {
+  const p = mod.replace(/\./g, '/');
+  return rel > 0 ? [join(dir, ...Array(rel - 1).fill('..'), p)] : ['', 'src'].map(r => join(r, p));
+}
+
+/** The module file at a base; an empty module (`from . import x`) is the package's `__init__.py`. */
+function pyTarget(base: string, mod: string, ctx: ImportCtx): string | null {
+  if (mod) return pyModule(base, ctx);
+  return ctx.has(join(base, '__init__.py')) ? join(base, '__init__.py') : null;
+}
+
 function pythonImports(path: string, src: string, ctx: ImportCtx, local: Set<string>, external: Set<string>): void {
   const dir = parentDir(path);
-  const roots = ['', 'src'];
   const add = (mod: string, names: string[], rel: number): boolean => {
-    const bases = rel > 0
-      ? [join(dir, ...Array(rel - 1).fill('..'), mod.replace(/\./g, '/'))]
-      : roots.map(r => join(r, mod.replace(/\./g, '/')));
     let found = false;
-    for (const b of bases) {
-      const m = mod ? pyModule(b, ctx) : (ctx.has(join(b, '__init__.py')) ? join(b, '__init__.py') : null);
+    for (const b of pyBases(dir, mod, rel)) {
+      const m = pyTarget(b, mod, ctx);
       if (m) { local.add(m); found = true; }
       for (const n of names) {
         const s = pyModule(join(b, n), ctx);
@@ -375,6 +387,36 @@ export function extractImports(path: string, lang: Lang, src: string, ctx: Impor
   }
   local.delete(path);
   return { local: [...local].sort(), external: [...external] };
+}
+
+/**
+ * Resolves one module specifier the way `extractImports` does: JS/TS (relative, tsconfig aliases,
+ * extension swaps, index files) and Python (relative `.a.b` / `..x` and absolute dotted). Null for
+ * packages, unresolved specifiers and other languages.
+ */
+export function resolveSpecifier(from: string, lang: Lang, spec: string, ctx: ImportCtx): string | null {
+  const dir = posix.dirname(from) === '.' ? '' : posix.dirname(from);
+  switch (lang) {
+    case 'typescript': case 'tsx': case 'javascript': case 'vue': case 'svelte': {
+      const t = resolveJs(dir, spec, ctx);
+      return 'local' in t ? t.local : null;
+    }
+    case 'python': {
+      const m = /^(\.*)([\w.]*)$/.exec(spec);
+      if (!m) return null;
+      const rel = m[1].length;
+      // An absolute module also resolves from each ancestor of the importing file, nearest first: a project
+      // nested under `backend/` or `services/ml/` runs with its own directory on the import path.
+      const ancestors: string[] = [];
+      if (rel === 0 && m[2]) for (let d = dir; d; d = posix.dirname(d) === '.' ? '' : posix.dirname(d)) ancestors.push(join(d, m[2].replace(/\./g, '/')));
+      for (const b of [...ancestors, ...pyBases(dir, m[2], rel)]) {
+        const hit = pyTarget(b, m[2], ctx);
+        if (hit) return hit;
+      }
+      return null;
+    }
+    default: return null;
+  }
 }
 
 function stripJsonc(text: string): string {

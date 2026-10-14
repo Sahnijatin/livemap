@@ -1,5 +1,7 @@
 import { memo, useEffect, useState } from 'react';
 import clsx from 'clsx';
+import { useShallow } from 'zustand/react/shallow';
+import type { ApiRoute } from '@shared/domain.js';
 import type { AgentEvent, ChangeSummary, FileModel } from '@shared/types.js';
 import { useStore } from '../store';
 import { agentName } from '../agents';
@@ -17,6 +19,7 @@ const TYPE_MS = 1200;
 const CLAMP = 900;
 const MAX_FACTS = 6;
 const MAX_DIFF_LINES = 400;
+const NO_ROUTES: ApiRoute[] = [];
 
 const raf = (cb: FrameRequestCallback): number =>
   typeof window.requestAnimationFrame === 'function' ? window.requestAnimationFrame(cb) : window.setTimeout(() => cb(performance.now()), 16);
@@ -138,7 +141,9 @@ function hunkLines(c: ChangeSummary): { cls: string; text: string }[] {
 function Change({ change: c }: { change: ChangeSummary }) {
   const [open, setOpen] = useState(false);
   const select = useStore(s => s.select);
-  const facts = changeFacts(c);
+  // Only cards that added routes follow the domain index, and only its routes of this file.
+  const routes = useStore(useShallow(s => (c.routes.added.length ? s.domain.routes.filter(r => r.file === c.path) : NO_ROUTES)));
+  const facts = changeFacts(c, routes);
   const layer = layerOf(c.path, { lang: c.lang } as FileModel);
   const kind = c.kind === 'created' ? ['New', 't-add'] : c.kind === 'deleted' ? ['Deleted', 't-del'] : ['Edited', 't-chg'];
   const a = c.attribution;

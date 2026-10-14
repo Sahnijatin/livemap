@@ -1,0 +1,28 @@
+{
+  "lib/router.dart": [
+    {
+      "method": "SCREEN",
+      "path": "/",
+      "handler": "HomeScreen",
+      "line": 6,
+      "kind": "screen",
+      "framework": "gorouter"
+    },
+    {
+      "method": "SCREEN",
+      "path": "/orders/:id",
+      "handler": "OrderScreen",
+      "line": 10,
+      "kind": "screen",
+      "framework": "gorouter"
+    },
+    {
+      "method": "SCREEN",
+      "path": "/settings",
+      "handler": "SettingsScreen",
+      "line": 20,
+      "kind": "screen",
+      "framework": "gorouter"
+    }
+  ]
+}

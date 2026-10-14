@@ -1,0 +1,63 @@
+{
+  "main.go": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/",
+        "handler": "home",
+        "line": 13,
+        "kind": "api",
+        "framework": "chi"
+      },
+      {
+        "method": "GET",
+        "path": "/api/orders",
+        "handler": "listOrders",
+        "line": 15,
+        "kind": "api",
+        "framework": "chi"
+      },
+      {
+        "method": "GET",
+        "path": "/api/orders/:orderID",
+        "handler": "getOrder",
+        "line": 17,
+        "kind": "api",
+        "framework": "chi"
+      },
+      {
+        "method": "DELETE",
+        "path": "/api/orders/:orderID",
+        "handler": "deleteOrder",
+        "line": 18,
+        "kind": "api",
+        "framework": "chi"
+      },
+      {
+        "method": "POST",
+        "path": "/api/orders",
+        "handler": "createOrder",
+        "line": 20,
+        "kind": "api",
+        "framework": "chi"
+      },
+      {
+        "method": "ANY",
+        "path": "/ws",
+        "handler": "ws",
+        "line": 22,
+        "kind": "api",
+        "framework": "chi"
+      },
+      {
+        "method": "PATCH",
+        "path": "/legacy",
+        "handler": "legacy",
+        "line": 23,
+        "kind": "api",
+        "framework": "chi"
+      }
+    ],
+    "mounts": []
+  }
+}

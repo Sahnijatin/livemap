@@ -115,3 +115,15 @@ export const PulseIcon = () => (
 export const PencilIcon = () => (
   <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="M13.5 6.5l4 4" /></svg>
 );
+
+export const SchemaIcon = () => (
+  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="3" /><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3" /></svg>
+);
+
+export const ApiIcon = () => (
+  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+);
+
+export const StackIcon = () => (
+  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z" /><path d="M3 13l9 5 9-5" /></svg>
+);
