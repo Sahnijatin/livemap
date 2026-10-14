@@ -40,12 +40,12 @@ function extOf(path: string): string {
   return i <= 0 ? '' : b.slice(i + 1).toLowerCase();
 }
 
-/** `.env` and `.env.*` except `.example`, `.sample`, `.template`. */
+/** `.env`, `.envrc`, `.env.*` and `.envrc.*` (also `-`/`_` variants) except `.example`, `.sample`, `.template`. */
 export function isSecretEnvPath(path: string): boolean {
   // Editor backups (`.env~`) and autosaves (`#.env#`) hold the same values as the file itself.
-  const b = baseName(path).toLowerCase().replace(/^#(.*)#$/, '$1').replace(/~+$/, '');
-  if (b === '.env') return true;
-  if (!/^\.env[._-]/.test(b)) return false;
+  // Agents on Windows send backslash paths: take the name after either separator.
+  const b = baseName(path.replace(/\\/g, '/')).toLowerCase().replace(/^#(.*)#$/, '$1').replace(/~+$/, '');
+  if (!/^\.env(rc)?([._-]|$)/.test(b)) return false;
   return !/[._-](example|sample|template)$/.test(b);
 }
 
