@@ -313,4 +313,13 @@ describe('Watcher', () => {
     await sleep(400);
     for (const call of reload.mock.calls) expect(call[0]).not.toEqual([]);
   });
+
+  it('does not queue a flush when no relink is deferred', async () => {
+    await startWatcher();
+    const flush = vi.spyOn(model, 'flushRelink');
+    put('src/keep.ts', 'export const keep = 2;\n');
+    await waitFor(() => changes.length >= 1);
+    await sleep(50);
+    expect(flush).not.toHaveBeenCalled();
+  });
 });

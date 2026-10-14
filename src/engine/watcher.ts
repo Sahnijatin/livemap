@@ -156,7 +156,7 @@ export class Watcher extends EventEmitter {
     } catch (e) {
       this.fail(e);
     }
-    if (more || this.stopped) return;
+    if (more || this.stopped || !this.model.relinkDeferred) return;
     try {
       const touched = await this.model.flushRelink();
       if (!this.stopped && touched.length) this.emit('touched', touched, []);

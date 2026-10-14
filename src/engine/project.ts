@@ -138,11 +138,7 @@ export class ProjectModel {
       // The directory may be back by now (deleted and recreated within the debounce, or a late
       // unlinkDir); files that exist again are left to their own add/change events.
       const gone: string[] = [];
-      for (let i = 0; i < under.length; i += READ_AHEAD) {
-        const batch = under.slice(i, i + READ_AHEAD);
-        const flags = await Promise.all(batch.map(rel => this.isGone(rel)));
-        batch.forEach((rel, j) => { if (flags[j]) gone.push(rel); });
-      }
+      await this.eachAhead(under, rel => this.isGone(rel), (rel, isGone) => { if (isGone) gone.push(rel); });
       const results: UpdateResult[] = [];
       for (const rel of gone) results.push((await this.apply(rel, null))!.result);
       // One import re-resolution for the whole directory (or, deferred, for the whole burst);
@@ -228,31 +224,34 @@ export class ProjectModel {
     this.relinkPending = true;
   }
 
+  /** True while a deferred re-resolution is waiting for flushRelink. */
+  get relinkDeferred(): boolean { return this.relinkPending; }
+
   /** Runs a deferred re-resolution, if any; returns the files whose local imports changed. */
   flushRelink(): Promise<FileModel[]> {
     return this.serial(async () => (this.relinkPending ? this.relink([]) : []));
   }
 
   /**
-   * Reads `files` READ_AHEAD at a time and hands each result to `each` in order (one at a time).
-   * Results already in `known` are reused instead of read again.
+   * Starts `start` for up to READ_AHEAD items at a time (a sliding window) and hands each result
+   * to `each` in order, one at a time.
    */
-  private async readEach(files: string[], known: Map<string, ReadResult>, each: (rel: string, r: ReadResult) => Promise<void>): Promise<void> {
-    const reads: (Promise<ReadResult> | undefined)[] = new Array(files.length);
+  private async eachAhead<T>(items: string[], start: (rel: string) => Promise<T>, each: (rel: string, v: T) => void | Promise<void>): Promise<void> {
+    const pending: (Promise<T> | undefined)[] = new Array(items.length);
     let next = 0;
-    const readMore = (): void => {
-      if (next >= files.length) return;
-      const rel = files[next];
-      reads[next] = known.has(rel) ? Promise.resolve(known.get(rel)!) : readForModel(this.root, rel);
-      next++;
-    };
-    for (let k = 0; k < READ_AHEAD; k++) readMore();
-    for (let i = 0; i < files.length; i++) {
-      const r = await reads[i]!;
-      reads[i] = undefined;
-      readMore();
-      await each(files[i], r);
+    const more = (): void => { if (next < items.length) { pending[next] = start(items[next]); next++; } };
+    for (let k = 0; k < READ_AHEAD; k++) more();
+    for (let i = 0; i < items.length; i++) {
+      const v = await pending[i]!;
+      pending[i] = undefined;
+      more();
+      await each(items[i], v);
     }
+  }
+
+  /** Reads `files` with eachAhead; results already in `known` are reused instead of read again. */
+  private readEach(files: string[], known: Map<string, ReadResult>, each: (rel: string, r: ReadResult) => Promise<void>): Promise<void> {
+    return this.eachAhead(files, rel => (known.has(rel) ? Promise.resolve(known.get(rel)!) : readForModel(this.root, rel)), each);
   }
 
   /** True when the path no longer exists or is no longer a regular file; transient errors are not gone. */
