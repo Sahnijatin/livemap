@@ -39,8 +39,6 @@ export class Watcher extends EventEmitter {
   private waiting = 0;
   private nextId = 1;
   private stopped = false;
-  /** Paths released by unwatchIgnored (see watchIncluded). */
-  private unwatched = new Set<string>();
   /** chokidar finished its initial crawl. */
   private ready = false;
 
@@ -119,7 +117,6 @@ export class Watcher extends EventEmitter {
           // before the reload reads them (files appearing meanwhile come back in `created`).
           onIncluded: dirs => this.watchIncluded(dirs),
         });
-        this.unwatchIgnored();
         if (!this.stopped && (files.length || removed.length)) this.emit('touched', files, removed);
         const own: UpdateResult[] = [...created];
         for (const p of paths) {
@@ -141,38 +138,9 @@ export class Watcher extends EventEmitter {
     this.schedule(`d:${rel}`, deferRelink => this.model.removeDir(rel, { deferRelink }));
   }
 
-  /**
-   * Releases chokidar's watches on directories the current rules ignore. unwatch() closes only the
-   * named path's own watcher (directories and files each have one), so every watched directory in
-   * an ignored subtree, and every entry in it, is passed.
-   */
-  private unwatchIgnored(): void {
-    const fsw = this.fsw;
-    if (!fsw) return;
-    const drop: string[] = [];
-    for (const [abs, entries] of Object.entries(fsw.getWatched())) {
-      const rel = this.rel(abs);
-      if (!rel || !this.model.ignored(rel, true)) continue;
-      drop.push(abs, ...entries.map(e => path.join(abs, e)));
-    }
-    if (!drop.length) return;
-    for (const abs of drop) this.unwatched.add(abs);
-    fsw.unwatch(drop);
-  }
-
-  /**
-   * Watches directories a reload newly includes. unwatch() also put each path it released on
-   * chokidar's own ignore list, which add() clears only for the paths it is given, so those are
-   * re-added too.
-   */
+  /** Watches directories a reload newly includes (they were ignored when chokidar crawled). */
   private watchIncluded(dirs: string[]): void {
-    const fsw = this.fsw;
-    if (!fsw || dirs.length === 0) return;
-    const add = new Set(dirs.map(d => path.join(this.model.root, ...d.split('/'))));
-    for (const abs of this.unwatched) {
-      if ([...add].some(d => abs === d || abs.startsWith(d + path.sep))) { add.add(abs); this.unwatched.delete(abs); }
-    }
-    fsw.add([...add]);
+    if (dirs.length) this.fsw?.add(dirs.map(d => path.join(this.model.root, ...d.split('/'))));
   }
 
   private schedule(key: string, job: (deferRelink: boolean) => Promise<UpdateResult[]>): void {
