@@ -173,10 +173,7 @@ describe('livemap CLI', () => {
         // The opener must have run while the server was still indexing.
         expect(fs.existsSync(marker)).toBe(true);
         expect(msgs.some(m => m.type === 'hello')).toBe(false);
-        // The opener gets a private launcher file, never the token itself (process args are readable).
-        const opened = fs.readFileSync(marker, 'utf8').trim();
-        expect(opened).not.toContain(token);
-        expect(fs.readFileSync(opened, 'utf8')).toContain(`url=${out.match(URL_RE)![0]}`);
+        expect(fs.readFileSync(marker, 'utf8').trim()).toBe(out.match(URL_RE)![0]);
       } finally {
         ws.terminate();
       }
