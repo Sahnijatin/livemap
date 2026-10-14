@@ -120,17 +120,12 @@ export function safeSend(ws: WebSocket, text: string, allowance = 0): void {
 }
 
 /**
- * safeSend with a per-client allowance for its last hello: set to the hello's size when one is
- * sent, then shrunk to the buffered amount on every later send, so it lasts only while the hello
- * can still be in the buffer.
+ * safeSend with a per-client allowance for its last hello: set to the hello's byte size when one
+ * is sent (`helloBytes`, null for other messages), then shrunk to the buffered amount on every
+ * later send, so it lasts only while the hello can still be in the buffer.
  */
-export function sendTracked(ws: WebSocket, text: string, isHello: boolean, allowances: WeakMap<WebSocket, number>): void {
-  let allowance: number;
-  if (isHello) {
-    allowance = Buffer.byteLength(text);
-  } else {
-    allowance = Math.min(allowances.get(ws) ?? 0, ws.bufferedAmount);
-  }
+export function sendTracked(ws: WebSocket, text: string, helloBytes: number | null, allowances: WeakMap<WebSocket, number>): void {
+  const allowance = helloBytes ?? Math.min(allowances.get(ws) ?? 0, ws.bufferedAmount);
   allowances.set(ws, allowance);
   safeSend(ws, text, allowance);
 }
@@ -160,13 +155,16 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
 
   /** Room each client may still need for draining its last hello (see sendTracked). */
   const allowances = new WeakMap<WebSocket, number>();
-  const sendText = (ws: WebSocket, msg: ServerMessage, text: string): void =>
-    sendTracked(ws, text, msg.type === 'hello', allowances);
-  const send = (ws: WebSocket, msg: ServerMessage): void => sendText(ws, msg, JSON.stringify(msg));
+  const helloBytesOf = (msg: ServerMessage, text: string): number | null => (msg.type === 'hello' ? Buffer.byteLength(text) : null);
+  const send = (ws: WebSocket, msg: ServerMessage): void => {
+    const text = JSON.stringify(msg);
+    sendTracked(ws, text, helloBytesOf(msg, text), allowances);
+  };
   const broadcast = (msg: ServerMessage): void => {
     if (wss.clients.size === 0) return;
     const text = JSON.stringify(msg);
-    for (const ws of wss.clients) sendText(ws, msg, text);
+    const helloBytes = helloBytesOf(msg, text); // once, not per client
+    for (const ws of wss.clients) sendTracked(ws, text, helloBytes, allowances);
   };
   const hello = (): ServerMessage => ({
     type: 'hello', root: model.root, name, files: model.all(), changes: [...changes], usedBy, indexing: false,

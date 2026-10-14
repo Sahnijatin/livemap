@@ -450,14 +450,14 @@ describe('safeSend backpressure', () => {
     const allowances = new WeakMap<WebSocket, number>();
     const f = fake(0);
     const ws = f as unknown as WebSocket;
-    sendTracked(ws, 'x'.repeat(5000), true, allowances); // a hello
+    sendTracked(ws, 'x'.repeat(5000), 5000, allowances); // a hello of 5000 bytes
     f.bufferedAmount = MAX_BUFFERED_BYTES + 4000; // still mostly the hello
-    sendTracked(ws, 'a', false, allowances);
+    sendTracked(ws, 'a', null, allowances);
     expect(f.terminated).toBe(false);
     f.bufferedAmount = 100; // drained
-    sendTracked(ws, 'b', false, allowances);
+    sendTracked(ws, 'b', null, allowances);
     f.bufferedAmount = MAX_BUFFERED_BYTES + 200; // now genuinely behind
-    sendTracked(ws, 'c', false, allowances);
+    sendTracked(ws, 'c', null, allowances);
     expect(f.terminated).toBe(true);
     expect(f.sent).toEqual(['x'.repeat(5000), 'a', 'b']);
   });
