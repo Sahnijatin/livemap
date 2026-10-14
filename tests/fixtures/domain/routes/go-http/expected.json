@@ -1,0 +1,46 @@
+{
+  "main.go": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/orders/:id",
+        "handler": "getOrder",
+        "line": 10,
+        "kind": "api",
+        "framework": "go-http"
+      },
+      {
+        "method": "POST",
+        "path": "/orders",
+        "handler": "createOrder",
+        "line": 11,
+        "kind": "api",
+        "framework": "go-http"
+      },
+      {
+        "method": "ANY",
+        "path": "/static",
+        "line": 12,
+        "kind": "api",
+        "framework": "go-http"
+      },
+      {
+        "method": "DELETE",
+        "path": "/files/:path*",
+        "handler": "deleteFile",
+        "line": 13,
+        "kind": "api",
+        "framework": "go-http"
+      },
+      {
+        "method": "ANY",
+        "path": "/health",
+        "handler": "inline",
+        "line": 14,
+        "kind": "api",
+        "framework": "go-http"
+      }
+    ],
+    "mounts": []
+  }
+}
