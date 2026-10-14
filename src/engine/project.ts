@@ -19,6 +19,8 @@ export interface UpdateResult {
 }
 
 const CONFIG_FILES = new Set(['tsconfig.json', 'jsconfig.json', 'go.mod']);
+/** Files read concurrently during a scan. */
+const READ_AHEAD = 32;
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const sameList = (a: string[], b: string[]): boolean => a.length === b.length && a.every((x, i) => x === b[i]);
 
@@ -63,16 +65,38 @@ export class ProjectModel {
       this.relinkPending = false;
       const { files, truncated } = await walk(this.root, this.isIgnored, this.limit);
       this.truncated = truncated;
-      const reads: [string, ReadResult][] = [];
-      for (const rel of files) reads.push([rel, await readForModel(this.root, rel)]);
-      for (const [rel, r] of reads) if (r?.kind === 'text') this.texts.set(rel, r.text);
-      // Register every readable path (and config contents) before parsing so imports see the whole tree.
-      this.ctx = this.makeCtx(reads.filter(([, r]) => r).map(([rel]) => rel));
-      let done = 0;
-      for (const [rel, r] of reads) {
-        if (r) this.files.set(rel, await this.build(rel, r));
-        onProgress?.(++done, reads.length);
+      // Config first so aliases and the Go module apply to every file; then the whole walked tree
+      // is registered before parsing so imports see it.
+      for (const rel of files) {
+        if (!CONFIG_FILES.has(rel)) continue;
+        const r = await readForModel(this.root, rel);
+        if (r?.kind === 'text') this.texts.set(rel, r.text);
       }
+      this.ctx = this.makeCtx(files);
+      // Reads run READ_AHEAD at a time while files are parsed in order, so progress moves from the start.
+      const reads: (Promise<ReadResult> | undefined)[] = new Array(files.length);
+      let next = 0;
+      const readMore = (): void => {
+        if (next < files.length) { reads[next] = readForModel(this.root, files[next]); next++; }
+      };
+      for (let k = 0; k < READ_AHEAD; k++) readMore();
+      let unreadable = false;
+      for (let i = 0; i < files.length; i++) {
+        const r = await reads[i]!;
+        reads[i] = undefined;
+        readMore();
+        const rel = files[i];
+        if (r) {
+          if (r.kind === 'text') this.texts.set(rel, r.text); else this.texts.delete(rel);
+          this.files.set(rel, await this.build(rel, r));
+        } else {
+          this.texts.delete(rel);
+          unreadable = true;
+        }
+        onProgress?.(i + 1, files.length);
+      }
+      // A file that vanished or failed to read mid-scan must not stay resolvable as an import.
+      if (unreadable) this.relink([]);
     });
   }
 
