@@ -13,6 +13,12 @@ export const DEFAULT_IGNORES: string[] = [
 
 export const MAX_PARSE_BYTES = 1_048_576;
 
+/** Parent directory of a project-relative POSIX path; '' for a path at the root. */
+export function parentDir(rel: string): string {
+  const slash = rel.lastIndexOf('/');
+  return slash <= 0 ? '' : rel.slice(0, slash);
+}
+
 /** Editor temp/backup files from atomic saves (R8); never indexed by the walk or the watcher. */
 const TEMP_SUFFIX = /(\.tmp|\.swp|\.swx|~)$/;
 const TEMP_PREFIX = /^(\.#|4913$)/;
@@ -90,9 +96,8 @@ export function createIgnore(root: string, reuse?: { previous: IgnoreFn; changed
     return ignored;
   };
   const check = (r: string, isDir: boolean): boolean => {
-    const slash = r.lastIndexOf('/');
-    if (slash > 0) {
-      const parent = r.slice(0, slash);
+    const parent = parentDir(r);
+    if (parent) {
       let p = dirs.get(parent);
       if (p === undefined) { p = check(parent, true); dirs.set(parent, p); }
       if (p) return true;

@@ -5,7 +5,7 @@ import { langOf } from './languages.js';
 import { fileSymbols } from './symbols/index.js';
 import { scriptBlock } from './symbols/markup.js';
 import { buildIndex, extractImports, indexUpdate, readTsconfigAliases, type FileIndex, type ImportCtx } from './imports.js';
-import { createIgnore, walk, readForModel, type IgnoreFn, type ReadResult } from './files.js';
+import { createIgnore, parentDir, walk, readForModel, type IgnoreFn, type ReadResult } from './files.js';
 
 export interface UpdateResult {
   path: string;
@@ -163,7 +163,7 @@ export class ProjectModel {
   reloadIgnores(changed: string[] = []): Promise<{ files: FileModel[]; removed: string[]; dirs: string[] }> {
     return this.serial(async () => {
       const old = this.isIgnored;
-      const changedDirs = changed.map(p => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''));
+      const changedDirs = changed.map(parentDir);
       this.isIgnored = changed.length ? createIgnore(this.root, { previous: old, changed: changedDirs }) : createIgnore(this.root);
       const removed: string[] = [];
       for (const rel of [...this.files.keys()].sort(cmp)) {
@@ -174,7 +174,7 @@ export class ProjectModel {
       const walked = await walk(this.root, this.isIgnored, this.limit);
       const included = new Set(walked.dirs.filter(d => old(d, true)));
       const dirs = [...included].filter(d => {
-        for (let p = path.posix.dirname(d); p !== '.'; p = path.posix.dirname(p)) if (included.has(p)) return false;
+        for (let p = parentDir(d); p; p = parentDir(p)) if (included.has(p)) return false;
         return true;
       });
       const fresh = walked.files.filter(rel => !this.files.has(rel) && old(rel, false));

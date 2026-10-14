@@ -1,5 +1,6 @@
 import { posix } from 'node:path';
 import type { Lang } from '../shared/types.js';
+import { parentDir } from './files.js';
 
 export interface ImportCtx {
   has(path: string): boolean;
@@ -34,10 +35,7 @@ export interface FileIndex { byDir: Map<string, string[]>; byBase: Map<string, s
 const INDEXES = new WeakMap<string[], FileIndex>();
 export const indexStats = { builds: 0, jsParses: 0 };
 
-const splitPath = (f: string): [dir: string, base: string] => {
-  const slash = f.lastIndexOf('/');
-  return slash === -1 ? ['', f] : [f.slice(0, slash), f.slice(slash + 1)];
-};
+const splitPath = (f: string): [dir: string, base: string] => [parentDir(f), f.slice(f.lastIndexOf('/') + 1)];
 
 /** Dir to files and basename to files, each list sorted; `files` must be sorted. */
 export function buildIndex(files: string[]): FileIndex {

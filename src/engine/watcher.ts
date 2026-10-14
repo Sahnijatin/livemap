@@ -4,7 +4,7 @@ import { watch, type FSWatcher } from 'chokidar';
 import type { ChangeSummary, FileModel } from '../shared/types.js';
 import type { ProjectModel, UpdateResult } from './project.js';
 import { buildChange } from './differ.js';
-import { isTempName } from './files.js';
+import { isTempName, parentDir } from './files.js';
 
 type FileEvent = 'add' | 'change' | 'unlink';
 
@@ -90,8 +90,8 @@ export class Watcher extends EventEmitter {
    * (`*`, as tool caches write), so editing it can reload the rules.
    */
   private gitignoreSkipped(rel: string): boolean {
-    const slash = rel.lastIndexOf('/');
-    return slash > 0 && this.model.ignored(rel.slice(0, slash), true);
+    const dir = parentDir(rel);
+    return dir !== '' && this.model.ignored(dir, true);
   }
 
   private onFile(p: string, ev: FileEvent): void {
