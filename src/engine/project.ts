@@ -56,8 +56,6 @@ export class ProjectModel {
   private specCache: NonNullable<ImportCtx['specCache']> = new Map();
   /** The live ctx's directory index during a deferred burst (see liveCtx). */
   private liveIndex: FileIndex | null = null;
-  /** The last reloadIgnores threw partway (see reconcileIgnores). */
-  private reloadFailed = false;
   /** A deferred update changed the file set; imports need re-resolving (see update). */
   private relinkPending = false;
 
@@ -80,6 +78,7 @@ export class ProjectModel {
       this.files.clear(); this.texts.clear(); this.lastGood.clear(); this.specCache.clear();
       this.relinkPending = false;
       this.liveIndex = null;
+      this.isIgnored = createIgnore(this.root); // everything from disk, the rules included
       const { files, truncated } = await walk(this.root, this.isIgnored, this.limit);
       this.truncated = truncated;
       // Config first so aliases and the Go module apply to every file; then the whole walked tree
@@ -176,16 +175,8 @@ export class ProjectModel {
     changed: string[] = [],
     opts: { onIncluded?: (dirs: string[]) => void } = {},
   ): Promise<{ files: FileModel[]; removed: string[]; created: UpdateResult[] }> {
-    return this.serial(async () => {
-      try {
-        const result = await this.reconcileIgnores(changed, opts);
-        this.reloadFailed = false;
-        return result;
-      } catch (e) {
-        this.reloadFailed = true; // the rules are already swapped; see reconcileIgnores
-        throw e;
-      }
-    });
+    // If this throws partway the model is left inconsistent; the caller rescans (see Watcher).
+    return this.serial(() => this.reconcileIgnores(changed, opts));
   }
 
   private async reconcileIgnores(
@@ -213,21 +204,19 @@ export class ProjectModel {
     if (dirs.length) opts.onIncluded?.(dirs);
     // Files the old rules ignored come back as a file update. After a truncated scan, other
     // unindexed files may fill freed room; they may be brand new (with an add event queued that
-    // will now find nothing to do), so they are reported as created changes. After a reload
-    // failed partway, `old` is already the new rules, so every unindexed file is reconsidered.
-    const repair = this.reloadFailed;
+    // will now find nothing to do), so they are reported as created changes.
     const wasTruncated = this.truncated;
     let full = false; // some file did not fit under the limit
     const included: string[] = [];
     const unreached: string[] = [];
     // Stop reading once the model is full (a truncated model may have thousands unread); files
     // that fail to read leave their room to later candidates.
-    const fresh = walked.files.filter(rel => !this.files.has(rel) && (old(rel, false) || wasTruncated || repair));
+    const fresh = walked.files.filter(rel => !this.files.has(rel) && (old(rel, false) || wasTruncated));
     const isFull = (): boolean => this.files.size >= this.limit;
     const done = await this.readEach(fresh, new Map(), async (rel, r) => {
       if (!r) return;
       const res = this.apply(rel, r);
-      if (res) { await res; (old(rel, false) || repair ? included : unreached).push(rel); }
+      if (res) { await res; (old(rel, false) ? included : unreached).push(rel); }
     }, isFull);
     if (done < fresh.length) full = true;
     if (whole) this.truncated = walked.truncated || full;

@@ -7,8 +7,6 @@ import { buildChange } from './differ.js';
 import { isTempName, parentDir } from './files.js';
 
 type FileEvent = 'add' | 'change' | 'unlink';
-/** Automatic tries for a failed rules reload before waiting for the next .gitignore event. */
-const MAX_RELOAD_ATTEMPTS = 3;
 
 export interface WatcherOptions {
   debounceMs?: number;
@@ -21,7 +19,8 @@ export interface WatcherOptions {
  * then processed one at a time; the model decides what happened from disk.
  * Emits 'change' (change: ChangeSummary, touched: FileModel[]); 'touched' (files: FileModel[],
  * removed: string[]) for model updates without a change of their own (imports re-resolved after a
- * burst, files re-indexed after an ignore-rule change); and 'error' (err: Error).
+ * burst, files re-indexed after an ignore-rule change); 'reset' after the model was rescanned
+ * (clients should start over); and 'error' (err: Error).
  *
  * While more jobs are queued, file-set changes defer the model's import re-resolution (O(files)),
  * so a burst (a checkout adding hundreds of files) re-resolves once when the queue drains.
@@ -37,8 +36,6 @@ export class Watcher extends EventEmitter {
   private queue: Promise<void> = Promise.resolve();
   /** .gitignore files changed since the last rules reload. */
   private gitignores = new Set<string>();
-  /** Consecutive failed rules reloads (see scheduleIgnores). */
-  private reloadAttempts = 0;
   /** Jobs whose debounce fired but that have not started running. */
   private waiting = 0;
   private nextId = 1;
@@ -114,7 +111,6 @@ export class Watcher extends EventEmitter {
       if (this.gitignoreSkipped(rel)) return;
       // One debounced reload for every .gitignore touched together (a checkout can change dozens).
       this.gitignores.add(rel);
-      this.reloadAttempts = 0;
       this.scheduleIgnores();
       return;
     }
@@ -137,12 +133,13 @@ export class Watcher extends EventEmitter {
           onIncluded: dirs => this.watchIncluded(dirs),
         });
       } catch (e) {
-        // Retry on its own, a few times; after that, with the next .gitignore event.
-        for (const p of paths) this.gitignores.add(p);
-        if (++this.reloadAttempts < MAX_RELOAD_ATTEMPTS) this.scheduleIgnores();
-        throw e;
+        // A reload that fails partway leaves the model inconsistent with the new rules; rebuild it
+        // from disk and have clients start over from a fresh hello.
+        this.fail(e);
+        await this.model.scan();
+        if (!this.stopped) this.emit('reset');
+        return [];
       }
-      this.reloadAttempts = 0;
       const { files, removed, created } = reloaded;
       // A throwing listener must not lose the .gitignore files' own changes below.
       if (!this.stopped && (files.length || removed.length)) {

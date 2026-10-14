@@ -358,27 +358,17 @@ describe('Watcher', () => {
     expect(errors.map(e => e.message)).toContain('listener failed');
   });
 
-  it('a failed rules reload keeps its .gitignore paths for the next attempt', async () => {
-    put('a/.gitignore', 'x/\n'); put('b/.gitignore', 'x/\n');
-    await startWatcher();
-    const real = model.reloadIgnores.bind(model);
-    const reload = vi.spyOn(model, 'reloadIgnores').mockImplementationOnce(async () => { throw new Error('reload failed'); })
-      .mockImplementation(real);
-    put('a/.gitignore', 'y/\n');
-    await waitFor(() => errors.some(e => e.message === 'reload failed'));
-    put('b/.gitignore', 'y/\n');
-    await waitFor(() => reload.mock.calls.length >= 2, 4000);
-    expect(reload.mock.calls[1][0]).toEqual(['a/.gitignore', 'b/.gitignore']);
+  it('a rules reload that fails partway falls back to a rescan and a reset', async () => {
+    put('.gitignore', 'gen/\n');
+    put('gen/x.ts', 'export const x = 1;\n');
+    const w = await startWatcher();
+    let resets = 0;
+    w.on('reset', () => { resets++; });
+    vi.spyOn(model, 'reloadIgnores').mockImplementationOnce(async () => { throw new Error('reload failed'); });
+    put('.gitignore', '# nothing\n');
+    await waitFor(() => resets === 1, 4000);
+    expect(errors.map(e => e.message)).toContain('reload failed');
+    expect(model.get('gen/x.ts')).toBeDefined();
   });
 
-  it('retries a failed rules reload on its own', async () => {
-    put('a/.gitignore', 'x/\n');
-    await startWatcher();
-    const real = model.reloadIgnores.bind(model);
-    const reload = vi.spyOn(model, 'reloadIgnores').mockImplementationOnce(async () => { throw new Error('reload failed'); })
-      .mockImplementation(real);
-    put('a/.gitignore', 'y/\n');
-    await waitFor(() => reload.mock.calls.length >= 2, 5000);
-    expect(reload.mock.calls[1][0]).toEqual(['a/.gitignore']);
-  });
 });

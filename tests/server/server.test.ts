@@ -397,6 +397,14 @@ describe('startServer: WebSocket', () => {
     expect(ofType(c, 'files')[1]).toEqual({ type: 'files', files: [], removed: ['src/b.ts'] });
   });
 
+  it('sends every client a fresh hello when the watcher resets', async () => {
+    const s = await boot();
+    const c = connect(s.port, `?t=${s.token}`);
+    await waitFor(() => c.msgs.length >= 1);
+    watcher.emit('reset');
+    await waitFor(() => ofType(c, 'hello').length >= 2);
+  });
+
   it('reports deletions as removed paths and keeps changes for later hellos', async () => {
     const s = await boot();
     const c = connect(s.port, `?t=${s.token}`);
