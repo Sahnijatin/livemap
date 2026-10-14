@@ -94,10 +94,14 @@ async function bind(server: http.Server, first: number): Promise<number> {
   }
 }
 
-/** Sends unless the client is closed or too far behind, in which case it is terminated. */
-export function safeSend(ws: WebSocket, text: string): void {
+/**
+ * Sends unless the client is closed or too far behind, in which case it is terminated.
+ * `allowance` is extra room for a snapshot (hello) the client may still be receiving, so a project
+ * whose hello alone exceeds the limit does not get every client dropped on the next broadcast.
+ */
+export function safeSend(ws: WebSocket, text: string, allowance = 0): void {
   if (ws.readyState !== WebSocket.OPEN) return;
-  if (ws.bufferedAmount > MAX_BUFFERED_BYTES) {
+  if (ws.bufferedAmount > MAX_BUFFERED_BYTES + allowance) {
     ws.terminate();
     return;
   }
@@ -124,11 +128,17 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
 
-  const send = (ws: WebSocket, msg: ServerMessage): void => safeSend(ws, JSON.stringify(msg));
+  /** Byte size of the last hello sent to each client: room it may still be draining. */
+  const helloBytes = new WeakMap<WebSocket, number>();
+  const sendText = (ws: WebSocket, msg: ServerMessage, text: string): void => {
+    if (msg.type === 'hello') helloBytes.set(ws, Buffer.byteLength(text));
+    safeSend(ws, text, helloBytes.get(ws) ?? 0);
+  };
+  const send = (ws: WebSocket, msg: ServerMessage): void => sendText(ws, msg, JSON.stringify(msg));
   const broadcast = (msg: ServerMessage): void => {
     if (wss.clients.size === 0) return;
     const text = JSON.stringify(msg);
-    for (const ws of wss.clients) safeSend(ws, text);
+    for (const ws of wss.clients) sendText(ws, msg, text);
   };
   const hello = (): ServerMessage => ({
     type: 'hello', root: model.root, name, files: model.all(), changes: [...changes], usedBy, indexing: false,

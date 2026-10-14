@@ -401,4 +401,13 @@ describe('safeSend backpressure', () => {
     expect(f.sent).toEqual([]);
     expect(f.terminated).toBe(true);
   });
+  it('allows extra buffer for a large snapshot the client is still receiving', () => {
+    const f = fake(MAX_BUFFERED_BYTES + 1000);
+    safeSend(f as unknown as WebSocket, 'x', 2000);
+    expect(f.sent).toEqual(['x']);
+    expect(f.terminated).toBe(false);
+    const g = fake(MAX_BUFFERED_BYTES + 3000);
+    safeSend(g as unknown as WebSocket, 'x', 2000);
+    expect(g.terminated).toBe(true);
+  });
 });
