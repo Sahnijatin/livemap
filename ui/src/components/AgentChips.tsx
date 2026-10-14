@@ -1,11 +1,17 @@
 import { useMemo } from 'react';
 import clsx from 'clsx';
+import type { AgentSession } from '@shared/types.js';
 import { useStore } from '../store';
 import { agentName, chipSessions } from '../agents';
 import { useNow } from '../recent';
 import { Avatar } from './Avatar';
+import { usePresenceList } from '../motion';
 
 const MAX_CHIPS = 3;
+
+/** Chip exit (scale and fade), matching `.agentchip.out` in styles.css. */
+const EXIT_MS = 240;
+const sessionId = (s: AgentSession) => s.id;
 
 const STEER_HINT = 'Run livemap init to steer this agent';
 
@@ -18,15 +24,20 @@ export function AgentChips() {
   const paused = useStore(s => s.control.paused);
   const now = useNow(15_000);
   const list = useMemo(() => chipSessions(sessions, now), [sessions, now]);
-  if (!list.length) return null;
-  const shown = list.slice(0, MAX_CHIPS);
+  const shown = usePresenceList(list.slice(0, MAX_CHIPS), sessionId, EXIT_MS);
+  if (!shown.length) return null;
   return (
     <div className="agentchips" role="list" aria-label="Agents">
-      {shown.map(s => {
+      {shown.map(({ item: s, leaving }) => {
         const working = s.status === 'working';
         const state = working ? (paused && s.hooks ? 'paused' : 'working') : 'idle';
         return (
-          <span role="listitem" key={s.id} className={clsx('agentchip pop', state)} title={`${agentName(s.agent)}: ${s.title}${s.hooks ? '' : `. ${STEER_HINT}`}`}>
+          <span
+            key={s.id}
+            {...(leaving ? { 'aria-hidden': true } : { role: 'listitem' })}
+            className={clsx('agentchip', leaving ? 'out' : 'in', state)}
+            title={`${agentName(s.agent)}: ${s.title}${s.hooks ? '' : `. ${STEER_HINT}`}`}
+          >
             <Avatar agent={s.agent} className={clsx(state === 'working' && 'ring')} />
             <span className="lab">{agentName(s.agent)}</span>
             <span className="st">{state}</span>

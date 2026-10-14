@@ -1,10 +1,9 @@
 import type { ElkExtendedEdge, ElkNode } from 'elkjs/lib/elk-api.js';
 import type { Table } from '@shared/domain.js';
 import { tableKey } from '../store';
+import { withTimeout, LAYOUT_TIMEOUT, type ElkRun, type Pos } from './elk';
 
-export type Pos = { x: number; y: number };
-/** Runs one ELK layout. Tests pass real elkjs in-process; the app passes the worker (`workerRun`). */
-export type ElkRun = (graph: ElkNode) => Promise<ElkNode>;
+export { withTimeout, workerRun, LAYOUT_TIMEOUT, type ElkRun, type Pos } from './elk';
 
 /** Card geometry. TableNode's CSS uses the same numbers so handles and layout agree. */
 export const NODE_W = 248;
@@ -14,16 +13,6 @@ export const ROW_H = 26;
 export const MAX_ROWS = 12;
 /** Free space a new table keeps around existing ones, and its downward step when its spot is taken. */
 export const STEP = 24;
-/** A layout that has not settled by now is treated as failed (the caller falls back to a grid). */
-export const LAYOUT_TIMEOUT = 10_000;
-
-/** `p`, or a rejection after `ms`; `onTimeout` runs first so a stuck worker can be dropped. */
-export function withTimeout<T>(p: Promise<T>, ms: number, onTimeout?: () => void): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => { onTimeout?.(); reject(new Error(`layout timed out after ${ms} ms`)); }, ms);
-    p.then(v => { clearTimeout(t); resolve(v); }, e => { clearTimeout(t); reject(e); });
-  });
-}
 
 export { tableKey };
 
@@ -187,55 +176,3 @@ function neighbors(t: Table, tables: Table[]): string[] {
   const inc = tables.filter(o => o.relations.some(r => r.to.toLowerCase() === k)).map(tableKey);
   return [...out, ...inc].filter(n => n !== k);
 }
-
-type ElkApi = { layout(g: ElkNode): Promise<ElkNode>; terminateWorker(): void };
-type WorkerHandle = { elk: ElkApi; pending: Set<(e: unknown) => void>; fail: (e: unknown) => void };
-let worker: WorkerHandle | null = null;
-/** The worker being started or running; cached so concurrent first layouts share one start. Cleared on failure. */
-let workerP: Promise<WorkerHandle> | null = null;
-
-/** Start the ELK worker. A load error, crash or unreadable message rejects every call in flight and drops it. */
-async function startWorker(): Promise<WorkerHandle> {
-  const { default: ELK } = await import('elkjs/lib/elk-api.js');
-  const pending = new Set<(e: unknown) => void>();
-  let raw: Worker | null = null;
-  const elk = new ELK({
-    workerFactory: () => {
-      raw = new Worker(new URL('./elk.worker.ts', import.meta.url), { type: 'module' });
-      raw.addEventListener('error', e => { e.preventDefault?.(); handle.fail(new Error('layout worker failed')); });
-      raw.addEventListener('messageerror', () => handle.fail(new Error('layout worker sent an unreadable message')));
-      return raw;
-    },
-  }) as unknown as ElkApi;
-  const handle: WorkerHandle = {
-    elk,
-    pending,
-    fail(e: unknown) {
-      if (worker === handle) { worker = null; workerP = null; }
-      for (const reject of pending) reject(e);
-      pending.clear();
-      try { elk.terminateWorker(); } catch { raw?.terminate(); }
-    },
-  };
-  return handle;
-}
-
-/** ELK in a module worker, created on first use and kept for the session (and recreated after a failure). */
-export const workerRun: ElkRun = async graph => {
-  const w = await (workerP ??= startWorker().then(
-    h => (worker = h),
-    e => { workerP = null; throw e; },
-  ));
-  let rejectCall: (e: unknown) => void = () => {};
-  const call = new Promise<ElkNode>((resolve, reject) => {
-    rejectCall = reject;
-    w.pending.add(reject);
-    w.elk.layout(graph).then(resolve, reject);
-  });
-  try {
-    // A worker that never answers is stuck: drop it so the next layout starts a fresh one.
-    return await withTimeout(call, LAYOUT_TIMEOUT, () => w.fail(new Error('layout worker timed out')));
-  } finally {
-    w.pending.delete(rejectCall);
-  }
-};

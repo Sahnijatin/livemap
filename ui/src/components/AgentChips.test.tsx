@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { AgentSession } from '@shared/types.js';
@@ -43,5 +43,25 @@ describe('AgentChips (I3)', () => {
     expect(loose.textContent).toContain('not connected');
     expect(loose.querySelector('.nc')?.getAttribute('title')).toBe('Run livemap init to steer this agent');
     expect(hooked.querySelector('.nc')).toBeNull();
+  });
+});
+
+describe('AgentChips motion', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('chips scale in, and a chip that drops out scales out before it is removed', () => {
+    vi.useFakeTimers();
+    mount([session({ id: 'a', title: 'A' }), session({ id: 'b', agent: 'codex', title: 'B' })], false);
+    const chips = () => [...host.querySelectorAll<HTMLElement>('.agentchip')];
+    expect(chips().every(c => c.classList.contains('in'))).toBe(true);
+    // Session b goes quiet for longer than the chip window.
+    act(() => useStore.getState().apply({ type: 'session', session: session({ id: 'b', agent: 'codex', title: 'B', lastAt: Date.now() - 31 * 60_000 }) }));
+    const out = chips().find(c => c.classList.contains('out'))!;
+    expect(out.textContent).toContain('Codex');
+    expect(out.getAttribute('aria-hidden')).toBe('true');
+    expect(out.getAttribute('role')).toBeNull();
+    act(() => { vi.advanceTimersByTime(300); });
+    expect(chips()).toHaveLength(1);
+    expect(chips()[0].textContent).toContain('Claude Code');
   });
 });
