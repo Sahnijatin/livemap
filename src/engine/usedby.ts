@@ -9,23 +9,21 @@ export const usedByStats = { scans: 0 };
 const IDENT = /^[\w$]+$/;
 
 /**
- * Identifier tokens (maximal [\w$] runs) by text. Matching a name against them is the same test
- * as the whole-word regex below, and the index is rebuilt every second during edits while almost
- * every importer's text is unchanged. Bounded by total text size; cleared wholesale when full.
+ * Identifier tokens (maximal [\w$] runs) per file, for its latest text only. Matching a name
+ * against them is the same test as the whole-word regex below, and the index is rebuilt every
+ * second during edits while almost every importer's text is unchanged.
  */
-const TOKENS = new Map<string, Set<string>>();
-const TOKENS_MAX_CHARS = 64 * 1024 * 1024;
-let tokensChars = 0;
+const TOKENS = new Map<string, { text: string; tokens: Set<string> }>();
+const TOKENS_MAX_FILES = 200_000;
 
-function tokensOf(text: string): Set<string> {
-  let set = TOKENS.get(text);
-  if (set) return set;
+function tokensOf(path: string, text: string): Set<string> {
+  const hit = TOKENS.get(path);
+  if (hit && hit.text === text) return hit.tokens;
   usedByStats.scans++;
-  set = new Set(text.match(/[\w$]+/g) ?? []);
-  if (tokensChars + text.length > TOKENS_MAX_CHARS) { TOKENS.clear(); tokensChars = 0; }
-  TOKENS.set(text, set);
-  tokensChars += text.length;
-  return set;
+  const tokens = new Set(text.match(/[\w$]+/g) ?? []);
+  if (!hit && TOKENS.size >= TOKENS_MAX_FILES) TOKENS.clear();
+  TOKENS.set(path, { text, tokens });
+  return tokens;
 }
 
 /**
@@ -51,17 +49,17 @@ export function buildUsedBy(files: FileModel[], contents: (p: string) => string 
     if (!users) continue;
     const names = new Set(f.symbols.filter(s => s.exported && s.name).map(s => s.name));
     for (const name of names) {
-      let uses: (t: string) => boolean;
+      let uses: (path: string, t: string) => boolean;
       if (IDENT.test(name)) {
-        uses = t => tokensOf(t).has(name);
+        uses = (p, t) => tokensOf(p, t).has(name);
       } else {
         // \b-equivalent boundary that also treats `$` as part of an identifier.
         const re = new RegExp(`(?<![\\w$])${escape(name)}(?![\\w$])`);
-        uses = t => re.test(t);
+        uses = (_p, t) => re.test(t);
       }
       const usedIn = users.filter(u => {
         const t = text(u);
-        return t !== null && uses(t);
+        return t !== null && uses(u, t);
       });
       if (usedIn.length) out.push({ file: f.path, symbol: name, usedIn: [...new Set(usedIn)].sort(cmp) });
     }

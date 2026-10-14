@@ -88,6 +88,16 @@ describe('indexing and fixes', () => {
       .toEqual(['src/lib/b.ts', 'src/lib/new.ts']);
     expect(indexStats.jsParses - before).toBe(1);
   });
+  it('keeps only the latest text per file in the specifier cache', () => {
+    const v1 = `import b from './lib/b'; // v1 ${Math.random()}`;
+    const v2 = `import b from './lib/b'; // v2 ${Math.random()}`;
+    const before = indexStats.jsParses;
+    imp('src/cache.ts', 'typescript', v1);
+    imp('src/cache.ts', 'typescript', v2);
+    imp('src/cache.ts', 'typescript', v1); // v1 was replaced by v2, so it is parsed again
+    imp('src/cache.ts', 'typescript', v1);
+    expect(indexStats.jsParses - before).toBe(3);
+  });
   it('prefers the longest alias prefix', () => {
     expect(imp('src/a.ts','typescript',`import b from '@a/lib/b'`, { aliases: [['@a',['nowhere']],['@a/lib',['src/lib']]] }).local).toEqual(['src/lib/b.ts']);
   });

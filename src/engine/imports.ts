@@ -78,22 +78,19 @@ function resolveJsPath(base: string, ctx: ImportCtx): string | null {
 }
 
 /**
- * Specifiers by source text. Relinking re-resolves every file whenever the file set changes, and
- * the text is unchanged for almost all of them, so only resolution (cheap) is redone. Bounded by
- * total text size; cleared wholesale when full.
+ * Specifiers per file, for its latest text only. Relinking re-resolves every file whenever the
+ * file set changes while almost every text is unchanged, so only resolution (cheap) is redone.
  */
-const JS_SPECS = new Map<string, string[]>();
-const JS_SPECS_MAX_CHARS = 64 * 1024 * 1024;
-let jsSpecsChars = 0;
+const JS_SPECS = new Map<string, { text: string; specs: string[] }>();
+const JS_SPECS_MAX_FILES = 200_000;
 
-function jsSpecs(src: string): string[] {
-  const hit = JS_SPECS.get(src);
-  if (hit) return hit;
-  const out = parseJsSpecs(src);
-  if (jsSpecsChars + src.length > JS_SPECS_MAX_CHARS) { JS_SPECS.clear(); jsSpecsChars = 0; }
-  JS_SPECS.set(src, out);
-  jsSpecsChars += src.length;
-  return out;
+function jsSpecs(path: string, src: string): string[] {
+  const hit = JS_SPECS.get(path);
+  if (hit && hit.text === src) return hit.specs;
+  const specs = parseJsSpecs(src);
+  if (!hit && JS_SPECS.size >= JS_SPECS_MAX_FILES) JS_SPECS.clear();
+  JS_SPECS.set(path, { text: src, specs });
+  return specs;
 }
 
 function parseJsSpecs(src: string): string[] {
@@ -129,7 +126,7 @@ function longestFirst(aliases: ImportCtx['aliases']): ImportCtx['aliases'] {
 
 function jsImports(path: string, src: string, ctx: ImportCtx, local: Set<string>, external: Set<string>): void {
   const dir = posix.dirname(path) === '.' ? '' : posix.dirname(path);
-  for (const spec of jsSpecs(src)) {
+  for (const spec of jsSpecs(path, src)) {
     if (spec.startsWith('./') || spec.startsWith('../') || spec === '.' || spec === '..') {
       const r = resolveJsPath(join(dir, spec), ctx);
       if (r) local.add(r);

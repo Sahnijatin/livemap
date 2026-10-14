@@ -56,4 +56,12 @@ describe('buildUsedBy', () => {
     const files = [file('ops.h', [sym('operator+', true)]), file('use.cc', [], ['ops.h'])];
     expect(buildUsedBy(files, () => 'a operator+ b')).toEqual([{ file: 'ops.h', symbol: 'operator+', usedIn: ['use.cc'] }]);
   });
+
+  it('keeps only the latest text per file in the token cache', () => {
+    const files = [file('lib.ts', [sym('alpha', true)]), file('u.ts', [], ['lib.ts'])];
+    const tag = Math.random();
+    const before = usedByStats.scans;
+    for (const t of [`alpha ${tag}`, `beta ${tag}`, `alpha ${tag}`]) buildUsedBy(files, p => (p === 'u.ts' ? t : null));
+    expect(usedByStats.scans - before).toBe(3);
+  });
 });
