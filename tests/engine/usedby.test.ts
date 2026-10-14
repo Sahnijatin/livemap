@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildUsedBy } from '../../src/engine/usedby.js';
+import { buildUsedBy, usedByStats } from '../../src/engine/usedby.js';
 import type { CodeSymbol, FileModel } from '../../src/shared/types.js';
 
 function sym(name: string, exported: boolean): CodeSymbol {
@@ -35,5 +35,46 @@ describe('buildUsedBy', () => {
     ];
     const text: Record<string, string> = { 'use.ts': 'getter(); $store.x;' };
     expect(buildUsedBy(files, p => text[p] ?? null)).toEqual([{ file: 'lib.ts', symbol: '$store', usedIn: ['use.ts'] }]);
+  });
+
+  it('rebuilding rescans only importer texts that changed', () => {
+    const cache = new Map();
+    const files = [file('lib.ts', [sym('alpha', true), sym('beta', true)]), file('u1.ts', [], ['lib.ts']), file('u2.ts', [], ['lib.ts'])];
+    const text: Record<string, string> = { 'u1.ts': 'alpha();', 'u2.ts': 'beta();' };
+    const before = usedByStats.scans;
+    buildUsedBy(files, p => text[p] ?? null, cache);
+    expect(usedByStats.scans - before).toBe(2);
+    text['u2.ts'] = 'alpha(); beta();';
+    expect(buildUsedBy(files, p => text[p] ?? null, cache)).toEqual([
+      { file: 'lib.ts', symbol: 'alpha', usedIn: ['u1.ts', 'u2.ts'] },
+      { file: 'lib.ts', symbol: 'beta', usedIn: ['u2.ts'] },
+    ]);
+    expect(usedByStats.scans - before).toBe(3);
+  });
+
+  it('still matches names that are not plain identifiers', () => {
+    const files = [file('ops.h', [sym('operator+', true)]), file('use.cc', [], ['ops.h'])];
+    expect(buildUsedBy(files, () => 'a operator+ b')).toEqual([{ file: 'ops.h', symbol: 'operator+', usedIn: ['use.cc'] }]);
+  });
+
+  it('keeps only the latest text per file in the token cache, and drops files that are gone', () => {
+    const cache = new Map();
+    const files = [file('lib.ts', [sym('alpha', true)]), file('u.ts', [], ['lib.ts'])];
+    const before = usedByStats.scans;
+    for (const t of ['alpha', 'beta', 'alpha']) buildUsedBy(files, p => (p === 'u.ts' ? t : null), cache);
+    expect(usedByStats.scans - before).toBe(3);
+    expect([...cache.keys()]).toEqual(['u.ts']);
+    buildUsedBy([files[0]], () => null, cache);
+    expect(cache.size).toBe(0);
+  });
+
+  it('keeps the tokens of a listed importer that was not needed this build', () => {
+    const cache = new Map();
+    const lib = file('lib.ts', [sym('alpha', true)]);
+    const files = [lib, file('u.ts', [], ['lib.ts'])];
+    buildUsedBy(files, p => (p === 'u.ts' ? 'alpha' : null), cache);
+    const noExports = [{ ...lib, symbols: [] }, files[1]];
+    buildUsedBy(noExports, p => (p === 'u.ts' ? 'alpha' : null), cache); // lib briefly exports nothing
+    expect(cache.has('u.ts')).toBe(true);
   });
 });

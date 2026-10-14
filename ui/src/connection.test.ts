@@ -21,6 +21,7 @@ async function start(search: string) {
 }
 
 beforeEach(() => {
+  window.sessionStorage.clear();
   vi.useFakeTimers();
   FakeWebSocket.instances = [];
   vi.stubGlobal('WebSocket', FakeWebSocket);
@@ -40,10 +41,24 @@ describe('connect', () => {
     expect(conn.authHeaders()).toEqual({ 'x-livemap-token': 'abc123' });
   });
 
-  it('relies on the cookie when there is no ?t=', async () => {
+  it('keeps the token in sessionStorage so a reload without ?t= still connects', async () => {
+    await start('?t=abc123');
     const { conn } = await start('');
-    expect(last().url).toBe(`ws://${window.location.host}/ws`);
-    expect(conn.authHeaders()).toEqual({});
+    expect(last().url).toBe(`ws://${window.location.host}/ws?t=abc123`);
+    expect(conn.authHeaders()).toEqual({ 'x-livemap-token': 'abc123' });
+  });
+
+  it('reports unauthorized without opening a socket when there is no token at all', async () => {
+    const { useStore } = await start('');
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(useStore.getState().connection).toBe('unauthorized');
+  });
+
+  it('a new ?t= replaces the stored token', async () => {
+    await start('?t=old');
+    const { conn } = await start('?t=new');
+    expect(conn.authHeaders()).toEqual({ 'x-livemap-token': 'new' });
+    expect(window.sessionStorage.getItem('livemap.token')).toBe('new');
   });
 
   it('reconnects with backoff 0.5 s doubling to a 5 s cap, and resets after a successful open', async () => {
@@ -69,6 +84,16 @@ describe('connect', () => {
     expect(FakeWebSocket.instances.length).toBe(before + 1);
   });
 
+  it('forgets a stored key the server rejects, so a reload shows the gate instead of retrying it', async () => {
+    await start('?t=stale');
+    last().onclose!({ code: 4401 });
+    expect(window.sessionStorage.getItem('livemap.token')).toBeNull();
+    const before = FakeWebSocket.instances.length;
+    const { useStore } = await start('');
+    expect(FakeWebSocket.instances.length).toBe(before);
+    expect(useStore.getState().connection).toBe('unauthorized');
+  });
+
   it('never retries after close code 4401 and reports unauthorized', async () => {
     const { useStore } = await start('?t=bad');
     last().onclose!({ code: 4401 });
@@ -79,7 +104,7 @@ describe('connect', () => {
   });
 
   it('feeds messages to the store and ignores malformed ones', async () => {
-    const { useStore } = await start('');
+    const { useStore } = await start('?t=k');
     last().onopen!();
     last().onmessage!({ data: 'not json' });
     last().onmessage!({ data: JSON.stringify({ type: 'hello', root: '/p/x', name: 'x', files: [], changes: [], usedBy: [], indexing: false }) });

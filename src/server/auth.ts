@@ -1,10 +1,6 @@
 import crypto from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 
-/** Cookies ignore ports, so the name carries the port to keep concurrent instances apart. */
-export function cookieName(port: number): string {
-  return `lm_token_${port}`;
-}
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost']);
 
 export function newToken(): string {
@@ -20,30 +16,14 @@ export function tokenMatches(expected: string, given: string | null | undefined)
   return crypto.timingSafeEqual(a, b);
 }
 
-function cookieValue(req: IncomingMessage, name: string): string | null {
-  const header = req.headers.cookie;
-  if (!header) return null;
-  for (const part of header.split(';')) {
-    const eq = part.indexOf('=');
-    if (eq < 0) continue;
-    if (part.slice(0, eq).trim() === name) return part.slice(eq + 1).trim();
-  }
-  return null;
-}
-
-export type TokenSource = 'query' | 'header' | 'cookie';
-
-/** Which source carried a valid token, or null when none did. */
-export function authenticate(req: IncomingMessage, url: URL, token: string, port: number): TokenSource | null {
-  if (tokenMatches(token, url.searchParams.get('t'))) return 'query';
+/**
+ * True when the `?t=` query or the x-livemap-token header carries the token. There is deliberately
+ * no cookie: cookies ignore ports, so every other server on 127.0.0.1 would receive it.
+ */
+export function authenticate(req: IncomingMessage, url: URL, token: string): boolean {
+  if (tokenMatches(token, url.searchParams.get('t'))) return true;
   const h = req.headers['x-livemap-token'];
-  if (tokenMatches(token, Array.isArray(h) ? h[0] : h)) return 'header';
-  if (tokenMatches(token, cookieValue(req, cookieName(port)))) return 'cookie';
-  return null;
-}
-
-export function sessionCookie(token: string, port: number): string {
-  return `${cookieName(port)}=${token}; HttpOnly; SameSite=Strict; Path=/`;
+  return tokenMatches(token, Array.isArray(h) ? h[0] : h);
 }
 
 /** Hostname of a `host[:port]` value, lowercased; IPv6 brackets kept. */

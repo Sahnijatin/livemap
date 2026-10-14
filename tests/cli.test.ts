@@ -145,7 +145,7 @@ describe('livemap CLI', () => {
       const apply = (files: Msg['files']) => files!.forEach(f => state.set(f.path, f.symbols.map(s => s.name)));
       await waitFor(() => {
         state.clear();
-        for (const m of msgs) if (m.type === 'hello' || m.type === 'files') apply(m.files);
+        for (const m of msgs) if (m.type === 'hello' || m.type === 'files' || m.type === 'change') apply(m.files);
         return (state.get('src/late.ts') ?? []).includes('late') && (state.get('src/a.ts') ?? []).includes('edited');
       }, 5000);
       expect(state.get('src/a.ts')).toEqual(['a', 'edited']);
@@ -173,7 +173,13 @@ describe('livemap CLI', () => {
         // The opener must have run while the server was still indexing.
         expect(fs.existsSync(marker)).toBe(true);
         expect(msgs.some(m => m.type === 'hello')).toBe(false);
-        expect(fs.readFileSync(marker, 'utf8').trim()).toBe(out.match(URL_RE)![0]);
+        // The opener gets a one-time launch URL, never the token (process args are readable).
+        const opened = fs.readFileSync(marker, 'utf8').trim();
+        expect(opened).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${port}/\\?launch=[0-9a-f]{32}$`));
+        expect(opened).not.toContain(token);
+        const res = await fetch(opened, { redirect: 'manual' });
+        expect(res.status).toBe(302);
+        expect(res.headers.get('location')).toBe(`/?t=${token}`);
       } finally {
         ws.terminate();
       }

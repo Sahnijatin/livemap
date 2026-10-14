@@ -68,7 +68,7 @@ export function CodeView({ file, change }: { file: FileModel; change: ChangeSumm
     if (reason) return;
     const ctrl = new AbortController();
     setLoad(prev => (prev.state === 'ok' ? prev : { state: 'loading' }));
-    fetch(`/api/file?path=${encodeURIComponent(file.path)}`, { headers: authHeaders(), signal: ctrl.signal, credentials: 'same-origin' })
+    fetch(`/api/file?path=${encodeURIComponent(file.path)}`, { headers: authHeaders(), signal: ctrl.signal })
       .then(async res => {
         if (res.status === 403) return setLoad({ state: 'error', message: 'This file cannot be shown.' });
         if (res.status === 404) return setLoad({ state: 'error', message: 'This file no longer exists.' });
