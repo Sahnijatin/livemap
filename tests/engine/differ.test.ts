@@ -128,13 +128,22 @@ describe('buildChange', () => {
     const base: FileModel = { path: 'r.ts', lang: 'typescript', size: 0, lines: 0, symbols: [], imports: { local: [], external: [] }, routes: [], entities: [], env: [], flags: {} };
     const ent = (fields: string[]) => ({ name: 'User', table: 'users', orm: 'prisma', file: 'r.ts', line: 1, fields: fields.map(n => ({ name: n, type: 'String' })) });
     const before: FileModel = { ...base, entities: [ent(['id', 'old'])], deps: { deps: [{ name: 'a', version: '1', eco: 'npm' }, { name: 'gone', version: '1', eco: 'npm' }] } };
-    const after: FileModel = { ...base, routes: [{ method: 'GET', path: '/x', line: 3 }], entities: [{ ...ent(['id', 'email']), fields: [{ name: 'id', type: 'Int' }, { name: 'email', type: 'String' }] }, { ...ent([]), name: 'Post' }], deps: { deps: [{ name: 'a', version: '2', eco: 'npm' }, { name: 'b', version: '1', eco: 'npm' }] } };
+    const after: FileModel = { ...base, routes: [{ method: 'GET', path: '/x', line: 3, kind: 'api', framework: 'express' }], entities: [{ ...ent(['id', 'email']), fields: [{ name: 'id', type: 'Int' }, { name: 'email', type: 'String' }] }, { ...ent([]), name: 'Post' }], deps: { deps: [{ name: 'a', version: '2', eco: 'npm' }, { name: 'b', version: '1', eco: 'npm' }] } };
     const c = buildChange({ path: 'r.ts', kind: 'modified', before, after, beforeText: '', afterText: '', touched: [] }, 1);
-    expect(c.routes.added).toEqual([{ method: 'GET', path: '/x', line: 3 }]);
+    expect(c.routes.added).toEqual([{ method: 'GET', path: '/x', line: 3, kind: 'api', framework: 'express' }]);
     expect(c.entities.added).toEqual([{ name: 'Post', fields: 0, orm: 'prisma' }]);
     expect(c.entities.changed).toEqual([{ name: 'User', addedFields: ['email'], removedFields: ['old'], changedFields: ['id'] }]);
     expect(c.deps!.added.map(d => d.name)).toEqual(['b']);
     expect(c.deps!.removed.map(d => d.name)).toEqual(['gone']);
     expect(c.deps!.changed).toMatchObject([{ name: 'a', version: '2', from: '1' }]);
+  });
+
+  it('reports an ALTER fragment as a table change, not a new table (R5)', () => {
+    const base: FileModel = { path: 'db/002.sql', lang: 'sql', size: 0, lines: 0, symbols: [], imports: { local: [], external: [] }, routes: [], entities: [], env: [], flags: {} };
+    const alter = { name: 'orders', table: 'orders', orm: 'sql', file: 'db/002.sql', line: 1, partial: true as const, fields: [{ name: 'status', type: 'TEXT' }, { name: 'paid_at', type: 'TIMESTAMP' }] };
+    const added = buildChange({ path: 'db/002.sql', kind: 'created', before: null, after: { ...base, entities: [alter] }, beforeText: null, afterText: '', touched: [] }, 1);
+    expect(added.entities).toEqual({ added: [], removed: [], changed: [{ name: 'orders', addedFields: ['status', 'paid_at'], removedFields: [], changedFields: [] }] });
+    const removed = buildChange({ path: 'db/002.sql', kind: 'deleted', before: { ...base, entities: [alter] }, after: null, beforeText: '', afterText: null, touched: [] }, 2);
+    expect(removed.entities).toEqual({ added: [], removed: [], changed: [{ name: 'orders', addedFields: [], removedFields: ['status', 'paid_at'], changedFields: [] }] });
   });
 });
