@@ -1,0 +1,89 @@
+{
+  "app.py": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/",
+        "handler": "index",
+        "line": 10,
+        "kind": "api",
+        "framework": "flask"
+      },
+      {
+        "method": "GET",
+        "path": "/login",
+        "handler": "login",
+        "line": 15,
+        "kind": "api",
+        "framework": "flask"
+      },
+      {
+        "method": "POST",
+        "path": "/login",
+        "handler": "login",
+        "line": 15,
+        "kind": "api",
+        "framework": "flask"
+      },
+      {
+        "method": "GET",
+        "path": "/users/:user_id",
+        "handler": "user",
+        "line": 20,
+        "kind": "api",
+        "framework": "flask"
+      }
+    ],
+    "mounts": [
+      {
+        "prefix": "/api",
+        "spec": ".orders",
+        "line": 6,
+        "framework": "flask"
+      },
+      {
+        "prefix": "/",
+        "spec": ".admin",
+        "line": 7,
+        "framework": "flask"
+      }
+    ]
+  },
+  "orders.py": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/orders",
+        "handler": "list_orders",
+        "line": 6,
+        "kind": "api",
+        "framework": "flask"
+      },
+      {
+        "method": "POST",
+        "path": "/orders/:id/cancel",
+        "handler": "cancel",
+        "line": 11,
+        "kind": "api",
+        "framework": "flask"
+      },
+      {
+        "method": "PATCH",
+        "path": "/orders/:rest",
+        "handler": "other",
+        "line": 16,
+        "kind": "api",
+        "framework": "flask"
+      },
+      {
+        "method": "PUT",
+        "path": "/orders/:rest",
+        "handler": "other",
+        "line": 16,
+        "kind": "api",
+        "framework": "flask"
+      }
+    ],
+    "mounts": []
+  }
+}
