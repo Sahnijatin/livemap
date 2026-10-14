@@ -36,6 +36,14 @@ describe('languages', () => {
     }
     for (const p of ['.env-example', '.env_sample', '.environment.ts', 'env-prod']) expect(isSecretEnvPath(p), p).toBe(false);
   });
+  it('treats suffixed *.env variants as secret, but not examples or code files', () => {
+    for (const p of ['config/prod.env.local', 'staging.env.bak', 'Prod.ENV.Local', 'app.env-old', '.envrc.local']) {
+      expect(isSecretEnvPath(p), p).toBe(true);
+    }
+    for (const p of ['example.env', 'sample.env', 'app.template.env', 'prod.env.example', 'config.env.ts', 'app.env.js', 'vite.env.d.ts', 'prod.env.json']) {
+      expect(isSecretEnvPath(p), p).toBe(false);
+    }
+  });
   it('treats direnv files, *.env files and credential rc files as secret', () => {
     for (const p of ['.envrc', 'cfg/.envrc', '.envrc~', 'prod.env', 'cfg/Secrets.ENV', 'docker.env~', '.npmrc', '.netrc', '.pypirc', 'cfg/.npmrc']) {
       expect(isSecretEnvPath(p), p).toBe(true);

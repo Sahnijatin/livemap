@@ -43,16 +43,24 @@ function extOf(path: string): string {
 /** Files whose values are never stored or sent; only variable names are read from them. */
 const SECRET_NAMES = new Set(['.env', '.envrc', '.npmrc', '.netrc', '.pypirc']);
 
+const EXAMPLE = /(^|[._-])(example|sample|template)$/;
+
 /**
- * `.env`, `.env.*`, `.envrc` (direnv), `*.env` and credential rc files, except `.env.*` / `.envrc.*`
- * variants ending in `.example`, `.sample` or `.template`.
+ * Secret files: `.env`, `.env.*`, `.envrc(.*)`, `*.env`, `*.env.*` and credential rc files.
+ * Examples (`.env.example`, `example.env`, `prod.env.sample`) are not secret, nor are code
+ * files that merely have `.env` in their name (`config.env.ts`, `vite.env.d.ts`).
  */
 export function isSecretEnvPath(path: string): boolean {
   // Editor backups (`.env~`) and autosaves (`#.env#`) hold the same values as the file itself.
   const b = baseName(path).toLowerCase().replace(/^#(.*)#$/, '$1').replace(/~+$/, '');
-  if (SECRET_NAMES.has(b) || /^.+\.env$/.test(b)) return true;
-  if (!/^\.env(rc)?[._-]/.test(b)) return false;
-  return !/[._-](example|sample|template)$/.test(b);
+  if (SECRET_NAMES.has(b)) return true;
+  if (/^\.env(rc)?[._-]/.test(b)) return !EXAMPLE.test(b);
+  const m = /^(.+)\.env(?:[._-](.+))?$/.exec(b);
+  if (!m) return false;
+  const [, stem, suffix] = m;
+  if (EXAMPLE.test(stem)) return false;
+  if (suffix === undefined) return true;
+  return !EXAMPLE.test(suffix) && !Object.hasOwn(EXT, suffix.slice(suffix.lastIndexOf('.') + 1));
 }
 
 export function isBinaryPath(path: string): boolean {
