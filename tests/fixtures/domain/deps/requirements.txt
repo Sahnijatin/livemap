@@ -1,0 +1,7 @@
+# core
+fastapi==0.110.0
+uvicorn[standard]>=0.29  # server
+requests
+-r requirements-dev.txt
+-e git+https://github.com/x/y.git#egg=y
+SQLAlchemy>=2.0,<3 ; python_version >= "3.8"

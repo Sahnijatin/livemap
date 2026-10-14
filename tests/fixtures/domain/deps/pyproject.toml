@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+
+[project]
+name = "orders"
+dependencies = [
+  "fastapi[all]>=0.110",
+  "uvicorn[standard]==0.29.0",
+  "pydantic==2.7.0",
+  "httpx",
+]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+sqlalchemy = "^2.0"
+celery = { version = "^5.3", extras = ["redis"] }

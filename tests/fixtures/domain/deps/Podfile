@@ -1,0 +1,6 @@
+platform :ios, '15.0'
+
+target 'Shop' do
+  pod 'Alamofire', '~> 5.8'
+  pod 'SnapKit'
+end
