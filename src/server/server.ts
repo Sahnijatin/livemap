@@ -213,12 +213,13 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method not allowed' }, { allow: 'GET, HEAD' });
 
     // Only a real navigation spends a launch code: a HEAD, link check or browser prefetch/prerender
-    // (Sec-Purpose / Purpose headers) must not lock the browser out. A prefetch gets a 503 so the
+    // (Sec-Purpose, Purpose, Safari's X-Purpose, Firefox's X-Moz) must not lock the browser out. A prefetch gets a 503 so the
     // browser discards it and makes the real request when the page is actually opened.
     const launch = req.method === 'GET' && url.pathname === '/' ? url.searchParams.get('launch') : null;
     const entry = launch === null ? undefined : launches.get(launch);
-    const purpose = `${req.headers['sec-purpose'] ?? ''} ${req.headers.purpose ?? ''}`;
-    if (entry && /prefetch|prerender/i.test(purpose)) return json(res, 503, { error: 'not prefetchable' });
+    const h = req.headers;
+    const purpose = `${h['sec-purpose'] ?? ''} ${h.purpose ?? ''} ${h['x-purpose'] ?? ''} ${h['x-moz'] ?? ''}`;
+    if (entry && /prefetch|prerender|preview/i.test(purpose)) return json(res, 503, { error: 'not prefetchable' });
     if (entry && Date.now() > entry.expires) {
       launches.delete(launch!);
       if (!entry.spent) opts.warn?.('the browser launch link expired before it was opened. Open the URL printed above instead.');

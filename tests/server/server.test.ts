@@ -202,7 +202,7 @@ describe('startServer: HTTP auth', () => {
   it('a browser prefetch or prerender does not spend a launch code', async () => {
     const s = await boot();
     const q = s.launchUrl().replace(/^http:\/\/[^/]+/, '');
-    for (const h of [{ 'sec-purpose': 'prefetch;prerender' }, { purpose: 'prefetch' }] as Record<string, string>[]) {
+    for (const h of [{ 'sec-purpose': 'prefetch;prerender' }, { purpose: 'prefetch' }, { 'x-purpose': 'preview' }, { 'x-moz': 'prefetch' }] as Record<string, string>[]) {
       const r = await get(s.port, q, h);
       expect(r.status).toBe(503);
       expect(r.headers['cache-control']).toBe('no-store');

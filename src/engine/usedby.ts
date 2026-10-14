@@ -26,7 +26,7 @@ function tokensOf(path: string, text: string, cache: TokenCache): Set<string> {
  *
  * Matching a plain identifier against an importer's token set is the same test as the whole-word
  * regex. The index is rebuilt every second during edits while almost every importer's text is
- * unchanged, so pass the same `cache` each time; entries for files no longer listed are dropped.
+ * unchanged, so pass the same `cache` each time; entries for files no longer in `files` are dropped.
  */
 export function buildUsedBy(files: FileModel[], contents: (p: string) => string | null, cache: TokenCache = new Map()): UsedByEntry[] {
   const importers = new Map<string, string[]>();
@@ -62,6 +62,7 @@ export function buildUsedBy(files: FileModel[], contents: (p: string) => string 
       if (usedIn.length) out.push({ file: f.path, symbol: name, usedIn: [...new Set(usedIn)].sort(cmp) });
     }
   }
-  for (const p of cache.keys()) if (!textCache.has(p)) cache.delete(p);
+  const listed = new Set(files.map(f => f.path));
+  for (const p of cache.keys()) if (!listed.has(p)) cache.delete(p);
   return out.sort((a, b) => cmp(a.file, b.file) || cmp(a.symbol, b.symbol));
 }

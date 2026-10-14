@@ -86,6 +86,14 @@ describe('walk', () => {
     put('.gitignore', '!dist/\n');
     expect(createIgnore(root)('dist', true)).toBe(false);
   });
+  it('a nested negation works under a default directory the root .gitignore re-included', () => {
+    put('.gitignore', '!vendor/\n');
+    put('src/.gitignore', '*.gen.ts\n');
+    put('src/vendor/.gitignore', '!keep.gen.ts\n');
+    const ig = createIgnore(root);
+    expect(ig('src/vendor/keep.gen.ts', false)).toBe(false);
+    expect(ig('src/vendor/other.gen.ts', false)).toBe(true);
+  });
   it('directory patterns need isDir', () => {
     put('.gitignore', 'secret/\n');
     const ig = createIgnore(root);

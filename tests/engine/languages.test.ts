@@ -48,10 +48,10 @@ describe('languages', () => {
     }
   });
   it('keeps secret: .env.* JS files, names that merely contain example words, and credential rc variants', () => {
-    for (const p of ['.env.js', '.env.local.js', '.env.production.mjs', 'email-template.env', 'example-api.env', 'sample_app.env', '.env.example.local', '.npmrc.bak', '.netrc.old', '.pypirc.local']) {
+    for (const p of ['.env.js', '.env.local.js', '.env.production.mjs', 'email-template.env', 'example-api.env', 'sample_app.env', '.env.example.local', '.npmrc.bak', '.netrc.old', '.pypirc.local', 'sample.env.local', 'example.env.production']) {
       expect(isSecretEnvPath(p), p).toBe(true);
     }
-    for (const p of ['.env.d.ts', '.env.example', '.env.example.json', '.env-sample', 'app.template.env', 'example.env', 'prod.env.example.json', '.npmrc.example']) {
+    for (const p of ['.env.d.ts', '.env.example', '.env.example.json', '.env-sample', 'app.template.env', 'example.env', 'example.env.json', 'prod.env.example.json', '.npmrc.example']) {
       expect(isSecretEnvPath(p), p).toBe(false);
     }
   });

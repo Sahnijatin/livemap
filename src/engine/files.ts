@@ -77,7 +77,6 @@ export function createIgnore(root: string, reuse?: { previous: IgnoreFn; changed
   };
   const dirs = new Map<string, boolean>();
 
-  /** The rules of the directories from root down to rel's parent, deepest opinion last. */
   /** The rules of the directories from root down to r's parent, deepest opinion last. */
   const own = (r: string, isDir: boolean): boolean => {
     const q = (sub: string): string => (isDir ? `${sub}/` : sub);
@@ -91,8 +90,9 @@ export function createIgnore(root: string, reuse?: { previous: IgnoreFn; changed
           const t = ig.test(q(r.slice(cut + 1)));
           if (t.ignored) ignored = true;
           // Only the root .gitignore may re-include what LiveMap ignores by default
-          // (node_modules, .git, dist...); a nested or vendored one may not.
-          else if (t.unignored && (cut === -1 || !(defaultHit ??= defaults.ignores(q(r))))) ignored = false;
+          // (node_modules, .git, dist...); a nested or vendored one may not, unless the root
+          // already did.
+          else if (t.unignored && (cut === -1 || !(defaultHit ??= defaults.ignores(q(r)) && top.ignores(q(r))))) ignored = false;
         } catch {
           /* a path the matcher cannot express is not ignored by it */
         }

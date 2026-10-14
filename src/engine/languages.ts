@@ -54,7 +54,7 @@ const JS_CODE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
  * Secret files: `.env`, `.env.*`, `.envrc(.*)`, `*.env`, `*.env.*` and credential rc files
  * (`.npmrc`, `.netrc`, `.pypirc`, and their `.bak`-style copies). Examples are not secret when
  * the example marker is the last segment (`.env.example`, `.env.example.json`) or the stem's last
- * dot-segment (`example.env`, `app.template.env`). `*.env.*` JS/TS source (`config.env.ts`) and
+ * dot-segment with nothing but a data extension after `.env` (`example.env`, `app.template.env.json`). `*.env.*` JS/TS source (`config.env.ts`) and
  * `.env.d.ts` declarations are not secret; a `.env.*` JS file (`.env.local.js`) is.
  */
 export function isSecretEnvPath(path: string): boolean {
@@ -66,7 +66,8 @@ export function isSecretEnvPath(path: string): boolean {
   const m = /^(.+)\.env(?:[._-](.+))?$/.exec(b);
   if (!m) return false;
   const [, stem, suffix] = m;
-  if (/(^|\.)(example|sample|template)$/.test(stem)) return false;
+  // `example.env` / `example.env.json` are examples; `example.env.local` is a real override.
+  if (/(^|\.)(example|sample|template)$/.test(stem) && (suffix === undefined || DATA_EXT.test(`.${suffix}`))) return false;
   return suffix === undefined || (!endsAsExample(suffix) && !JS_CODE.test(`.${suffix}`));
 }
 

@@ -67,4 +67,14 @@ describe('buildUsedBy', () => {
     buildUsedBy([files[0]], () => null, cache);
     expect(cache.size).toBe(0);
   });
+
+  it('keeps the tokens of a listed importer that was not needed this build', () => {
+    const cache = new Map();
+    const lib = file('lib.ts', [sym('alpha', true)]);
+    const files = [lib, file('u.ts', [], ['lib.ts'])];
+    buildUsedBy(files, p => (p === 'u.ts' ? 'alpha' : null), cache);
+    const noExports = [{ ...lib, symbols: [] }, files[1]];
+    buildUsedBy(noExports, p => (p === 'u.ts' ? 'alpha' : null), cache); // lib briefly exports nothing
+    expect(cache.has('u.ts')).toBe(true);
+  });
 });
