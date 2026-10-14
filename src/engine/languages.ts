@@ -43,28 +43,31 @@ function extOf(path: string): string {
 /** Files whose values are never stored or sent; only variable names are read from them. */
 const SECRET_NAMES = new Set(['.env', '.envrc', '.npmrc', '.netrc', '.pypirc']);
 
-/** An example/sample/template marker in any dot-, dash- or underscore-separated segment. */
-const EXAMPLE = /(^|[._-])(example|sample|template)([._-]|$)/;
+/** Data formats an env file or its example may be written in; stripped before example checks. */
+const DATA_EXT = /\.(json|ya?ml|toml|txt)$/;
+/** Ends in an example/sample/template segment (`.env.example`, `.env-sample`, `x.env.template.json`). */
+const endsAsExample = (s: string): boolean => /(^|[._-])(example|sample|template)$/.test(s.replace(DATA_EXT, ''));
 /** JS/TS source that merely has `.env` in its name (`config.env.ts`, `vite.env.d.ts`). */
-const JS_CODE = new Set(['ts', 'tsx', 'mts', 'cts', 'js', 'jsx', 'mjs', 'cjs']);
-const isJsCode = (name: string): boolean => name.includes('.') && JS_CODE.has(name.slice(name.lastIndexOf('.') + 1));
+const JS_CODE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 
 /**
- * Secret files: `.env`, `.env.*`, `.envrc(.*)`, `*.env`, `*.env.*` and credential rc files.
- * Examples (`.env.example`, `example.env`, `app.env.example.json`) are not secret, nor is JS/TS
- * source with `.env` in its name. Env files in any other format (`.env.json`, `settings.env.py`)
- * are secret.
+ * Secret files: `.env`, `.env.*`, `.envrc(.*)`, `*.env`, `*.env.*` and credential rc files
+ * (`.npmrc`, `.netrc`, `.pypirc`, and their `.bak`-style copies). Examples are not secret when
+ * the example marker is the last segment (`.env.example`, `.env.example.json`) or the stem's last
+ * dot-segment (`example.env`, `app.template.env`). `*.env.*` JS/TS source (`config.env.ts`) and
+ * `.env.d.ts` declarations are not secret; a `.env.*` JS file (`.env.local.js`) is.
  */
 export function isSecretEnvPath(path: string): boolean {
   // Editor backups (`.env~`) and autosaves (`#.env#`) hold the same values as the file itself.
   const b = baseName(path).toLowerCase().replace(/^#(.*)#$/, '$1').replace(/~+$/, '');
   if (SECRET_NAMES.has(b)) return true;
-  if (/^\.env(rc)?[._-]/.test(b)) return !EXAMPLE.test(b) && !isJsCode(b);
+  const prefixed = /^\.(?:envrc|env|npmrc|netrc|pypirc)([._-].*)$/.exec(b);
+  if (prefixed) return !endsAsExample(prefixed[1]) && !b.endsWith('.d.ts');
   const m = /^(.+)\.env(?:[._-](.+))?$/.exec(b);
   if (!m) return false;
   const [, stem, suffix] = m;
-  if (EXAMPLE.test(stem)) return false;
-  return suffix === undefined || (!EXAMPLE.test(suffix) && !isJsCode(`.${suffix}`));
+  if (/(^|\.)(example|sample|template)$/.test(stem)) return false;
+  return suffix === undefined || (!endsAsExample(suffix) && !JS_CODE.test(`.${suffix}`));
 }
 
 export function isBinaryPath(path: string): boolean {

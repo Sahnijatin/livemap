@@ -47,6 +47,14 @@ describe('languages', () => {
       expect(isSecretEnvPath(p), p).toBe(false);
     }
   });
+  it('keeps secret: .env.* JS files, names that merely contain example words, and credential rc variants', () => {
+    for (const p of ['.env.js', '.env.local.js', '.env.production.mjs', 'email-template.env', 'example-api.env', 'sample_app.env', '.env.example.local', '.npmrc.bak', '.netrc.old', '.pypirc.local']) {
+      expect(isSecretEnvPath(p), p).toBe(true);
+    }
+    for (const p of ['.env.d.ts', '.env.example', '.env.example.json', '.env-sample', 'app.template.env', 'example.env', 'prod.env.example.json', '.npmrc.example']) {
+      expect(isSecretEnvPath(p), p).toBe(false);
+    }
+  });
   it('treats direnv files, *.env files and credential rc files as secret', () => {
     for (const p of ['.envrc', 'cfg/.envrc', '.envrc~', 'prod.env', 'cfg/Secrets.ENV', 'docker.env~', '.npmrc', '.netrc', '.pypirc', 'cfg/.npmrc']) {
       expect(isSecretEnvPath(p), p).toBe(true);
