@@ -6,10 +6,12 @@ import type { ProjectModel } from '../engine/project.js';
 import type { Watcher } from '../engine/watcher.js';
 import type { AgentHub } from '../agents/hub.js';
 import type { Attributor } from '../agents/attribution.js';
-import { buildUsedBy, type TokenCache } from '../engine/usedby.js';
+import { buildUsedBy } from '../engine/usedby.js';
+import { buildDomainIndex } from '../engine/domain/build-index.js';
+import type { DomainIndex } from '../shared/domain.js';
 import type { ServerMessage, UsedByEntry } from '../shared/protocol.js';
 import type { AgentEvent, AgentSession, Attribution, ChangeSummary, ControlState, FileModel } from '../shared/types.js';
-import { authenticate, hostAllowed, newToken, originAllowed } from './auth.js';
+import { authenticate, hostAllowed, newToken, originAllowed, sessionCookie } from './auth.js';
 import { handleControlApi, handleHook } from './agent-routes.js';
 import { serveStatic } from './static.js';
 
@@ -24,8 +26,8 @@ export interface ServerOptions {
   hub?: AgentHub;
   /** Links file changes to agent actions; changes go out unattributed without it. */
   attributor?: Attributor;
-  /** Security warnings for the person running LiveMap (the CLI prints them to stderr). */
-  warn?: (message: string) => void;
+  /** Domain index builder; tests inject a failing one. */
+  buildDomain?: typeof buildDomainIndex;
 }
 
 export interface LiveMapServer {
@@ -34,13 +36,6 @@ export interface LiveMapServer {
   port: number;
   token: string;
   server: http.Server;
-  /**
-   * A URL for a browser opener: a single-use code (expires after LAUNCH_TTL_MS) that redirects to
-   * `url`. Opener and browser arguments are readable by other local users, so the token never
-   * goes there; a code read from them later is already spent. A local user who redeems it before
-   * the browser does still wins that race, but the browser then hits a spent code and `warn` fires.
-   */
-  launchUrl(): string;
   close(): Promise<void>;
   /** Indexing progress; broadcast (throttled) until ready() is called. */
   setIndexing(done: number, total: number): void;
@@ -56,11 +51,13 @@ const PORT_TRIES = 20;
 const MAX_CHANGES = 500;
 const HELLO_EVENTS = 500;
 const USED_BY_INTERVAL_MS = 1000;
+const DOMAIN_INTERVAL_MS = 1000;
+const EMPTY_DOMAIN: DomainIndex = {
+  routes: [], tables: [], dataRefs: [], stack: [], deps: [], scripts: [], env: [],
+  counts: { routes: 0, pages: 0, screens: 0, tables: 0, deps: 0, env: 0 },
+};
 const INDEXING_INTERVAL_MS = 100;
 const WS_UNAUTHORIZED = 4401;
-const REUSED_LINK = 'the browser launch link was used more than once. If you did not open it twice, stop LiveMap and start it again for a new key.';
-/** How long a launch code from launchUrl() stays redeemable. */
-export const LAUNCH_TTL_MS = 2 * 60_000;
 
 const BASE_HEADERS: Record<string, string> = {
   'x-content-type-options': 'nosniff',
@@ -75,6 +72,31 @@ function json(res: http.ServerResponse, status: number, body: unknown, extra: Re
 }
 
 const isApiPath = (pathname: string): boolean => pathname === '/api' || pathname.startsWith('/api/');
+
+/** Shown to a browser that opens LiveMap without the key: guidance only, never project data. */
+export const UNAUTHORIZED_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LiveMap</title>
+<style>
+:root{color-scheme:light dark}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:#eef0f5;color:#1d1d1f;font:15px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,"Segoe UI",sans-serif;padding:16px;box-sizing:border-box}
+main{max-width:420px;text-align:center;background:#fff;border-radius:28px;padding:32px 28px;box-shadow:0 2px 4px rgba(0,0,0,.04),0 20px 50px rgba(17,24,39,.13)}
+i{display:block;width:48px;height:48px;border-radius:15px;margin:0 auto 16px;background:conic-gradient(from 210deg,#0a7cff,#a64df0,#f0287a,#ff8a00,#0a7cff)}
+h1{margin:0 0 8px;font-size:24px;letter-spacing:-.02em}
+p{margin:0;color:#55595f;text-wrap:balance}
+@media (prefers-color-scheme:dark){body{background:#0b0d13;color:#f2f3f7}main{background:#1a1e2a;box-shadow:0 20px 60px rgba(0,0,0,.5)}p{color:#b4b9c4}}
+</style></head>
+<body><main><i aria-hidden="true"></i><h1>LiveMap</h1><p>Open the link printed in your terminal. It includes a one-time key.</p></main></body></html>
+`;
+
+function unauthorizedPage(res: http.ServerResponse): void {
+  res.writeHead(401, {
+    ...BASE_HEADERS,
+    'content-type': 'text/html; charset=utf-8',
+    'content-length': String(Buffer.byteLength(UNAUTHORIZED_PAGE)),
+    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'",
+  });
+  res.end(UNAUTHORIZED_PAGE);
+}
 
 /** A project-relative POSIX path, or null when it is empty, absolute or climbs out with `..`. */
 export function safeRelPath(raw: string | null): string | null {
@@ -113,29 +135,14 @@ async function bind(server: http.Server, first: number): Promise<number> {
   }
 }
 
-/**
- * Sends unless the client is closed or too far behind, in which case it is terminated.
- * `allowance` is extra room for a snapshot (hello) the client may still be receiving, so a project
- * whose hello alone exceeds the limit does not get every client dropped on the next broadcast.
- */
-export function safeSend(ws: WebSocket, text: string, allowance = 0): void {
+/** Sends unless the client is closed or too far behind, in which case it is terminated. */
+export function safeSend(ws: WebSocket, text: string): void {
   if (ws.readyState !== WebSocket.OPEN) return;
-  if (ws.bufferedAmount > MAX_BUFFERED_BYTES + allowance) {
+  if (ws.bufferedAmount > MAX_BUFFERED_BYTES) {
     ws.terminate();
     return;
   }
   ws.send(text);
-}
-
-/**
- * safeSend with a per-client allowance for its last hello: set to the hello's byte size when one
- * is sent (`helloBytes`, null for other messages), then shrunk to the buffered amount on every
- * later send, so it lasts only while the hello can still be in the buffer.
- */
-export function sendTracked(ws: WebSocket, text: string, helloBytes: number | null, allowances: WeakMap<WebSocket, number>): void {
-  const allowance = helloBytes ?? Math.min(allowances.get(ws) ?? 0, ws.bufferedAmount);
-  allowances.set(ws, allowance);
-  safeSend(ws, text, allowance);
 }
 
 function reject(socket: Duplex, status: number, text: string): void {
@@ -144,10 +151,11 @@ function reject(socket: Duplex, status: number, text: string): void {
 }
 
 export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
-  const { model, watcher, uiDir, hub, attributor } = opts;
+  const { model, watcher, uiDir, hub, attributor, buildDomain = buildDomainIndex } = opts;
   const token = opts.token ?? newToken();
   const name = path.basename(model.root);
 
+  let port = 0; // set once bound; no request can arrive before that
   let isReady = false;
   let indexing = { done: 0, total: 0 };
   let lastIndexingSent = 0;
@@ -155,32 +163,29 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   let usedBy: UsedByEntry[] = [];
   let usedByAt = 0;
   let usedByTimer: NodeJS.Timeout | null = null;
-  const usedByTokens: TokenCache = new Map();
+  let domain: DomainIndex = EMPTY_DOMAIN;
+  let domainJson = JSON.stringify(EMPTY_DOMAIN);
+  const domainErrors = new Set<string>();
+  let domainAt = 0;
+  let domainTimer: NodeJS.Timeout | null = null;
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
-  /** One-time launch codes (see launchUrl). */
-  const launches = new Map<string, { expires: number; spent: boolean; warned: boolean }>();
 
-  /** Room each client may still need for draining its last hello (see sendTracked). */
-  const allowances = new WeakMap<WebSocket, number>();
-  const helloBytesOf = (msg: ServerMessage, text: string): number | null => (msg.type === 'hello' ? Buffer.byteLength(text) : null);
-  const send = (ws: WebSocket, msg: ServerMessage): void => {
-    const text = JSON.stringify(msg);
-    sendTracked(ws, text, helloBytesOf(msg, text), allowances);
+  const send = (ws: WebSocket, msg: ServerMessage): void => safeSend(ws, JSON.stringify(msg));
+  const broadcastText = (text: string): void => {
+    for (const ws of wss.clients) safeSend(ws, text);
   };
   const broadcast = (msg: ServerMessage): void => {
     if (wss.clients.size === 0) return;
-    const text = JSON.stringify(msg);
-    const helloBytes = helloBytesOf(msg, text); // once, not per client
-    for (const ws of wss.clients) sendTracked(ws, text, helloBytes, allowances);
+    broadcastText(JSON.stringify(msg));
   };
   const hello = (): ServerMessage => ({
-    type: 'hello', root: model.root, name, files: model.all(), changes: [...changes], usedBy, indexing: false,
+    type: 'hello', root: model.root, name, files: model.all(), changes: [...changes], usedBy, domain, indexing: false,
     events: hub ? hub.events(HELLO_EVENTS) : [], sessions: hub ? hub.sessions() : [], control: hub ? hub.control.state() : { paused: false, flags: [] },
   });
   const computeUsedBy = (): void => {
     usedByAt = Date.now();
-    usedBy = buildUsedBy(model.all(), p => model.content(p), usedByTokens);
+    usedBy = buildUsedBy(model.all(), p => model.content(p));
   };
   const scheduleUsedBy = (): void => {
     if (usedByTimer) return;
@@ -189,6 +194,40 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
       usedByTimer = null;
       computeUsedBy();
       broadcast({ type: 'usedBy', usedBy });
+    }, wait);
+  };
+
+  /**
+   * Rebuilds the domain index; true when it differs from the last one (by JSON). A failing build keeps the
+   * last good index and logs each distinct error once.
+   */
+  const computeDomain = (): boolean => {
+    domainAt = Date.now();
+    let next: DomainIndex;
+    try {
+      next = buildDomain(model.all(), p => model.content(p));
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e);
+      if (!domainErrors.has(msg)) {
+        domainErrors.add(msg);
+        process.stderr.write(`livemap: domain index failed: ${msg}\n`);
+      }
+      return false;
+    }
+    const text = JSON.stringify(next);
+    if (text === domainJson) return false;
+    domain = next;
+    domainJson = text;
+    return true;
+  };
+  // Rebuilt only in this trailing timer, never in the change handler, so saves are not held up.
+  const scheduleDomain = (): void => {
+    if (domainTimer) return;
+    const wait = Math.max(0, domainAt + DOMAIN_INTERVAL_MS - Date.now());
+    domainTimer = setTimeout(() => {
+      domainTimer = null;
+      // The index is sent from the JSON already built for the comparison.
+      if (computeDomain() && wss.clients.size) broadcastText(`{"type":"domain","domain":${domainJson}}`);
     }, wait);
   };
 
@@ -204,22 +243,12 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     if (!isReady) return; // hello will carry the state
     const own = model.get(change.path);
     const files = own ? [own, ...touched.filter(f => f.path !== own.path)] : touched;
-    broadcast({ type: 'change', change, files, removed: change.kind === 'deleted' ? [change.path] : [] });
+    broadcast({ type: 'change', change });
+    broadcast({ type: 'files', files, removed: change.kind === 'deleted' ? [change.path] : [] });
     scheduleUsedBy();
+    scheduleDomain();
   };
   watcher.on('change', onChange);
-  const onTouched = (files: FileModel[], removed: string[] = []): void => {
-    if (!isReady) return; // hello will carry the state
-    broadcast({ type: 'files', files, removed });
-    scheduleUsedBy();
-  };
-  watcher.on('touched', onTouched);
-  const onReset = (): void => {
-    if (!isReady) return; // hello will carry the state
-    computeUsedBy();
-    broadcast(hello());
-  };
-  watcher.on('reset', onReset);
 
   // Before ready(), hello carries the agent state, so live agent messages wait for it.
   const onEvent = (event: AgentEvent): void => { if (isReady) broadcast({ type: 'agentEvent', event }); };
@@ -245,33 +274,13 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     }
     const reply = (status: number, body: unknown, extra?: Record<string, string>) => json(res, status, body, extra);
     if (url.pathname === '/hook') return handleHook(req, res, reply, token, hub);
-    // The UI shell is static and holds no project data, so it loads without a token (a reload has
-    // none in its URL); the page then sends the token it kept in sessionStorage with every request.
-    if (isApiPath(url.pathname) && !authenticate(req, url, token)) return json(res, 401, { error: 'unauthorized' });
+    const source = authenticate(req, url, token, port);
+    if (!source) {
+      if (isApiPath(url.pathname)) return json(res, 401, { error: 'unauthorized' });
+      return unauthorizedPage(res);
+    }
     if (await handleControlApi(req, res, reply, url.pathname, hub, originAllowed(req))) return;
     if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method not allowed' }, { allow: 'GET, HEAD' });
-
-    // Only a real navigation spends a launch code: a HEAD, link check or browser prefetch/prerender
-    // (Sec-Purpose, Purpose, Safari's X-Purpose, Firefox's X-Moz) must not lock the browser out. A prefetch gets a 503 so the
-    // browser discards it and makes the real request when the page is actually opened.
-    const launch = req.method === 'GET' && url.pathname === '/' ? url.searchParams.get('launch') : null;
-    const entry = launch === null ? undefined : launches.get(launch);
-    const h = req.headers;
-    const purpose = `${h['sec-purpose'] ?? ''} ${h.purpose ?? ''} ${h['x-purpose'] ?? ''} ${h['x-moz'] ?? ''}`;
-    if (entry && /prefetch|prerender|preview/i.test(purpose)) return json(res, 503, { error: 'not prefetchable' });
-    if (entry && Date.now() > entry.expires) {
-      launches.delete(launch!);
-      if (!entry.spent) opts.warn?.('the browser launch link expired before it was opened. Open the URL printed above instead.');
-      else if (!entry.warned) opts.warn?.(REUSED_LINK);
-    } else if (entry && !entry.spent) {
-      entry.spent = true; // kept until it expires, so a second use can be reported
-      res.writeHead(302, { ...BASE_HEADERS, location: `/?t=${token}`, 'content-length': '0' });
-      res.end();
-      return;
-    } else if (entry && !entry.warned) {
-      entry.warned = true;
-      opts.warn?.(REUSED_LINK);
-    }
 
     if (url.pathname === '/api/health') return json(res, 200, { ok: true });
     if (url.pathname === '/api/file') {
@@ -285,7 +294,9 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     }
     if (isApiPath(url.pathname)) return json(res, 404, { error: 'not found' });
 
-    await serveStatic(uiDir, url.pathname, res, { ...BASE_HEADERS });
+    const headers: Record<string, string> = { ...BASE_HEADERS };
+    if (source !== 'cookie') headers['set-cookie'] = sessionCookie(token, port);
+    await serveStatic(uiDir, url.pathname, res, headers);
   };
 
   const server = http.createServer((req, res) => {
@@ -305,7 +316,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
       return reject(socket, 400, 'Bad Request');
     }
     if (url.pathname !== '/ws') return reject(socket, 404, 'Not Found');
-    const authed = authenticate(req, url, token);
+    const authed = authenticate(req, url, token, port) !== null;
     wss.handleUpgrade(req, socket, head, ws => {
       ws.on('error', () => {});
       if (!authed) {
@@ -317,20 +328,13 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   });
 
 
-  const port = await bind(server, opts.port ?? DEFAULT_PORT);
+  port = await bind(server, opts.port ?? DEFAULT_PORT);
 
   return {
     url: `http://${HOST}:${port}/?t=${token}`,
     port,
     token,
     server,
-    launchUrl(): string {
-      const now = Date.now();
-      for (const [code, { expires }] of launches) if (expires < now) launches.delete(code);
-      const code = newToken();
-      launches.set(code, { expires: now + LAUNCH_TTL_MS, spent: false, warned: false });
-      return `http://${HOST}:${port}/?launch=${code}`;
-    },
     setIndexing(done: number, total: number): void {
       indexing = { done, total };
       if (isReady) return;
@@ -342,6 +346,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     ready(): void {
       if (isReady) return;
       computeUsedBy();
+      computeDomain();
       isReady = true;
       broadcast(hello());
     },
@@ -351,10 +356,10 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
       hub?.off('session', onSession);
       hub?.control.off('change', onControl);
       attributor?.off('late', onLate);
-      watcher.off('touched', onTouched);
-      watcher.off('reset', onReset);
       if (usedByTimer) clearTimeout(usedByTimer);
       usedByTimer = null;
+      if (domainTimer) clearTimeout(domainTimer);
+      domainTimer = null;
       for (const ws of wss.clients) ws.terminate();
       await new Promise<void>(resolve => wss.close(() => resolve()));
       server.closeAllConnections?.();
