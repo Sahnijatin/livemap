@@ -115,11 +115,22 @@ describe('ProjectModel', () => {
 
   it('removeDir deletes every file under the directory', async () => {
     const m = await scanned();
+    fs.rmSync(path.join(root, 'src'), { recursive: true });
     const rs = await m.removeDir('src');
     expect(rs.map(r => r.path).sort()).toEqual(['src/a.ts', 'src/b.ts']);
     expect(rs.every(r => r.kind === 'deleted' && r.after === null)).toBe(true);
     expect(m.get('src/a.ts')).toBeUndefined();
     expect(m.all().map(f => f.path).sort()).toEqual(['.env', 'README.md']);
+  });
+
+  it('removeDir keeps files that are back on disk (directory deleted and recreated)', async () => {
+    const m = await scanned();
+    fs.rmSync(path.join(root, 'src'), { recursive: true });
+    put('src/a.ts', "import { hello } from './b';\nhello();\n");
+    const rs = await m.removeDir('src');
+    expect(rs.map(r => [r.path, r.kind])).toEqual([['src/b.ts', 'deleted']]);
+    expect(m.get('src/a.ts')).toBeDefined();
+    expect(m.get('src/b.ts')).toBeUndefined();
   });
 
   it('ignores ignored paths and honors directory patterns', async () => {

@@ -93,13 +93,17 @@ export class ProjectModel {
   }
 
   /**
-   * One `deleted` result per known file under relDir. Imports are re-resolved once for the whole
+   * One `deleted` result per known file under relDir that is gone from disk. Imports are re-resolved once for the whole
    * directory, so the combined `touched` list is on the LAST result; consumers merge across the array.
    */
   removeDir(relDir: string): Promise<UpdateResult[]> {
     return this.serial(async () => {
       const prefix = relDir.replace(/\/+$/, '') + '/';
-      const gone = [...this.files.keys()].filter(p => p.startsWith(prefix)).sort(cmp);
+      const under = [...this.files.keys()].filter(p => p.startsWith(prefix)).sort(cmp);
+      // The directory may be back by now (deleted and recreated within the debounce, or a late
+      // unlinkDir); files that exist again are left to their own add/change events.
+      const gone: string[] = [];
+      for (const rel of under) if (await this.isGone(rel)) gone.push(rel);
       const results: UpdateResult[] = [];
       for (const rel of gone) results.push((await this.apply(rel, null))!.result);
       // One import re-resolution for the whole directory; touched goes on the last result.
