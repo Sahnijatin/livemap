@@ -107,6 +107,7 @@ const Card = memo(function Card({ d, focus, style, onHot }: { d: CardData; focus
       type="button"
       className={clsx('ap', `ap-${d.kind}`, focus, d.isNew && 'isnew', d.enter && 'enter')}
       data-kind={d.kind}
+      data-key={d.key}
       style={style}
       title={d.title}
       onClick={d.go}
@@ -248,7 +249,7 @@ function PageList({ title, routes }: { title: string; routes: ApiRoute[] }) {
       <h4>{title} · {routes.length.toLocaleString()}</h4>
       <div className="pg-list">
         {routes.map(r => (
-          <button type="button" className="pg-row" key={r.id} onClick={() => open(r.file, r.line)} title={`${r.file}:${r.line}`}>
+          <button type="button" className="pg-row" key={r.id} data-key={`r:${r.id}`} onClick={() => open(r.file, r.line)} title={`${r.file}:${r.line}`}>
             <code className="pg-p">{r.fullPath}</code>
             <span className="pg-fw">{frameworkName(r.framework)}</span>
             <span className="pg-f">{r.file}</span>
@@ -283,6 +284,35 @@ function Flows({ domain }: { domain: DomainIndex }) {
   const pages = useMemo(() => domain.routes.filter(r => r.kind === 'page' && matches(needle, r.fullPath, r.framework)).sort((a, b) => a.fullPath.localeCompare(b.fullPath)), [domain.routes, needle]);
   const screens = useMemo(() => domain.routes.filter(r => r.kind === 'screen' && matches(needle, r.fullPath, r.framework)).sort((a, b) => a.fullPath.localeCompare(b.fullPath)), [domain.routes, needle]);
   const total = sorted.length;
+
+  // Palette trace: show the route (clearing a filter that hides it, "Show all" beyond the cap), trace it like a
+  // hover and scroll it into view. Requests made before this mount (another tab) are not replayed.
+  const routeTrace = useStore(s => s.routeTrace);
+  const traceSeq = useRef(routeTrace?.seq ?? 0);
+  const pendingTrace = useRef<{ id: string; at: number } | null>(null);
+  useEffect(() => {
+    if (routeTrace && routeTrace.seq > traceSeq.current) {
+      traceSeq.current = routeTrace.seq;
+      const r = domain.routes.find(x => x.id === routeTrace.id);
+      if (r) {
+        pendingTrace.current = { id: r.id, at: Date.now() };
+        const passes = r.kind === 'api' ? matches(needle, r.method, r.fullPath) : matches(needle, r.fullPath, r.framework);
+        if (!passes) setQ('');
+        if (r.kind === 'api' && !all && (passes ? filtered : sorted).findIndex(f => f.route.id === r.id) >= CAP) setAll(true);
+      }
+    }
+    const pending = pendingTrace.current;
+    if (!pending) return;
+    // Not drawn within a few seconds (it left the domain meanwhile): give up rather than jump later.
+    if (Date.now() - pending.at > 3000) { pendingTrace.current = null; return; }
+    const key = `r:${pending.id}`;
+    const el = [...(scroller.current?.querySelectorAll<HTMLElement>('[data-key]') ?? [])].find(e => e.dataset.key === key);
+    if (!el) return;
+    pendingTrace.current = null;
+    if (g.nodes.has(key)) setHot(key);
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    el.scrollIntoView?.({ block: 'center', inline: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
+  }, [routeTrace, domain.routes, needle, all, filtered, sorted, g]);
 
   return (
     <div className={clsx('apiv', stacked && 'stacked', !stacked && width > 0 && width < 900 && 'tight')}>
