@@ -114,12 +114,19 @@ export class Watcher extends EventEmitter {
         const paths = [...this.gitignores].sort();
         this.gitignores.clear();
         if (paths.length === 0) return []; // an earlier queued job already took this batch
-        const { files, removed, created } = await this.model.reloadIgnores(paths, {
-          // Directories that were ignored when chokidar crawled were never watched; watch them
-          // before the reload reads them. chokidar's crawl of them reports every file it finds
-          // (ignoreInitial is off), so files created meanwhile get their own add events.
-          onIncluded: dirs => this.watchIncluded(dirs),
-        });
+        let reloaded: Awaited<ReturnType<ProjectModel['reloadIgnores']>>;
+        try {
+          reloaded = await this.model.reloadIgnores(paths, {
+            // Directories that were ignored when chokidar crawled were never watched; watch them
+            // before the reload reads them. chokidar's crawl of them reports every file it finds
+            // (ignoreInitial is off), so files created meanwhile get their own add events.
+            onIncluded: dirs => this.watchIncluded(dirs),
+          });
+        } catch (e) {
+          for (const p of paths) this.gitignores.add(p); // retried with the next .gitignore event
+          throw e;
+        }
+        const { files, removed, created } = reloaded;
         // A throwing listener must not lose the .gitignore files' own changes below.
         if (!this.stopped && (files.length || removed.length)) {
           try { this.emit('touched', files, removed); } catch (e) { this.fail(e); }

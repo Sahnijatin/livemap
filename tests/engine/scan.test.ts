@@ -147,4 +147,16 @@ describe('ProjectModel.scan', () => {
     expect(m.get('b/late.ts')).toBeDefined();
     expect(m.truncated).toBe(false);
   });
+
+  it('a subtree reload whose walk hits the limit marks the model truncated', async () => {
+    put('src/.gitignore', 'gen/\n');
+    for (let i = 0; i < 8; i++) put(`src/gen/g${i}.ts`, `export const g${i} = ${i};\n`);
+    put('src/a.ts', 'export const a = 1;\n');
+    const m = new ProjectModel(root, { limit: 4 });
+    await m.scan();
+    expect(m.truncated).toBe(false);
+    put('src/.gitignore', '# nothing\n');
+    await m.reloadIgnores(['src/.gitignore']);
+    expect(m.truncated).toBe(true);
+  });
 });

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import ignore from 'ignore';
@@ -132,9 +132,12 @@ export function createIgnore(root: string, reuse?: { previous: IgnoreFn; changed
   });
 }
 
+/** A directory's .gitignore; throws when there is none. A symlinked one is not followed, as in git. */
 function readGitignore(dir: string): string {
   ignoreStats.reads++;
-  return readFileSync(path.join(dir, '.gitignore'), 'utf8');
+  const file = path.join(dir, '.gitignore');
+  if (lstatSync(file).isSymbolicLink()) throw new Error('symlinked .gitignore');
+  return readFileSync(file, 'utf8');
 }
 
 /**

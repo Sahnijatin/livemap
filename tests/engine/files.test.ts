@@ -94,6 +94,17 @@ describe('walk', () => {
     expect(ig('src/vendor/keep.gen.ts', false)).toBe(false);
     expect(ig('src/vendor/other.gen.ts', false)).toBe(true);
   });
+  it('a symlinked .gitignore is not followed, as in git', () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-gi-'));
+    try {
+      fs.writeFileSync(path.join(outside, 'rules'), 'secret.ts\n');
+      put('pkg/secret.ts');
+      fs.symlinkSync(path.join(outside, 'rules'), path.join(root, 'pkg/.gitignore'));
+      expect(createIgnore(root)('pkg/secret.ts', false)).toBe(false);
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
   it('directory patterns need isDir', () => {
     put('.gitignore', 'secret/\n');
     const ig = createIgnore(root);

@@ -210,7 +210,7 @@ export class ProjectModel {
       }, isFull);
       if (done < fresh.length) full = true;
       if (whole) this.truncated = walked.truncated || full;
-      else if (full) this.truncated = true;
+      else if (full || walked.truncated) this.truncated = true;
       if (!removed.length && !included.length && !unreached.length) return { files: [], removed, created: [] };
       const touched = this.relink([]);
       const byPath = new Map<string, FileModel>();
