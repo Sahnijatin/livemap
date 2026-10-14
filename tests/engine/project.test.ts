@@ -265,4 +265,16 @@ describe('ProjectModel fix round 1', () => {
     expect(m.get('app.ts')!.imports.local).toEqual(['lib/x.ts']);
     expect(await m.flushRelink()).toEqual([]);
   });
+
+  it('deferred updates in a burst resolve against the files the burst already added or removed', async () => {
+    put('lib/old.ts', 'export const old = 1;\n');
+    const m = await scanned();
+    put('lib/b.ts', 'export const b = 1;\n');
+    await m.update('lib/b.ts', 'add', { deferRelink: true });
+    fs.rmSync(path.join(root, 'lib/old.ts'));
+    await m.update('lib/old.ts', 'unlink', { deferRelink: true });
+    put('lib/a.ts', "import { b } from './b';\nimport { old } from './old';\n");
+    const a = await m.update('lib/a.ts', 'add', { deferRelink: true });
+    expect(a!.after!.imports.local).toEqual(['lib/b.ts']);
+  });
 });

@@ -8,7 +8,11 @@ import { isTempName } from './files.js';
 
 type FileEvent = 'add' | 'change' | 'unlink';
 
-export interface WatcherOptions { debounceMs?: number }
+export interface WatcherOptions {
+  debounceMs?: number;
+  /** Longest a deferred import re-resolution waits while jobs keep arriving (default 1000 ms). */
+  maxDeferMs?: number;
+}
 
 /**
  * Turns filesystem events into ChangeSummaries. Events are debounced per path,
@@ -22,6 +26,9 @@ export interface WatcherOptions { debounceMs?: number }
 export class Watcher extends EventEmitter {
   private readonly model: ProjectModel;
   private readonly debounceMs: number;
+  private readonly maxDeferMs: number;
+  /** When the current run of deferred jobs began; null when nothing is deferred. */
+  private deferSince: number | null = null;
   private fsw: FSWatcher | null = null;
   private timers = new Map<string, NodeJS.Timeout>();
   private queue: Promise<void> = Promise.resolve();
@@ -34,6 +41,7 @@ export class Watcher extends EventEmitter {
     super();
     this.model = model;
     this.debounceMs = opts.debounceMs ?? 150;
+    this.maxDeferMs = opts.maxDeferMs ?? 1000;
   }
 
   start(): Promise<void> {
@@ -99,7 +107,11 @@ export class Watcher extends EventEmitter {
   private async run(job: (deferRelink: boolean) => Promise<UpdateResult[]>): Promise<void> {
     this.waiting--;
     if (this.stopped) return;
-    const more = this.waiting > 0;
+    // Defer while jobs are waiting, but not past maxDeferMs, so steady churn still relinks.
+    const now = Date.now();
+    this.deferSince ??= now;
+    const more = this.waiting > 0 && now - this.deferSince < this.maxDeferMs;
+    if (!more) this.deferSince = null;
     try {
       this.report(await job(more));
     } catch (e) {

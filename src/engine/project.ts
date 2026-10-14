@@ -118,6 +118,9 @@ export class ProjectModel {
       if (setChanged || CONFIG_FILES.has(rel)) {
         if (opts.deferRelink) {
           this.relinkPending = true;
+          // Later files in the burst resolve against the live file set; ctx.files (the Go and JVM
+          // directory index) stays as of the last relink until the deferred relink runs.
+          this.ctx = { ...this.ctx, has: p => this.files.has(p) };
         } else {
           result.touched = this.relink([rel]);
           result.after = this.files.get(rel) ?? null;

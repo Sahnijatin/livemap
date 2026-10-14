@@ -210,4 +210,26 @@ describe('Watcher', () => {
     const reported = [...changes.flatMap(c => c.touched), ...touched].filter(f => f.path === 'src/app.ts');
     expect(reported.at(-1)!.imports.local).toHaveLength(N);
   });
+
+  it('does not defer the re-resolution forever while events keep coming', async () => {
+    model = new ProjectModel(root);
+    await model.scan();
+    const w = new Watcher(model, { maxDeferMs: 100 });
+    w.on('change', (change: ChangeSummary, touched: FileModel[]) => changes.push({ change, touched, t: Date.now() }));
+    await w.start();
+    watcher = w;
+    // Slow updates plus a steady stream of new files keep the queue non-empty throughout.
+    const update = model.update.bind(model);
+    vi.spyOn(model, 'update').mockImplementation(async (...a) => { await sleep(60); return update(...a); });
+    const relinkAt: number[] = [];
+    const relink = (model as unknown as { relink: (skip: string[]) => FileModel[] }).relink.bind(model);
+    vi.spyOn(model as unknown as { relink: (skip: string[]) => FileModel[] }, 'relink').mockImplementation(skip => { relinkAt.push(Date.now()); return relink(skip); });
+    for (let i = 0; i < 30; i++) { put(`src/s${i}.ts`, `export const s${i} = 1;\n`); await sleep(5); }
+    // 30 slow jobs (~1.8 s of backlog): without a cap, only the first job and the final drain relink.
+    await waitFor(() => changes.length >= 30, 8000);
+    await sleep(100);
+    expect(relinkAt.length).toBeGreaterThanOrEqual(5);
+    const gaps = relinkAt.slice(1).map((t, i) => t - relinkAt[i]);
+    expect(Math.max(...gaps)).toBeLessThan(400);
+  });
 });
