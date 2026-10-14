@@ -1,3 +1,5 @@
+import type { DomainIndex } from '@shared/domain.js';
+import { emptyDomainIndex } from './store';
 import type { AgentEvent, AgentSession, ChangeSummary, CodeSymbol, FileModel } from '@shared/types.js';
 
 /** Test helpers: minimal valid models. */
@@ -11,6 +13,10 @@ export function file(path: string, symbols: CodeSymbol[] = [], extra: Partial<Fi
 
 export function sym(name: string, kind: CodeSymbol['kind'] = 'function', line = 1, children: CodeSymbol[] = [], qname = name): CodeSymbol {
   return { name, qname, kind, signature: `${name}()`, line, endLine: line + 1, exported: true, hash: name, children };
+}
+
+export function emptyDomain(): DomainIndex {
+  return emptyDomainIndex();
 }
 
 let nextId = 1;
