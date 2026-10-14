@@ -116,6 +116,22 @@ export function safeSend(ws: WebSocket, text: string, allowance = 0): void {
   ws.send(text);
 }
 
+/**
+ * safeSend with a per-client allowance for its last hello: set to the hello's size when one is
+ * sent, then shrunk to the buffered amount on every later send, so it lasts only while the hello
+ * can still be in the buffer.
+ */
+export function sendTracked(ws: WebSocket, text: string, isHello: boolean, allowances: WeakMap<WebSocket, number>): void {
+  let allowance: number;
+  if (isHello) {
+    allowance = Buffer.byteLength(text);
+  } else {
+    allowance = Math.min(allowances.get(ws) ?? 0, ws.bufferedAmount);
+  }
+  allowances.set(ws, allowance);
+  safeSend(ws, text, allowance);
+}
+
 function reject(socket: Duplex, status: number, text: string): void {
   socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
   socket.destroy();
@@ -138,12 +154,10 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   /** One-time launch codes to their expiry time (see launchUrl). */
   const launches = new Map<string, number>();
 
-  /** Byte size of the last hello sent to each client: room it may still be draining. */
-  const helloBytes = new WeakMap<WebSocket, number>();
-  const sendText = (ws: WebSocket, msg: ServerMessage, text: string): void => {
-    if (msg.type === 'hello') helloBytes.set(ws, Buffer.byteLength(text));
-    safeSend(ws, text, helloBytes.get(ws) ?? 0);
-  };
+  /** Room each client may still need for draining its last hello (see sendTracked). */
+  const allowances = new WeakMap<WebSocket, number>();
+  const sendText = (ws: WebSocket, msg: ServerMessage, text: string): void =>
+    sendTracked(ws, text, msg.type === 'hello', allowances);
   const send = (ws: WebSocket, msg: ServerMessage): void => sendText(ws, msg, JSON.stringify(msg));
   const broadcast = (msg: ServerMessage): void => {
     if (wss.clients.size === 0) return;

@@ -7,7 +7,7 @@ import path from 'node:path';
 import WebSocket from 'ws';
 import { ProjectModel } from '../../src/engine/project.js';
 import { Watcher } from '../../src/engine/watcher.js';
-import { startServer, safeSend, DEFAULT_PORT, MAX_BUFFERED_BYTES, LAUNCH_TTL_MS } from '../../src/server/server.js';
+import { startServer, safeSend, sendTracked, DEFAULT_PORT, MAX_BUFFERED_BYTES, LAUNCH_TTL_MS } from '../../src/server/server.js';
 import type { ServerMessage } from '../../src/shared/protocol.js';
 
 type Started = Awaited<ReturnType<typeof startServer>>;
@@ -428,6 +428,21 @@ describe('safeSend backpressure', () => {
     safeSend(f as unknown as WebSocket, 'x');
     expect(f.sent).toEqual([]);
     expect(f.terminated).toBe(true);
+  });
+  it('the snapshot allowance shrinks as the client drains it', () => {
+    const allowances = new WeakMap<WebSocket, number>();
+    const f = fake(0);
+    const ws = f as unknown as WebSocket;
+    sendTracked(ws, 'x'.repeat(5000), true, allowances); // a hello
+    f.bufferedAmount = MAX_BUFFERED_BYTES + 4000; // still mostly the hello
+    sendTracked(ws, 'a', false, allowances);
+    expect(f.terminated).toBe(false);
+    f.bufferedAmount = 100; // drained
+    sendTracked(ws, 'b', false, allowances);
+    f.bufferedAmount = MAX_BUFFERED_BYTES + 200; // now genuinely behind
+    sendTracked(ws, 'c', false, allowances);
+    expect(f.terminated).toBe(true);
+    expect(f.sent).toEqual(['x'.repeat(5000), 'a', 'b']);
   });
   it('allows extra buffer for a large snapshot the client is still receiving', () => {
     const f = fake(MAX_BUFFERED_BYTES + 1000);
