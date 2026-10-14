@@ -84,12 +84,6 @@ export function createIgnore(root: string): (rel: string, isDir: boolean) => boo
     const r = rel.replace(/^\.\//, '').replace(/\/+$/, '');
     if (!r) return false;
     if (path.isAbsolute(r) || r === '..' || r.startsWith('../')) return true;
-    // A .gitignore may ignore itself (`*`, as tool caches write); it still counts unless its
-    // directory is ignored, so edits to it are seen and its rules can be reloaded.
-    if (!isDir && (r === '.gitignore' || r.endsWith('/.gitignore'))) {
-      const slash = r.lastIndexOf('/');
-      return slash > 0 && check(r.slice(0, slash), true);
-    }
     return check(r, isDir);
   };
 }

@@ -233,12 +233,26 @@ describe('Watcher', () => {
     expect(Math.max(...gaps)).toBeLessThan(400);
   });
 
-  it('reloads rules when a self-ignoring nested .gitignore is edited', async () => {
+  it('watches a self-ignoring nested .gitignore (without indexing it) and reloads when it is edited', async () => {
     put('tools/.gitignore', '*\n');
-    await startWatcher();
-    put('tools/.gitignore', '*.tmp\n');
-    await waitFor(() => changes.some(c => c.change.path === 'tools/.gitignore'));
     put('tools/run.ts', 'export const run = 1;\n');
+    await startWatcher();
+    expect(model.get('tools/run.ts')).toBeUndefined();
+    expect(model.get('tools/.gitignore')).toBeUndefined();
+    put('tools/.gitignore', '*.tmp\n');
     await waitFor(() => model.get('tools/run.ts') !== undefined);
+    expect(model.get('tools/.gitignore')).toBeDefined(); // no longer matched by its own rules
+  });
+
+  it('a .gitignore edit indexes and watches a directory it no longer ignores', async () => {
+    put('.gitignore', 'gen/\n');
+    put('gen/out.ts', 'export const out = 1;\n');
+    await startWatcher();
+    expect(model.get('gen/out.ts')).toBeUndefined();
+    put('.gitignore', '# nothing ignored\n');
+    await waitFor(() => changes.some(c => c.change.path === 'gen/out.ts' && c.change.kind === 'created'));
+    await sleep(200);
+    put('gen/out.ts', 'export const out = 2;\nexport function more() {}\n');
+    await waitFor(() => changes.some(c => c.change.path === 'gen/out.ts' && c.change.kind === 'modified'), 4000);
   });
 });

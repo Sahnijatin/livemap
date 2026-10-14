@@ -116,8 +116,6 @@ export class ProjectModel {
    */
   update(rel: string, _event: 'add' | 'change' | 'unlink', opts: { deferRelink?: boolean } = {}): Promise<UpdateResult | null> {
     return this.serial(async () => {
-      // The matcher caches every .gitignore it has read (or found missing); start it afresh.
-      if (rel === '.gitignore' || rel.endsWith('/.gitignore')) this.isIgnored = createIgnore(this.root);
       if (this.ignored(rel)) return null;
       const r = await readForModel(this.root, rel);
       // readForModel returns null for any failure; a known file is deleted only if it is really gone.
@@ -160,6 +158,34 @@ export class ProjectModel {
       for (const rel of gone) results.push((await this.apply(rel, null))!.result);
       // One import re-resolution for the whole directory; touched goes on the last result.
       if (results.length) results[results.length - 1].touched = this.relink(gone);
+      return results;
+    });
+  }
+
+  /**
+   * Re-reads every .gitignore and reconciles the model with the new rules: files now ignored are
+   * dropped (`deleted` results), files now included are read (`created`), then imports are
+   * re-resolved once (combined `touched` on the last result, as removeDir does).
+   */
+  reloadIgnores(): Promise<UpdateResult[]> {
+    return this.serial(async () => {
+      this.isIgnored = createIgnore(this.root);
+      const results: UpdateResult[] = [];
+      for (const rel of [...this.files.keys()].sort(cmp)) {
+        if (this.isIgnored(rel, false)) results.push((await this.apply(rel, null))!.result);
+      }
+      const { files } = await walk(this.root, this.isIgnored, this.limit);
+      for (const rel of files) {
+        if (this.files.has(rel)) continue;
+        if (this.files.size >= this.limit) { this.truncated = true; break; }
+        const r = await readForModel(this.root, rel);
+        const res = r && this.apply(rel, r);
+        if (res) results.push((await res).result);
+      }
+      if (!results.length) return results;
+      results[results.length - 1].touched = this.relink(results.map(r => r.path));
+      // New files were built before the relink; report them with their final imports.
+      for (const r of results) if (r.kind === 'created') r.after = this.files.get(r.path) ?? null;
       return results;
     });
   }

@@ -55,15 +55,6 @@ describe('walk', () => {
     expect(ig('pkg/b.local.ts', false)).toBe(true);
     expect(ig('other/b.local.ts', false)).toBe(false);
   });
-  it('a .gitignore is only ignored with its directory, even when its own rules match it', async () => {
-    put('tools/.gitignore', '*\n');
-    put('tools/x.ts');
-    const ig = createIgnore(root);
-    expect(ig('tools/x.ts', false)).toBe(true);
-    expect(ig('tools/.gitignore', false)).toBe(false);
-    expect(ig('node_modules/p/.gitignore', false)).toBe(true);
-    expect((await walk(root, ig)).files).toEqual(['tools/.gitignore']);
-  });
   it('directory patterns need isDir', () => {
     put('.gitignore', 'secret/\n');
     const ig = createIgnore(root);

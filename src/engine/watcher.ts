@@ -53,7 +53,9 @@ export class Watcher extends EventEmitter {
         const rel = this.rel(p);
         if (rel === null) return false;
         if (rel === '') return false;
-        return this.model.ignored(rel, stats?.isDirectory() ?? false);
+        const isDir = stats?.isDirectory() ?? false;
+        if (!isDir && isGitignore(rel)) return this.gitignoreSkipped(rel);
+        return this.model.ignored(rel, isDir);
       },
     });
     this.fsw = fsw;
@@ -80,9 +82,29 @@ export class Watcher extends EventEmitter {
     return r.split(path.sep).join('/');
   }
 
+  /**
+   * A .gitignore is watched unless its directory is ignored, even when its own rules match it
+   * (`*`, as tool caches write), so editing it can reload the rules.
+   */
+  private gitignoreSkipped(rel: string): boolean {
+    const slash = rel.lastIndexOf('/');
+    return slash > 0 && this.model.ignored(rel.slice(0, slash), true);
+  }
+
   private onFile(p: string, ev: FileEvent): void {
     const rel = this.rel(p);
-    if (!rel || isTempName(rel) || this.model.ignored(rel)) return;
+    if (!rel || isTempName(rel)) return;
+    if (isGitignore(rel)) {
+      if (this.gitignoreSkipped(rel)) return;
+      this.schedule(`f:${rel}`, async () => {
+        const results = await this.model.reloadIgnores();
+        this.watchCreated(results);
+        const own = await this.model.update(rel, ev); // null while its own rules ignore it
+        return own ? [...results, own] : results;
+      });
+      return;
+    }
+    if (this.model.ignored(rel)) return;
     this.schedule(`f:${rel}`, deferRelink => this.model.update(rel, ev, { deferRelink }).then(r => (r ? [r] : [])));
   }
 
@@ -90,6 +112,16 @@ export class Watcher extends EventEmitter {
     const rel = this.rel(p);
     if (!rel || this.model.ignored(rel, true)) return;
     this.schedule(`d:${rel}`, () => this.model.removeDir(rel));
+  }
+
+  /** Directories that were ignored when chokidar crawled them are not watched; add them now. */
+  private watchCreated(results: UpdateResult[]): void {
+    const dirs = new Set<string>();
+    for (const r of results) {
+      const dir = path.posix.dirname(r.path);
+      if (r.kind === 'created' && dir !== '.') dirs.add(path.join(this.model.root, ...dir.split('/')));
+    }
+    if (dirs.size) this.fsw?.add([...dirs]);
   }
 
   private schedule(key: string, job: (deferRelink: boolean) => Promise<UpdateResult[]>): void {
@@ -143,6 +175,10 @@ export class Watcher extends EventEmitter {
     const err = e instanceof Error ? e : new Error(String(e));
     if (this.listenerCount('error') > 0) this.emit('error', err);
   }
+}
+
+function isGitignore(rel: string): boolean {
+  return rel === '.gitignore' || rel.endsWith('/.gitignore');
 }
 
 function mergeTouched(results: UpdateResult[]): FileModel[] {

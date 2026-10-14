@@ -279,17 +279,29 @@ describe('ProjectModel fix round 1', () => {
     expect(a!.after!.imports.local).toEqual(['lib/b.ts']);
   });
 
-  it('picks up .gitignore files created or edited while running', async () => {
+  it('reloadIgnores drops newly ignored files and indexes newly included ones', async () => {
+    put('.gitignore', 'gen/\n');
+    put('gen/out.ts', "import { hello } from '../src/b';\nexport const out = hello;\n");
+    put('secrets.json', '{"k":"v"}\n');
+    const m = await scanned();
+    expect(m.get('gen/out.ts')).toBeUndefined();
+    put('.gitignore', 'secrets.json\n');
+    const rs = await m.reloadIgnores();
+    expect(rs.map(r => [r.path, r.kind]).sort()).toEqual([['gen/out.ts', 'created'], ['secrets.json', 'deleted']]);
+    expect(m.get('secrets.json')).toBeUndefined();
+    expect(m.content('secrets.json')).toBeNull();
+    expect(m.get('gen/out.ts')!.imports.local).toEqual(['src/b.ts']);
+    expect(rs.find(r => r.path === 'gen/out.ts')!.after!.imports.local).toEqual(['src/b.ts']);
+    expect(await m.reloadIgnores()).toEqual([]);
+  });
+
+  it('reloadIgnores reads nested .gitignore files created after their directory was seen', async () => {
     const m = await scanned();
     put('pkg/keep.ts', 'export const k = 1;\n');
-    expect(m.ignored('pkg/generated/x.ts')).toBe(false); // seen before pkg has a .gitignore
+    expect(m.ignored('pkg/generated/x.ts')).toBe(false);
     put('pkg/.gitignore', 'generated/\n');
-    await m.update('pkg/.gitignore', 'add');
+    await m.reloadIgnores();
     expect(m.ignored('pkg/generated/x.ts')).toBe(true);
-    expect(m.ignored('scratch.txt')).toBe(false);
-    put('.gitignore', 'scratch.txt\n');
-    await m.update('.gitignore', 'add');
-    expect(m.ignored('scratch.txt')).toBe(true);
   });
 
   it('deferred Go and JVM imports see directories the burst already created', async () => {
