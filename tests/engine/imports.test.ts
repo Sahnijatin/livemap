@@ -32,6 +32,9 @@ describe('extractImports', () => {
     expect(imp('src/main/java/com/shop/App.java','java','import com.shop.Order;\nimport java.util.List;')).toEqual({ local: ['src/main/java/com/shop/Order.java'], external: ['java.util'] });
     expect(imp('src/main/java/com/App.java','java','import com.shop.*;\nimport java.util.*;')).toEqual({ local: ['src/main/java/com/shop/Order.java'], external: ['java.util'] });
     expect(imp('src/main/java/com/App.java','java','import static com.shop.Order.*;').local).toEqual(['src/main/java/com/shop/Order.java']);
+    // A wildcard resolves only to the class it names (its nested classes), never to a shorter prefix.
+    expect(imp('src/main/java/com/App.java','java','import com.shop.Order.*;').local).toEqual(['src/main/java/com/shop/Order.java']);
+    expect(imp('src/main/java/com/App.java','java','import com.shop.Order.missing.*;')).toEqual({ local: [], external: ['com.shop.Order.missing'] });
   });
   it('ruby', () => {
     expect(imp('app.rb','ruby',"require_relative 'lib/util'\nrequire 'json'")).toEqual({ local: ['lib/util.rb'], external: ['json'] });

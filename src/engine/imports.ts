@@ -268,9 +268,10 @@ function jvmImports(src: string, ctx: ImportCtx, ext: string, local: Set<string>
         for (const f of files) if (f.endsWith(ext)) { local.add(f); found = true; }
       }
     }
-    // A static wildcard (`import static a.B.*`) names a class, so fall back to class lookup.
+    // Not a local package: a wildcard may name a class (`import static a.B.*`, nested classes),
+    // and only that exact class counts. A plain import also tries outer classes (`a.B.Inner`).
     if (!found) {
-      for (let n = parts.length; n >= 1 && !found; n--) {
+      for (let n = parts.length; n >= (m[2] ? parts.length : 1) && !found; n--) {
         const rel = parts.slice(0, n).join('/') + ext;
         const hit = (idx.byBase.get(parts[n - 1] + ext) ?? []).find(f => f === rel || f.endsWith('/' + rel));
         if (hit) { local.add(hit); found = true; }
