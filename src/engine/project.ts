@@ -19,6 +19,16 @@ export interface UpdateResult {
 }
 
 const CONFIG_FILES = new Set(['tsconfig.json', 'jsconfig.json', 'go.mod']);
+/** The directories in `dirs` that have no ancestor in `dirs` ('' covers everything). */
+function topmost(dirs: string[]): string[] {
+  const set = new Set(dirs);
+  if (set.has('')) return [''];
+  return [...set].filter(d => {
+    for (let p = parentDir(d); p; p = parentDir(p)) if (set.has(p)) return false;
+    return true;
+  }).sort(cmp);
+}
+
 /** Files read (or stat-ed) concurrently during a scan or removeDir. */
 const READ_AHEAD = 32;
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -154,12 +164,11 @@ export class ProjectModel {
    * with the new rules: files now ignored are dropped, files the old rules ignored are read, then
    * imports are re-resolved once. Nothing changed on disk for those, so they come back as a file
    * update (`files` upserted, `removed` paths) rather than change entries; files that are merely
-   * new are left to their own add events. After a truncated scan, any unindexed file may fill
-   * freed room.
+   * new are left to their own add events. After a truncated scan, other unindexed files may fill
+   * freed room (returned as `created` changes).
    *
    * `onIncluded` gets the topmost newly included directories (empty ones too) right after the
-   * walk, before anything is read, so the watcher can start watching them; files that appear in
-   * them while the reload reads are then indexed too and returned as `created` changes.
+   * walk, before anything is read, so the watcher can start watching them.
    */
   reloadIgnores(
     changed: string[] = [],
@@ -171,7 +180,7 @@ export class ProjectModel {
       this.isIgnored = changed.length ? createIgnore(this.root, { previous: old, changed: changedDirs }) : createIgnore(this.root);
       // A nested .gitignore only affects its own subtree; the root one affects everything.
       const whole = !changed.length || changedDirs.includes('');
-      const roots = whole ? [''] : [...new Set(changedDirs)].filter((d, _, all) => !all.some(o => o !== d && d.startsWith(`${o}/`)));
+      const roots = whole ? [''] : topmost(changedDirs);
       const within = (rel: string): boolean => whole || roots.some(d => rel.startsWith(`${d}/`));
       const removed: string[] = [];
       for (const rel of [...this.files.keys()].filter(within).sort(cmp)) {
@@ -180,38 +189,30 @@ export class ProjectModel {
         removed.push(rel);
       }
       const walked = await walk(this.root, this.isIgnored, this.limit, roots);
-      const included = new Set(walked.dirs.filter(d => old(d, true)));
-      const dirs = [...included].filter(d => {
-        for (let p = parentDir(d); p; p = parentDir(p)) if (included.has(p)) return false;
-        return true;
-      });
+      const dirs = topmost(walked.dirs.filter(d => old(d, true)));
       if (dirs.length) opts.onIncluded?.(dirs);
+      // Files the old rules ignored come back as a file update. After a truncated scan, other
+      // unindexed files may fill freed room; they may be brand new (with an add event queued that
+      // will now find nothing to do), so they are reported as created changes.
       const wasTruncated = this.truncated;
       let full = false;
-      const add = async (paths: string[], each: (rel: string) => void): Promise<void> => {
-        await this.readEach(paths, new Map(), async (rel, r) => {
-          if (!r) return;
-          if (this.files.size >= this.limit) { full = true; return; }
-          const res = this.apply(rel, r);
-          if (res) { await res; each(rel); }
-        });
-      };
-      const added: string[] = [];
-      await add(walked.files.filter(rel => !this.files.has(rel) && (old(rel, false) || wasTruncated)), rel => added.push(rel));
-      // Files created in the included directories while the reload was reading.
-      const late: string[] = [];
-      if (dirs.length) {
-        const again = await walk(this.root, this.isIgnored, this.limit, dirs);
-        await add(again.files.filter(rel => !this.files.has(rel)), rel => late.push(rel));
-      }
+      const included: string[] = [];
+      const unreached: string[] = [];
+      const fresh = walked.files.filter(rel => !this.files.has(rel) && (old(rel, false) || wasTruncated));
+      await this.readEach(fresh, new Map(), async (rel, r) => {
+        if (!r) return;
+        if (this.files.size >= this.limit) { full = true; return; }
+        const res = this.apply(rel, r);
+        if (res) { await res; (old(rel, false) ? included : unreached).push(rel); }
+      });
       if (whole) this.truncated = walked.truncated || full;
       else if (full) this.truncated = true;
-      if (!removed.length && !added.length && !late.length) return { files: [], removed, dirs, created: [] };
+      if (!removed.length && !included.length && !unreached.length) return { files: [], removed, dirs, created: [] };
       const touched = this.relink([]);
       const byPath = new Map<string, FileModel>();
-      for (const rel of added) byPath.set(rel, this.files.get(rel)!);
-      for (const f of touched) if (!late.includes(f.path)) byPath.set(f.path, f);
-      const created: UpdateResult[] = late.map(rel => ({
+      for (const rel of included) byPath.set(rel, this.files.get(rel)!);
+      for (const f of touched) if (!unreached.includes(f.path)) byPath.set(f.path, f);
+      const created: UpdateResult[] = unreached.map(rel => ({
         path: rel, kind: 'created', before: null, after: this.files.get(rel) ?? null, beforeText: null, afterText: this.texts.get(rel) ?? null, touched: [],
       }));
       return { files: [...byPath.values()].sort((x, y) => cmp(x.path, y.path)), removed, dirs, created };
