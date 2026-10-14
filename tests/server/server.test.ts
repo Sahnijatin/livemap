@@ -194,16 +194,19 @@ describe('startServer: HTTP auth', () => {
     expect(warnings).toEqual([]);
     expect((await get(s.port, q)).status).toBe(200);
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatch(/launch link was already used/i);
+    expect(warnings[0]).toMatch(/launch link was used more than once/i);
   });
 
-  it('a launch code expires unused', async () => {
-    const s = await boot();
+  it('a launch code expires unused, and opening it late says so', async () => {
+    const warnings: string[] = [];
+    const s = await boot({ warn: m => warnings.push(m) });
     const q = s.launchUrl().replace(/^http:\/\/[^/]+/, '');
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       vi.setSystemTime(Date.now() + LAUNCH_TTL_MS + 1);
       expect((await get(s.port, q)).status).toBe(200);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/expired/i);
     } finally {
       vi.useRealTimers();
     }

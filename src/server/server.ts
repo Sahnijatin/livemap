@@ -216,14 +216,16 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     // Only a GET spends a launch code, so a HEAD or link check does not lock the browser out.
     const launch = req.method === 'GET' && url.pathname === '/' ? url.searchParams.get('launch') : null;
     const entry = launch === null ? undefined : launches.get(launch);
-    if (entry && Date.now() <= entry.expires) {
-      if (!entry.spent) {
-        entry.spent = true; // kept until it expires, so a second use can be reported
-        res.writeHead(302, { ...BASE_HEADERS, location: `/?t=${token}`, 'content-length': '0' });
-        res.end();
-        return;
-      }
-      opts.warn?.('the browser launch link was already used. If that was not you, stop LiveMap and start it again for a new key.');
+    if (entry && Date.now() > entry.expires) {
+      launches.delete(launch!);
+      if (!entry.spent) opts.warn?.('the browser launch link expired before it was opened. Open the URL printed above instead.');
+    } else if (entry && !entry.spent) {
+      entry.spent = true; // kept until it expires, so a second use can be reported
+      res.writeHead(302, { ...BASE_HEADERS, location: `/?t=${token}`, 'content-length': '0' });
+      res.end();
+      return;
+    } else if (entry) {
+      opts.warn?.('the browser launch link was used more than once. If you did not open it twice, stop LiveMap and start it again for a new key.');
     }
 
     if (url.pathname === '/api/health') return json(res, 200, { ok: true });
