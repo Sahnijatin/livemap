@@ -12,6 +12,8 @@ export interface ImportCtx {
    * so with a cache only resolution (cheap) is redone.
    */
   specCache?: Map<string, { text: string; specs: string[] }>;
+  /** A prebuilt index of `files`, kept current by the caller; built from `files` when absent. */
+  index?: FileIndex;
 }
 
 type Result = { local: string[]; external: string[] };
@@ -27,24 +29,56 @@ const norm = (p: string): string => {
 };
 const join = (...parts: string[]): string => norm(parts.filter(Boolean).join('/'));
 
-interface FileIndex { byDir: Map<string, string[]>; byBase: Map<string, string[]> }
+export interface FileIndex { byDir: Map<string, string[]>; byBase: Map<string, string[]> }
 const INDEXES = new WeakMap<string[], FileIndex>();
 export const indexStats = { builds: 0, jsParses: 0 };
 
-/** Built once per ctx.files array: dir to files, and basename to files. */
-function indexOf(files: string[]): FileIndex {
-  let idx = INDEXES.get(files);
-  if (idx) return idx;
+const splitPath = (f: string): [dir: string, base: string] => {
+  const slash = f.lastIndexOf('/');
+  return slash === -1 ? ['', f] : [f.slice(0, slash), f.slice(slash + 1)];
+};
+
+/** Dir to files and basename to files, each list sorted; `files` must be sorted. */
+export function buildIndex(files: string[]): FileIndex {
   indexStats.builds++;
-  idx = { byDir: new Map(), byBase: new Map() };
+  const idx: FileIndex = { byDir: new Map(), byBase: new Map() };
   for (const f of files) {
-    const slash = f.lastIndexOf('/');
-    const dir = slash === -1 ? '' : f.slice(0, slash);
-    const base = slash === -1 ? f : f.slice(slash + 1);
+    const [dir, base] = splitPath(f);
     const d = idx.byDir.get(dir); if (d) d.push(f); else idx.byDir.set(dir, [f]);
     const b = idx.byBase.get(base); if (b) b.push(f); else idx.byBase.set(base, [f]);
   }
-  INDEXES.set(files, idx);
+  return idx;
+}
+
+function insertSorted(list: string[], f: string): void {
+  let lo = 0, hi = list.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (list[mid] < f) lo = mid + 1; else hi = mid; }
+  if (list[lo] !== f) list.splice(lo, 0, f);
+}
+
+/** Adds (or removes) one file, keeping the lists sorted as buildIndex makes them. */
+export function indexUpdate(idx: FileIndex, f: string, present: boolean): void {
+  const [dir, base] = splitPath(f);
+  for (const [map, key] of [[idx.byDir, dir], [idx.byBase, base]] as const) {
+    const list = map.get(key);
+    if (present) {
+      if (list) insertSorted(list, f); else map.set(key, [f]);
+    } else if (list) {
+      const i = list.indexOf(f);
+      if (i >= 0) list.splice(i, 1);
+      if (!list.length) map.delete(key);
+    }
+  }
+}
+
+/** The ctx's own index, or one built once per ctx.files array. */
+function indexOf(ctx: ImportCtx): FileIndex {
+  if (ctx.index) return ctx.index;
+  let idx = INDEXES.get(ctx.files);
+  if (!idx) {
+    idx = buildIndex(ctx.files);
+    INDEXES.set(ctx.files, idx);
+  }
   return idx;
 }
 
@@ -204,7 +238,7 @@ function goImports(path: string, src: string, ctx: ImportCtx, local: Set<string>
     const mod = ctx.goModule;
     if (mod && (spec === mod || spec.startsWith(mod + '/'))) {
       const dir = spec.slice(mod.length).replace(/^\//, '');
-      for (const f of indexOf(ctx.files).byDir.get(dir) ?? []) {
+      for (const f of indexOf(ctx).byDir.get(dir) ?? []) {
         if (f.endsWith('.go') && !f.endsWith('_test.go')) local.add(f);
       }
     } else {
@@ -260,7 +294,7 @@ function jvmImports(src: string, ctx: ImportCtx, ext: string, local: Set<string>
   for (const m of src.matchAll(/^[ \t]*import[ \t]+(?:static[ \t]+)?(\w+(?:\.\w+)*)(\.\*)?[ \t]*;?/gm)) {
     const parts = m[1].split('.');
     let found = false;
-    const idx = indexOf(ctx.files);
+    const idx = indexOf(ctx);
     if (m[2]) {
       const relDir = parts.join('/');
       for (const [dir, files] of idx.byDir) {

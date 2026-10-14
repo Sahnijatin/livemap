@@ -4,7 +4,7 @@ import type { CodeSymbol, FileModel } from '../shared/types.js';
 import { langOf } from './languages.js';
 import { fileSymbols } from './symbols/index.js';
 import { scriptBlock } from './symbols/markup.js';
-import { extractImports, readTsconfigAliases, type ImportCtx } from './imports.js';
+import { buildIndex, extractImports, indexUpdate, readTsconfigAliases, type FileIndex, type ImportCtx } from './imports.js';
 import { createIgnore, walk, readForModel, type ReadResult } from './files.js';
 
 export interface UpdateResult {
@@ -44,6 +44,8 @@ export class ProjectModel {
   private queue: Promise<unknown> = Promise.resolve();
   /** Parsed JS/TS import specifiers per file (see ImportCtx.specCache). */
   private specCache: NonNullable<ImportCtx['specCache']> = new Map();
+  /** The live ctx's directory index during a deferred burst (see liveCtx). */
+  private liveIndex: FileIndex | null = null;
   /** A deferred update changed the file set; imports need re-resolving (see update). */
   private relinkPending = false;
 
@@ -65,6 +67,7 @@ export class ProjectModel {
     return this.serial(async () => {
       this.files.clear(); this.texts.clear(); this.lastGood.clear(); this.specCache.clear();
       this.relinkPending = false;
+      this.liveIndex = null;
       const { files, truncated } = await walk(this.root, this.isIgnored, this.limit);
       this.truncated = truncated;
       // Config first so aliases and the Go module apply to every file; then the whole walked tree
@@ -127,8 +130,9 @@ export class ProjectModel {
       if (setChanged || CONFIG_FILES.has(rel)) {
         // Config (aliases, Go module) changes resolution for every file, so it relinks at once.
         if (opts.deferRelink && !CONFIG_FILES.has(rel)) {
+          if (!this.relinkPending) this.ctx = this.liveCtx(); // first deferral of a burst
           this.relinkPending = true;
-          this.ctx = this.liveCtx();
+          if (this.liveIndex) indexUpdate(this.liveIndex, rel, result.kind !== 'deleted');
         } else {
           result.touched = this.relink([rel]);
           result.after = this.files.get(rel) ?? null;
@@ -286,6 +290,7 @@ export class ProjectModel {
   /** Re-resolves every text file's imports; returns the files (other than `skip`) whose local imports changed. */
   private relink(skip: string[]): FileModel[] {
     this.relinkPending = false;
+    this.liveIndex = null;
     this.ctx = this.makeCtx([...this.files.keys()]);
     const touched: FileModel[] = [];
     for (const [rel, text] of this.texts) {
@@ -303,16 +308,18 @@ export class ProjectModel {
   }
 
   /**
-   * Ctx over the live file set, for later files in a deferred burst. The sorted file list (used
-   * only by Go and JVM directory lookups) is built on first use, so JS-only bursts never pay for it.
+   * Ctx over the live file set, used for the rest of a deferred burst. The directory index (used
+   * only by Go and JVM lookups) is built on first use and then kept current by update(), so a
+   * burst builds it at most once and JS-only bursts never do.
    */
   private liveCtx(): ImportCtx {
     const files = this.files;
-    let sorted: string[] | null = null;
     const { aliases, goModule } = this.ctx;
+    const model = this;
     return {
       has: p => files.has(p),
-      get files() { return (sorted ??= [...files.keys()].sort(cmp)); },
+      get files() { return [...files.keys()].sort(cmp); },
+      get index() { return (model.liveIndex ??= buildIndex([...files.keys()].sort(cmp))); },
       aliases,
       goModule,
       specCache: this.specCache,

@@ -4,6 +4,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ProjectModel } from '../../src/engine/project.js';
+import { indexStats } from '../../src/engine/imports.js';
 
 let root: string;
 function put(rel: string, data: string | Buffer): void {
@@ -356,5 +357,23 @@ describe('ProjectModel fix round 1', () => {
     put('a.ts', "import { x } from '~lib/x';\n");
     const a = await m.update('a.ts', 'add', { deferRelink: true });
     expect(a!.after!.imports.local).toEqual(['lib/x.ts']);
+  });
+
+  it('a Go burst builds the directory index once and keeps it current', async () => {
+    put('go.mod', 'module shop\n');
+    const m = await scanned();
+    const before = indexStats.builds;
+    for (let i = 0; i < 20; i++) {
+      put(`pkg${i}/p.go`, `package pkg${i}\n`);
+      await m.update(`pkg${i}/p.go`, 'add', { deferRelink: true });
+      put(`cmd${i}/main.go`, `package main\nimport "shop/pkg${i}"\n`);
+      const r = await m.update(`cmd${i}/main.go`, 'add', { deferRelink: true });
+      expect(r!.after!.imports.local).toEqual([`pkg${i}/p.go`]);
+    }
+    fs.rmSync(path.join(root, 'pkg0'), { recursive: true });
+    await m.update('pkg0/p.go', 'unlink', { deferRelink: true });
+    put('cmd0/main.go', 'package main\nimport "shop/pkg0"\n// edited\n');
+    expect((await m.update('cmd0/main.go', 'change', { deferRelink: true }))!.after!.imports.local).toEqual([]);
+    expect(indexStats.builds - before).toBe(1);
   });
 });
