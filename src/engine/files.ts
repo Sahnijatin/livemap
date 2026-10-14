@@ -165,14 +165,24 @@ export type ReadResult =
   | { kind: 'binary' | 'tooLarge' | 'secret'; size: number; envKeys?: string[] }
   | null;
 
-/** Reads at most MAX_PARSE_BYTES + 1 bytes so a growing file cannot be read unbounded. */
-async function readCapped(abs: string): Promise<Buffer | null> {
+/**
+ * Reads at most MAX_PARSE_BYTES + 1 bytes so a growing file cannot be read unbounded. The buffer
+ * starts one byte past the stat size (to notice growth) and doubles only if the file grew.
+ */
+async function readCapped(abs: string, sizeHint: number): Promise<Buffer | null> {
+  const cap = MAX_PARSE_BYTES + 1;
   let fh;
   try {
     fh = await fs.open(abs, 'r');
-    const buf = Buffer.alloc(MAX_PARSE_BYTES + 1);
+    let buf = Buffer.allocUnsafe(Math.min(cap, Math.max(0, sizeHint) + 1));
     let off = 0;
-    while (off < buf.length) {
+    for (;;) {
+      if (off === buf.length) {
+        if (buf.length >= cap) break;
+        const bigger = Buffer.allocUnsafe(Math.min(cap, buf.length * 2));
+        buf.copy(bigger, 0, 0, off);
+        buf = bigger;
+      }
       const { bytesRead } = await fh.read(buf, off, buf.length - off, off);
       if (bytesRead === 0) break;
       off += bytesRead;
@@ -203,14 +213,14 @@ export async function readForModel(root: string, rel: string): Promise<ReadResul
   }
   if (isSecretEnvPath(rel)) {
     if (size > MAX_PARSE_BYTES) return { kind: 'secret', size, envKeys: [] };
-    const buf = await readCapped(abs);
+    const buf = await readCapped(abs, size);
     if (!buf) return null;
     if (buf.length > MAX_PARSE_BYTES) return { kind: 'secret', size: buf.length, envKeys: [] };
     return { kind: 'secret', size, envKeys: envKeys(buf.toString('utf8')) };
   }
   if (isBinaryPath(rel)) return { kind: 'binary', size };
   if (size > MAX_PARSE_BYTES) return { kind: 'tooLarge', size };
-  const buf = await readCapped(abs);
+  const buf = await readCapped(abs, size);
   if (!buf) return null;
   if (buf.length > MAX_PARSE_BYTES) return { kind: 'tooLarge', size: buf.length };
   if (buf.includes(0)) return { kind: 'binary', size };

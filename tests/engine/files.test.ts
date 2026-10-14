@@ -64,6 +64,37 @@ describe('walk', () => {
 });
 
 describe('readForModel', () => {
+  it('sizes its read buffer to the file, not the 1 MB cap', async () => {
+    put('small.ts', 'export const a = 1;\n');
+    const alloc = vi.spyOn(Buffer, 'alloc');
+    const unsafe = vi.spyOn(Buffer, 'allocUnsafe');
+    try {
+      expect(await readForModel(root, 'small.ts')).toEqual({ kind: 'text', text: 'export const a = 1;\n', size: 20 });
+      const sizes = [...alloc.mock.calls, ...unsafe.mock.calls].map(c => c[0] as number);
+      expect(Math.max(0, ...sizes)).toBeLessThan(4096);
+    } finally {
+      alloc.mockRestore(); unsafe.mockRestore();
+    }
+  });
+  it('reads all of a file that grew after it was stat-ed, and still caps at 1 MB', async () => {
+    put('grow.ts', 'x'.repeat(5000));
+    const real = fsp.lstat.bind(fsp);
+    const lstat = vi.spyOn(fsp, 'lstat').mockImplementation(async p => ({ ...(await real(p)), size: 10, isFile: () => true, isSymbolicLink: () => false }) as never);
+    try {
+      const r = await readForModel(root, 'grow.ts');
+      expect(r && r.kind === 'text' && r.text.length).toBe(5000);
+      put('huge.ts', 'x'.repeat(1_048_577));
+      expect((await readForModel(root, 'huge.ts'))?.kind).toBe('tooLarge');
+    } finally {
+      lstat.mockRestore();
+    }
+  });
+  it('a file of exactly 1 MB is text; one byte more is tooLarge', async () => {
+    put('max.ts', 'x'.repeat(1_048_576));
+    put('over.ts', 'x'.repeat(1_048_577));
+    expect((await readForModel(root, 'max.ts'))?.kind).toBe('text');
+    expect((await readForModel(root, 'over.ts'))?.kind).toBe('tooLarge');
+  });
   it('hides env values, returns key names', async () => {
     put('.envrc', 'export AWS_SECRET_ACCESS_KEY=leak\n');
     put('prod.env', 'DB_PASSWORD=leak\n');
