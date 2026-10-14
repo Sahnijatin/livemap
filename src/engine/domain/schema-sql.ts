@@ -58,34 +58,34 @@ function blankSingle(sql: string): string {
 type Line = (index: number) => number;
 interface Table { entity: Entity; cols: Columns }
 
-/** Fields of one table in column order, indexed by name so wide tables and long ALTER runs stay linear. */
+/** Fields of one table in column order, indexed by lowercased name (SQL names are case-insensitive) so wide tables and long ALTER runs stay linear. */
 class Columns {
   readonly list: Field[] = [];
   private readonly byName = new Map<string, Field>();
-  get(name: string): Field | undefined { return this.byName.get(name); }
+  get(name: string): Field | undefined { return this.byName.get(name.toLowerCase()); }
   /** Adds `f`, or merges its flags into the field of the same name (keeping a known type). */
   upsert(f: Field): void {
-    const old = this.byName.get(f.name);
-    if (!old) { this.list.push(f); this.byName.set(f.name, f); return; }
+    const old = this.byName.get(f.name.toLowerCase());
+    if (!old) { this.list.push(f); this.byName.set(f.name.toLowerCase(), f); return; }
     const { type, line: _line, ...flags } = f;
     Object.assign(old, flags);
     if (!old.type) old.type = type;
   }
   /** Removes the column; false when there is none of that name. */
   remove(name: string): boolean {
-    const f = this.byName.get(name);
+    const f = this.byName.get(name.toLowerCase());
     if (!f) return false;
     this.list.splice(this.list.indexOf(f), 1);
-    this.byName.delete(name);
+    this.byName.delete(name.toLowerCase());
     return true;
   }
   /** Renames the column in place; false when there is none of that name. */
   rename(from: string, to: string): boolean {
-    const f = this.byName.get(from);
-    if (!f) return false;
-    this.byName.delete(from);
+    const f = this.byName.get(from.toLowerCase());
+    if (!f || (this.byName.has(to.toLowerCase()) && to.toLowerCase() !== from.toLowerCase())) return false;
+    this.byName.delete(from.toLowerCase());
     f.name = to;
-    this.byName.set(to, f);
+    this.byName.set(to.toLowerCase(), f);
     return true;
   }
 }
@@ -243,7 +243,15 @@ function parseSql(sql: string, line: Line, rel: string, out: Entity[], tables: M
     }
     const t = target;
     for (const op of ops) {
-      if ('add' in op) { for (const f of op.add.list) t.cols.upsert(f); continue; }
+      if ('add' in op) {
+        for (const f of op.add.list) {
+          t.cols.upsert(f);
+          // Re-added after a drop recorded for the merge: the column exists again.
+          if (t.entity.dropped) t.entity.dropped = t.entity.dropped.filter(d => d.toLowerCase() !== f.name.toLowerCase());
+        }
+        if (t.entity.dropped?.length === 0) delete t.entity.dropped;
+        continue;
+      }
       // Columns this file knows change here; on a fragment, the rest is recorded for the merge.
       if ('drop' in op) { if (!t.cols.remove(op.drop) && t.entity.partial) (t.entity.dropped ??= []).push(op.drop); continue; }
       if (!t.cols.rename(...op.rename) && t.entity.partial) (t.entity.renamed ??= []).push(op.rename);

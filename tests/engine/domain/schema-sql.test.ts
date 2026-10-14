@@ -134,5 +134,18 @@ ALTER TABLE orders DROP FOREIGN KEY fk_x;
 ALTER TABLE orders RENAME TO purchases;`);
     expect(out).toEqual([]);
   });
+
+  it('matches column names case-insensitively, as SQL does', () => {
+    const [t] = run('db/schema.sql', `CREATE TABLE orders (id INT, Status TEXT, Name TEXT);
+ALTER TABLE orders DROP COLUMN status;
+ALTER TABLE orders RENAME COLUMN name TO title;`);
+    expect(fields(t)).toEqual(['id', 'title']);
+  });
+
+  it('a column dropped and re-added in one migration is not recorded as dropped', () => {
+    const [t] = run('db/migrations/004.sql', 'ALTER TABLE orders DROP COLUMN note;\nALTER TABLE orders ADD COLUMN note TEXT;');
+    expect(t.fields.map(f => f.name)).toEqual(['note']);
+    expect(t.dropped).toBeUndefined();
+  });
 });
 
