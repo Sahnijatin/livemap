@@ -335,4 +335,14 @@ describe('ProjectModel fix round 1', () => {
       lstat.mockRestore();
     }
   });
+
+  it('a config change is never deferred, so the rest of a burst uses the new aliases', async () => {
+    put('lib/x.ts', 'export const x = 1;\n');
+    const m = await scanned();
+    put('tsconfig.json', '{ "compilerOptions": { "paths": { "~lib/*": ["lib/*"] } } }');
+    await m.update('tsconfig.json', 'add', { deferRelink: true });
+    put('a.ts', "import { x } from '~lib/x';\n");
+    const a = await m.update('a.ts', 'add', { deferRelink: true });
+    expect(a!.after!.imports.local).toEqual(['lib/x.ts']);
+  });
 });

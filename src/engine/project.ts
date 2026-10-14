@@ -127,7 +127,8 @@ export class ProjectModel {
       if (!res) return null;
       const { result, setChanged } = await res;
       if (setChanged || CONFIG_FILES.has(rel)) {
-        if (opts.deferRelink) {
+        // Config (aliases, Go module) changes resolution for every file, so it relinks at once.
+        if (opts.deferRelink && !CONFIG_FILES.has(rel)) {
           this.relinkPending = true;
           this.ctx = this.liveCtx();
         } else {
