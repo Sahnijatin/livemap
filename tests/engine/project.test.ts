@@ -305,4 +305,13 @@ describe('ProjectModel fix round 1', () => {
     const main = await m.update('cmd/main.go', 'add', { deferRelink: true });
     expect(main!.after!.imports.local).toEqual(['internal/db/db.go']);
   });
+
+  it('forgets a deleted file\'s cached import specifiers', async () => {
+    const m = await scanned();
+    const cache = (m as unknown as { specCache: Map<string, unknown> }).specCache;
+    expect(cache.has('src/a.ts')).toBe(true);
+    fs.rmSync(path.join(root, 'src/a.ts'));
+    await m.update('src/a.ts', 'unlink');
+    expect(cache.has('src/a.ts')).toBe(false);
+  });
 });

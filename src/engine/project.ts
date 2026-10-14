@@ -42,6 +42,8 @@ export class ProjectModel {
   private isIgnored: (rel: string, isDir: boolean) => boolean;
   private ctx: ImportCtx;
   private queue: Promise<unknown> = Promise.resolve();
+  /** Parsed JS/TS import specifiers per file (see ImportCtx.specCache). */
+  private specCache: NonNullable<ImportCtx['specCache']> = new Map();
   /** A deferred update changed the file set; imports need re-resolving (see update). */
   private relinkPending = false;
 
@@ -61,7 +63,7 @@ export class ProjectModel {
 
   scan(onProgress?: (done: number, total: number) => void): Promise<void> {
     return this.serial(async () => {
-      this.files.clear(); this.texts.clear(); this.lastGood.clear();
+      this.files.clear(); this.texts.clear(); this.lastGood.clear(); this.specCache.clear();
       this.relinkPending = false;
       const { files, truncated } = await walk(this.root, this.isIgnored, this.limit);
       this.truncated = truncated;
@@ -185,7 +187,7 @@ export class ProjectModel {
     const beforeText = this.texts.get(rel) ?? null;
     if (!r) {
       if (!before) return null;
-      this.files.delete(rel); this.texts.delete(rel); this.lastGood.delete(rel);
+      this.files.delete(rel); this.texts.delete(rel); this.lastGood.delete(rel); this.specCache.delete(rel);
       return Promise.resolve({
         result: { path: rel, kind: 'deleted', before, after: null, beforeText, afterText: null, touched: [] },
         setChanged: true,
@@ -282,6 +284,7 @@ export class ProjectModel {
       get files() { return (sorted ??= [...files.keys()].sort(cmp)); },
       aliases,
       goModule,
+      specCache: this.specCache,
     };
   }
 
@@ -292,6 +295,6 @@ export class ProjectModel {
     const ts = this.texts.get('tsconfig.json') ?? this.texts.get('jsconfig.json');
     const goMod = this.texts.get('go.mod');
     const goModule = goMod ? /^\s*module\s+(\S+)/m.exec(goMod)?.[1] ?? null : null;
-    return { has: p => set.has(p), files, aliases: ts ? readTsconfigAliases(ts) : [], goModule };
+    return { has: p => set.has(p), files, aliases: ts ? readTsconfigAliases(ts) : [], goModule, specCache: this.specCache };
   }
 }

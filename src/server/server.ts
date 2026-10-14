@@ -4,7 +4,7 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { ProjectModel } from '../engine/project.js';
 import type { Watcher } from '../engine/watcher.js';
-import { buildUsedBy } from '../engine/usedby.js';
+import { buildUsedBy, type TokenCache } from '../engine/usedby.js';
 import type { ServerMessage, UsedByEntry } from '../shared/protocol.js';
 import type { ChangeSummary, FileModel } from '../shared/types.js';
 import { authenticate, hostAllowed, newToken, originAllowed } from './auth.js';
@@ -152,6 +152,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   let usedBy: UsedByEntry[] = [];
   let usedByAt = 0;
   let usedByTimer: NodeJS.Timeout | null = null;
+  const usedByTokens: TokenCache = new Map();
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
   /** One-time launch codes (see launchUrl). */
@@ -172,7 +173,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   });
   const computeUsedBy = (): void => {
     usedByAt = Date.now();
-    usedBy = buildUsedBy(model.all(), p => model.content(p));
+    usedBy = buildUsedBy(model.all(), p => model.content(p), usedByTokens);
   };
   const scheduleUsedBy = (): void => {
     if (usedByTimer) return;

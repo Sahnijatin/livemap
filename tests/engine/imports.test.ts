@@ -78,25 +78,29 @@ describe('indexing and fixes', () => {
     expect(imp('src/a.ts','typescript',`// import x from './lib/b'\n/* require('lodash') */\nimport u from 'http://x'; import y from './lib'`))
       .toEqual({ local: ['src/lib/index.ts'], external: [] });
   });
-  it('re-resolving unchanged JS text reuses its parsed specifiers but sees the new file set', () => {
-    const src = `import b from './lib/b'; import n from './lib/new'; // ${Math.random()}`;
+  it('re-resolving unchanged JS text reuses its cached specifiers but sees the new file set', () => {
+    const specCache: NonNullable<ImportCtx['specCache']> = new Map();
+    const src = "import b from './lib/b'; import n from './lib/new';";
     const before = indexStats.jsParses;
-    expect(imp('src/a.ts', 'typescript', src).local).toEqual(['src/lib/b.ts']);
+    expect(imp('src/a.ts', 'typescript', src, { specCache }).local).toEqual(['src/lib/b.ts']);
     const files = [...FILES, 'src/lib/new.ts'];
     const more = new Set(files);
-    expect(extractImports('src/a.ts', 'typescript', src, { has: p => more.has(p), files, aliases: [], goModule: null }).local)
+    expect(extractImports('src/a.ts', 'typescript', src, { has: p => more.has(p), files, aliases: [], goModule: null, specCache }).local)
       .toEqual(['src/lib/b.ts', 'src/lib/new.ts']);
     expect(indexStats.jsParses - before).toBe(1);
   });
-  it('keeps only the latest text per file in the specifier cache', () => {
-    const v1 = `import b from './lib/b'; // v1 ${Math.random()}`;
-    const v2 = `import b from './lib/b'; // v2 ${Math.random()}`;
-    const before = indexStats.jsParses;
-    imp('src/cache.ts', 'typescript', v1);
-    imp('src/cache.ts', 'typescript', v2);
-    imp('src/cache.ts', 'typescript', v1); // v1 was replaced by v2, so it is parsed again
-    imp('src/cache.ts', 'typescript', v1);
+  it('keeps only the latest text per file in the specifier cache, and caches nothing without one', () => {
+    const specCache: NonNullable<ImportCtx['specCache']> = new Map();
+    const v1 = "import b from './lib/b'; // v1";
+    const v2 = "import b from './lib/b'; // v2";
+    let before = indexStats.jsParses;
+    for (const v of [v1, v2, v1, v1]) imp('src/cache.ts', 'typescript', v, { specCache });
     expect(indexStats.jsParses - before).toBe(3);
+    expect(specCache.size).toBe(1);
+    before = indexStats.jsParses;
+    imp('src/cache.ts', 'typescript', v1);
+    imp('src/cache.ts', 'typescript', v1);
+    expect(indexStats.jsParses - before).toBe(2);
   });
   it('prefers the longest alias prefix', () => {
     expect(imp('src/a.ts','typescript',`import b from '@a/lib/b'`, { aliases: [['@a',['nowhere']],['@a/lib',['src/lib']]] }).local).toEqual(['src/lib/b.ts']);

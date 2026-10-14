@@ -6,6 +6,12 @@ export interface ImportCtx {
   files: string[];
   aliases: [string, string[]][];
   goModule: string | null;
+  /**
+   * JS/TS specifiers per file for its latest text, owned by the caller (ProjectModel). Relinking
+   * re-resolves every file whenever the file set changes while almost every text is unchanged,
+   * so with a cache only resolution (cheap) is redone.
+   */
+  specCache?: Map<string, { text: string; specs: string[] }>;
 }
 
 type Result = { local: string[]; external: string[] };
@@ -77,19 +83,11 @@ function resolveJsPath(base: string, ctx: ImportCtx): string | null {
   return null;
 }
 
-/**
- * Specifiers per file, for its latest text only. Relinking re-resolves every file whenever the
- * file set changes while almost every text is unchanged, so only resolution (cheap) is redone.
- */
-const JS_SPECS = new Map<string, { text: string; specs: string[] }>();
-const JS_SPECS_MAX_FILES = 200_000;
-
-function jsSpecs(path: string, src: string): string[] {
-  const hit = JS_SPECS.get(path);
+function jsSpecs(path: string, src: string, cache: ImportCtx['specCache']): string[] {
+  const hit = cache?.get(path);
   if (hit && hit.text === src) return hit.specs;
   const specs = parseJsSpecs(src);
-  if (!hit && JS_SPECS.size >= JS_SPECS_MAX_FILES) JS_SPECS.clear();
-  JS_SPECS.set(path, { text: src, specs });
+  cache?.set(path, { text: src, specs });
   return specs;
 }
 
@@ -126,7 +124,7 @@ function longestFirst(aliases: ImportCtx['aliases']): ImportCtx['aliases'] {
 
 function jsImports(path: string, src: string, ctx: ImportCtx, local: Set<string>, external: Set<string>): void {
   const dir = posix.dirname(path) === '.' ? '' : posix.dirname(path);
-  for (const spec of jsSpecs(path, src)) {
+  for (const spec of jsSpecs(path, src, ctx.specCache)) {
     if (spec.startsWith('./') || spec.startsWith('../') || spec === '.' || spec === '..') {
       const r = resolveJsPath(join(dir, spec), ctx);
       if (r) local.add(r);

@@ -38,14 +38,14 @@ describe('buildUsedBy', () => {
   });
 
   it('rebuilding rescans only importer texts that changed', () => {
+    const cache = new Map();
     const files = [file('lib.ts', [sym('alpha', true), sym('beta', true)]), file('u1.ts', [], ['lib.ts']), file('u2.ts', [], ['lib.ts'])];
-    const tag = Math.random();
-    const text: Record<string, string> = { 'u1.ts': `alpha(); // ${tag}`, 'u2.ts': `beta(); // ${tag}` };
+    const text: Record<string, string> = { 'u1.ts': 'alpha();', 'u2.ts': 'beta();' };
     const before = usedByStats.scans;
-    buildUsedBy(files, p => text[p] ?? null);
+    buildUsedBy(files, p => text[p] ?? null, cache);
     expect(usedByStats.scans - before).toBe(2);
-    text['u2.ts'] = `alpha(); beta(); // ${tag}`;
-    expect(buildUsedBy(files, p => text[p] ?? null)).toEqual([
+    text['u2.ts'] = 'alpha(); beta();';
+    expect(buildUsedBy(files, p => text[p] ?? null, cache)).toEqual([
       { file: 'lib.ts', symbol: 'alpha', usedIn: ['u1.ts', 'u2.ts'] },
       { file: 'lib.ts', symbol: 'beta', usedIn: ['u2.ts'] },
     ]);
@@ -57,11 +57,14 @@ describe('buildUsedBy', () => {
     expect(buildUsedBy(files, () => 'a operator+ b')).toEqual([{ file: 'ops.h', symbol: 'operator+', usedIn: ['use.cc'] }]);
   });
 
-  it('keeps only the latest text per file in the token cache', () => {
+  it('keeps only the latest text per file in the token cache, and drops files that are gone', () => {
+    const cache = new Map();
     const files = [file('lib.ts', [sym('alpha', true)]), file('u.ts', [], ['lib.ts'])];
-    const tag = Math.random();
     const before = usedByStats.scans;
-    for (const t of [`alpha ${tag}`, `beta ${tag}`, `alpha ${tag}`]) buildUsedBy(files, p => (p === 'u.ts' ? t : null));
+    for (const t of ['alpha', 'beta', 'alpha']) buildUsedBy(files, p => (p === 'u.ts' ? t : null), cache);
     expect(usedByStats.scans - before).toBe(3);
+    expect([...cache.keys()]).toEqual(['u.ts']);
+    buildUsedBy([files[0]], () => null, cache);
+    expect(cache.size).toBe(0);
   });
 });
