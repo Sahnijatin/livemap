@@ -182,8 +182,11 @@ export async function walk(
   }
 
   for (const dir of from) {
-    if (dir === '') await visit('');
-    else if (!ignored(dir, true)) { if (opts.dirs) dirs.push(dir); await visit(dir); }
+    if (dir === '') { await visit(''); continue; }
+    // Like any entry in the walk, a symlinked start directory is not followed.
+    let isDir = false;
+    try { const st = await fs.lstat(path.join(root, ...dir.split('/'))); isDir = st.isDirectory(); } catch { /* gone */ }
+    if (isDir && !ignored(dir, true)) { if (opts.dirs) dirs.push(dir); await visit(dir); }
   }
   files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   return { files, dirs, truncated };

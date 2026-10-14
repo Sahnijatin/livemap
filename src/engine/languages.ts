@@ -73,12 +73,12 @@ export function isSecretEnvPath(path: string): boolean {
   const b = baseName(path).toLowerCase().replace(/^#(.*)#$/, '$1').replace(/~+$/, '');
   if (SECRET_NAMES.has(b)) return true;
   const prefixed = /^\.(?:envrc|env|npmrc|netrc|pypirc)([._-].*)$/.exec(b);
-  if (prefixed) return !endsAsExample(prefixed[1]) && !b.endsWith('.d.ts');
+  if (prefixed) return !endsAsExample(prefixed[1]) && b !== '.env.d.ts';
   const m = /^(.+)\.env(?:[._-](.+))?$/.exec(b);
   if (!m) return false;
   const [, stem, suffix] = m;
   // `example.env` / `example.env.json` are examples; `example.env.local` is a real override.
-  if (/(^|\.)(example|sample|template)$/.test(stem) && (suffix === undefined || DATA_EXT.test(`.${suffix}`))) return false;
+  if (/(^|\.)(example|sample|template)$/.test(stem) && (suffix === undefined || /^(json|ya?ml|toml|txt)$/.test(suffix))) return false;
   return suffix === undefined || (!endsAsExample(suffix) && !isCode(suffix));
 }
 

@@ -50,6 +50,7 @@ const MAX_CHANGES = 500;
 const USED_BY_INTERVAL_MS = 1000;
 const INDEXING_INTERVAL_MS = 100;
 const WS_UNAUTHORIZED = 4401;
+const REUSED_LINK = 'the browser launch link was used more than once. If you did not open it twice, stop LiveMap and start it again for a new key.';
 /** How long a launch code from launchUrl() stays redeemable. */
 export const LAUNCH_TTL_MS = 2 * 60_000;
 
@@ -229,6 +230,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     if (entry && Date.now() > entry.expires) {
       launches.delete(launch!);
       if (!entry.spent) opts.warn?.('the browser launch link expired before it was opened. Open the URL printed above instead.');
+      else if (!entry.warned) opts.warn?.(REUSED_LINK);
     } else if (entry && !entry.spent) {
       entry.spent = true; // kept until it expires, so a second use can be reported
       res.writeHead(302, { ...BASE_HEADERS, location: `/?t=${token}`, 'content-length': '0' });
@@ -236,7 +238,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
       return;
     } else if (entry && !entry.warned) {
       entry.warned = true;
-      opts.warn?.('the browser launch link was used more than once. If you did not open it twice, stop LiveMap and start it again for a new key.');
+      opts.warn?.(REUSED_LINK);
     }
 
     if (url.pathname === '/api/health') return json(res, 200, { ok: true });

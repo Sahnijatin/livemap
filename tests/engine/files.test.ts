@@ -105,6 +105,11 @@ describe('walk', () => {
       fs.rmSync(outside, { recursive: true, force: true });
     }
   });
+  it('a walk from a subtree root that is a symlink does not follow it', async () => {
+    put('src/a.ts');
+    fs.symlinkSync(path.join(root, 'src'), path.join(root, 'link'));
+    expect((await walk(root, createIgnore(root), 100, ['link'])).files).toEqual([]);
+  });
   it('directory patterns need isDir', () => {
     put('.gitignore', 'secret/\n');
     const ig = createIgnore(root);
