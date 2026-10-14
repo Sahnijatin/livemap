@@ -189,7 +189,6 @@ describe('FileRow badges', () => {
     expect(dot.getAttribute('title')).toMatch(/parse error/i);
     expect(x().querySelector('.b-edit')).not.toBeNull();
     expect(x().querySelector('.fmeta')).toBeNull();
-    expect(host.querySelector('[data-file="a/x.ts"] .b-edit')).not.toBeNull();
     expect(host.querySelector('[data-file="a/y.ts"] .fmeta')!.textContent).toBe('1');
   });
 });
