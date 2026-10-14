@@ -2,12 +2,13 @@ import { create } from 'zustand';
 import type { ApiRoute, DomainIndex, Table } from '@shared/domain.js';
 import type { ServerMessage, UsedByEntry } from '@shared/protocol.js';
 import type { AgentEvent, AgentSession, ChangeSummary, ControlState, Dep, FileModel } from '@shared/types.js';
+import { LARGE_PROJECT, codeFileCount, edgeBaseline, type Level } from './map/mapModel';
 
 export const MAX_CHANGES = 2000;
 export const MAX_EVENTS = 2000;
 
-export type CenterTab = 'activity' | 'schema' | 'api' | 'stack';
-export const CENTER_TABS: CenterTab[] = ['activity', 'schema', 'api', 'stack'];
+export type CenterTab = 'activity' | 'map' | 'schema' | 'api' | 'stack';
+export const CENTER_TABS: CenterTab[] = ['activity', 'map', 'schema', 'api', 'stack'];
 const TAB_KEY = 'livemap-tab';
 
 /** The remembered center tab; `activity` when storage is empty, unavailable or throws. */
@@ -17,6 +18,25 @@ export function loadTab(): CenterTab {
     return CENTER_TABS.includes(t as CenterTab) ? (t as CenterTab) : 'activity';
   } catch {
     return 'activity';
+  }
+}
+
+const FOLLOW_KEY = 'livemap:follow';
+
+/** The remembered Follow toggle; on when storage is empty, unavailable or throws. */
+export function loadFollow(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(FOLLOW_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+function saveFollow(on: boolean): void {
+  try {
+    globalThis.localStorage?.setItem(FOLLOW_KEY, on ? '1' : '0');
+  } catch {
+    // Blocked storage: the setting lasts for this page only.
   }
 }
 
@@ -56,6 +76,14 @@ function baseOf(d: DomainIndex): DomainBase {
 }
 
 export type RecentKind = 'created' | 'modified';
+/** How many recently selected files the palette's "Recent" lists. */
+export const HISTORY_MAX = 8;
+
+/** `path` first, then the rest without it, at most HISTORY_MAX. */
+function pushHistory(history: string[], path: string): string[] {
+  if (history[0] === path) return history;
+  return [path, ...history.filter(p => p !== path)].slice(0, HISTORY_MAX);
+}
 export type ConnectionState = 'connecting' | 'open' | 'closed' | 'unauthorized';
 
 export interface StoreState {
@@ -95,6 +123,24 @@ export interface StoreState {
   routesByFile: Record<string, ApiRoute[]>;
   /** The center pane's tab, remembered across reloads. */
   tab: CenterTab;
+  /** Map detail level; a large project opens at folders. */
+  mapLevel: Level;
+  /** Map folders (by `dir:` id) whose files show in a large project. */
+  mapExpanded: Record<string, true>;
+  /** File and folder edge ids present in the last hello; later edges are "new". */
+  helloEdges: Set<string>;
+  /** File paths present in the last hello; files that appear later are new to this session (they spring in on the Map). */
+  helloFiles: Set<string>;
+  /** Map Follow: the camera eases to the file the agent is writing. Remembered across reloads. */
+  follow: boolean;
+  /** The last HISTORY_MAX distinct selected files, most recent first. */
+  history: string[];
+  /** Requests for the active view to bring something into view (seq makes repeats fire). */
+  mapFocus: { path: string; seq: number } | null;
+  tableFocus: { key: string; seq: number } | null;
+  routeTrace: { id: string; seq: number } | null;
+  /** The ⌘K palette is open. */
+  paletteOpen: boolean;
 
   apply(msg: ServerMessage): void;
   select(path: string | null): void;
@@ -106,6 +152,17 @@ export interface StoreState {
   setPanel(panel: StoreState['panel']): void;
   showToast(text: string, tone?: 'info' | 'error'): void;
   setTab(t: CenterTab): void;
+  setMapLevel(level: Level): void;
+  toggleMapFolder(id: string): void;
+  expandMapFolder(id: string): void;
+  setFollow(on: boolean): void;
+  /** Ask the Map to center on a file (a programmatic camera move). */
+  focusMap(path: string): void;
+  /** Ask the Schema view to center and highlight a table (by table key). */
+  focusTable(key: string): void;
+  /** Ask the API view to trace a route (by route id). */
+  traceRoute(id: string): void;
+  setPalette(open: boolean): void;
   reset(): void;
 }
 
@@ -131,6 +188,15 @@ const initial = {
   control: { paused: false, flags: [] } as ControlState,
   liveAfterId: 0,
   toast: null,
+  mapLevel: 'files' as Level,
+  mapExpanded: {} as Record<string, true>,
+  helloEdges: new Set<string>(),
+  helloFiles: new Set<string>(),
+  history: [] as string[],
+  mapFocus: null,
+  tableFocus: null,
+  routeTrace: null,
+  paletteOpen: false,
 };
 
 function routesByFileOf(domain: DomainIndex): Record<string, ApiRoute[]> {
@@ -158,6 +224,7 @@ export const useStore = create<StoreState>()((set, get) => ({
   ...initial,
   ...freshDomain(),
   tab: loadTab(),
+  follow: loadFollow(),
 
   apply(msg) {
     switch (msg.type) {
@@ -169,7 +236,7 @@ export const useStore = create<StoreState>()((set, get) => ({
         const changes = msg.changes.slice(-MAX_CHANGES);
         const recent: StoreState['recent'] = {};
         for (const c of changes) recordRecent(recent, c);
-        const { selected } = get();
+        const { selected, loaded } = get();
         // Tolerate a hello without agent fields (agent activity unavailable).
         const events = (msg.events ?? []).slice(-MAX_EVENTS);
         const sessions: Record<string, AgentSession> = {};
@@ -194,6 +261,10 @@ export const useStore = create<StoreState>()((set, get) => ({
           recent,
           indexing: msg.indexing ? get().indexing ?? { done: 0, total: 0 } : null,
           selected: selected && files[selected] ? selected : null,
+          helloEdges: edgeBaseline(files),
+          helloFiles: new Set(Object.keys(files)),
+          // The first hello of a large project opens the map at folders; a reconnect keeps the user's level.
+          ...(!loaded && codeFileCount(files) > LARGE_PROJECT ? { mapLevel: 'folders' as Level } : {}),
         });
         return;
       }
@@ -246,7 +317,7 @@ export const useStore = create<StoreState>()((set, get) => ({
   },
 
   select(path) {
-    set({ selected: path });
+    set(path ? { selected: path, history: pushHistory(get().history, path) } : { selected: null });
   },
 
   toggle(path) {
@@ -264,7 +335,7 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   revealLine(path, line) {
     const seq = (get().reveal?.seq ?? 0) + 1;
-    set({ selected: path, reveal: { path, line, seq } });
+    set({ selected: path, reveal: { path, line, seq }, history: pushHistory(get().history, path) });
   },
 
   clearReveal() {
@@ -284,7 +355,43 @@ export const useStore = create<StoreState>()((set, get) => ({
     saveTab(tab);
   },
 
+  setMapLevel(mapLevel) {
+    set({ mapLevel });
+  },
+
+  toggleMapFolder(id) {
+    const mapExpanded = { ...get().mapExpanded };
+    if (mapExpanded[id]) delete mapExpanded[id];
+    else mapExpanded[id] = true;
+    set({ mapExpanded });
+  },
+
+  expandMapFolder(id) {
+    if (!get().mapExpanded[id]) set({ mapExpanded: { ...get().mapExpanded, [id]: true } });
+  },
+
+  setFollow(follow) {
+    set({ follow });
+    saveFollow(follow);
+  },
+
+  focusMap(path) {
+    set({ mapFocus: { path, seq: (get().mapFocus?.seq ?? 0) + 1 } });
+  },
+
+  focusTable(key) {
+    set({ tableFocus: { key, seq: (get().tableFocus?.seq ?? 0) + 1 } });
+  },
+
+  traceRoute(id) {
+    set({ routeTrace: { id, seq: (get().routeTrace?.seq ?? 0) + 1 } });
+  },
+
+  setPalette(paletteOpen) {
+    set({ paletteOpen });
+  },
+
   reset() {
-    set({ ...initial, ...freshDomain(), tab: 'activity', files: {}, changes: [], usedBy: [], recent: {}, expanded: {}, events: [], sessions: {}, control: { paused: false, flags: [] } });
+    set({ ...initial, ...freshDomain(), tab: 'activity', follow: loadFollow(), helloFiles: new Set(), files: {}, changes: [], usedBy: [], recent: {}, expanded: {}, events: [], sessions: {}, control: { paused: false, flags: [] }, mapExpanded: {}, helloEdges: new Set(), history: [] });
   },
 }));
