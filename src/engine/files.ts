@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import ignore from 'ignore';
 import { isBinaryPath, isSecretEnvPath } from './languages.js';
+import { cmp } from './paths.js';
 
 export const DEFAULT_IGNORES: string[] = [
   '.git', 'node_modules', '.livemap', 'dist', 'build', 'out', '.next', '.nuxt', '.svelte-kit',
@@ -188,7 +189,7 @@ export async function walk(
     try { const st = await fs.lstat(path.join(root, ...dir.split('/'))); isDir = st.isDirectory(); } catch { /* gone */ }
     if (isDir && !ignored(dir, true)) { if (opts.dirs) dirs.push(dir); await visit(dir); }
   }
-  files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  files.sort(cmp);
   return { files, dirs, truncated };
 }
 

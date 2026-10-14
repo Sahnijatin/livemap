@@ -3,8 +3,8 @@ import type { Dep, Entity, FileModel, Lang, Route } from '../../shared/types.js'
 import { isEnvTemplate } from './env.js';
 import { detectStack } from './stack.js';
 import { defaultExport, filePath } from './util.js';
+import { cmp } from '../paths.js';
 
-const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 /** Mount chains followed above a router file. */
 const MAX_MOUNT_DEPTH = 5;
 /** Distinct mount chains kept per router file, so a hostile mount graph stays small. */

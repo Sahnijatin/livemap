@@ -1,4 +1,5 @@
 import type { Lang } from '../shared/types.js';
+import { baseName } from './paths.js';
 
 const EXT: Record<string, Lang> = {
   ts: 'typescript', mts: 'typescript', cts: 'typescript',
@@ -29,10 +30,6 @@ export const GRAMMAR: Partial<Record<Lang, string>> = {
   go: 'go', rust: 'rust', java: 'java', kotlin: 'kotlin', csharp: 'c_sharp',
   php: 'php', ruby: 'ruby', swift: 'swift', c: 'c', cpp: 'cpp', dart: 'dart',
 };
-
-function baseName(path: string): string {
-  return path.slice(path.lastIndexOf('/') + 1);
-}
 
 function extOf(path: string): string {
   const b = baseName(path);

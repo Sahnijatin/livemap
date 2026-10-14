@@ -1,7 +1,7 @@
 import type { FileModel } from '../shared/types.js';
 import type { UsedByEntry } from '../shared/protocol.js';
+import { cmp } from './paths.js';
 
-const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export const usedByStats = { scans: 0 };
