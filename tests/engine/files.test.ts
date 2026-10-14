@@ -98,6 +98,19 @@ describe('readForModel', () => {
       lstat.mockRestore();
     }
   });
+  it('a file stat-ed while still empty is read without many grow-and-copy rounds', async () => {
+    put('late.ts', 'y'.repeat(800_000));
+    const real = fsp.lstat.bind(fsp);
+    const lstat = vi.spyOn(fsp, 'lstat').mockImplementation(async p => ({ ...(await real(p)), size: 0, isFile: () => true, isSymbolicLink: () => false }) as never);
+    const unsafe = vi.spyOn(Buffer, 'allocUnsafe');
+    try {
+      const r = await readForModel(root, 'late.ts');
+      expect(r && r.kind === 'text' && r.text.length).toBe(800_000);
+      expect(unsafe.mock.calls.length).toBeLessThanOrEqual(3);
+    } finally {
+      lstat.mockRestore(); unsafe.mockRestore();
+    }
+  });
   it('a file of exactly 1 MB is text; one byte more is tooLarge', async () => {
     put('max.ts', 'x'.repeat(1_048_576));
     put('over.ts', 'x'.repeat(1_048_577));

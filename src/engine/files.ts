@@ -173,7 +173,8 @@ export type ReadResult =
 
 /**
  * Reads at most MAX_PARSE_BYTES + 1 bytes so a growing file cannot be read unbounded. The buffer
- * starts one byte past the stat size (to notice growth) and doubles only if the file grew.
+ * starts one byte past the stat size (to notice growth); if the file grew, it is resized to the
+ * open file's current size (at least doubling), so a file stat-ed while empty takes one resize.
  */
 async function readCapped(abs: string, sizeHint: number): Promise<Buffer | null> {
   const cap = MAX_PARSE_BYTES + 1;
@@ -185,7 +186,8 @@ async function readCapped(abs: string, sizeHint: number): Promise<Buffer | null>
     for (;;) {
       if (off === buf.length) {
         if (buf.length >= cap) break;
-        const bigger = Buffer.allocUnsafe(Math.min(cap, buf.length * 2));
+        const now = (await fh.stat()).size;
+        const bigger = Buffer.allocUnsafe(Math.min(cap, Math.max(buf.length * 2, now + 1)));
         buf.copy(bigger, 0, 0, off);
         buf = bigger;
       }
