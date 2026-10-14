@@ -40,12 +40,18 @@ function extOf(path: string): string {
   return i <= 0 ? '' : b.slice(i + 1).toLowerCase();
 }
 
-/** `.env` and `.env.*` except `.example`, `.sample`, `.template`. */
+/** Files whose values are never stored or sent; only variable names are read from them. */
+const SECRET_NAMES = new Set(['.env', '.envrc', '.npmrc', '.netrc', '.pypirc']);
+
+/**
+ * `.env`, `.env.*`, `.envrc` (direnv), `*.env` and credential rc files, except `.env.*` / `.envrc.*`
+ * variants ending in `.example`, `.sample` or `.template`.
+ */
 export function isSecretEnvPath(path: string): boolean {
   // Editor backups (`.env~`) and autosaves (`#.env#`) hold the same values as the file itself.
   const b = baseName(path).toLowerCase().replace(/^#(.*)#$/, '$1').replace(/~+$/, '');
-  if (b === '.env') return true;
-  if (!/^\.env[._-]/.test(b)) return false;
+  if (SECRET_NAMES.has(b) || /^.+\.env$/.test(b)) return true;
+  if (!/^\.env(rc)?[._-]/.test(b)) return false;
   return !/[._-](example|sample|template)$/.test(b);
 }
 

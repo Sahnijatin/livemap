@@ -36,6 +36,15 @@ describe('languages', () => {
     }
     for (const p of ['.env-example', '.env_sample', '.environment.ts', 'env-prod']) expect(isSecretEnvPath(p), p).toBe(false);
   });
+  it('treats direnv files, *.env files and credential rc files as secret', () => {
+    for (const p of ['.envrc', 'cfg/.envrc', '.envrc~', 'prod.env', 'cfg/Secrets.ENV', 'docker.env~', '.npmrc', '.netrc', '.pypirc', 'cfg/.npmrc']) {
+      expect(isSecretEnvPath(p), p).toBe(true);
+      expect(langOf(p), p).toBe('secret');
+    }
+    for (const p of ['prod.env.example', 'docker.env.sample', '.envrc.template', 'env', 'src/env.ts', 'my.envelope']) {
+      expect(isSecretEnvPath(p), p).toBe(false);
+    }
+  });
   it('maps grammars', () => {
     expect(GRAMMAR.csharp).toBe('c_sharp');
     expect(GRAMMAR.markdown).toBeUndefined();

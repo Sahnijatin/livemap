@@ -51,6 +51,10 @@ describe('walk', () => {
 
 describe('readForModel', () => {
   it('hides env values, returns key names', async () => {
+    put('.envrc', 'export AWS_SECRET_ACCESS_KEY=leak\n');
+    put('prod.env', 'DB_PASSWORD=leak\n');
+    expect(await readForModel(root, '.envrc')).toEqual({ kind: 'secret', size: 34, envKeys: ['AWS_SECRET_ACCESS_KEY'] });
+    expect(await readForModel(root, 'prod.env')).toEqual({ kind: 'secret', size: 17, envKeys: ['DB_PASSWORD'] });
     put('.env', 'SECRET=abc\nexport API_KEY="x"\n# C=1\n');
     const r = await readForModel(root, '.env');
     expect(r).toMatchObject({ kind: 'secret', envKeys: ['SECRET', 'API_KEY'] });
