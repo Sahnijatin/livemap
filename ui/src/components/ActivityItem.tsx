@@ -1,6 +1,5 @@
 import { memo, useEffect, useState } from 'react';
 import clsx from 'clsx';
-import { useShallow } from 'zustand/react/shallow';
 import type { ApiRoute } from '@shared/domain.js';
 import type { AgentEvent, ChangeSummary, FileModel } from '@shared/types.js';
 import { useStore } from '../store';
@@ -142,7 +141,7 @@ function Change({ change: c }: { change: ChangeSummary }) {
   const [open, setOpen] = useState(false);
   const select = useStore(s => s.select);
   // Only cards that added routes follow the domain index, and only its routes of this file.
-  const routes = useStore(useShallow(s => (c.routes.added.length ? s.domain.routes.filter(r => r.file === c.path) : NO_ROUTES)));
+  const routes = useStore(s => (c.routes.added.length ? s.routesByFile[c.path] ?? NO_ROUTES : NO_ROUTES));
   const facts = changeFacts(c, routes);
   const layer = layerOf(c.path, { lang: c.lang } as FileModel);
   const kind = c.kind === 'created' ? ['New', 't-add'] : c.kind === 'deleted' ? ['Deleted', 't-del'] : ['Edited', 't-chg'];

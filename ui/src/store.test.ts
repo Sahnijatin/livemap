@@ -208,6 +208,19 @@ describe('store domain', () => {
     expect(st.domainBase.routes.has(routeBaseKey(r('/b', 6)))).toBe(false);
   });
 
+  it('indexes routes by file once per domain update, stable across unrelated updates', () => {
+    const r = (path: string, file: string) => ({ id: `GET ${path} ${file}:1`, method: 'GET', path, fullPath: path, line: 1, kind: 'api' as const, framework: 'express', file });
+    const s = useStore.getState();
+    s.apply({ ...hello(), domain: domainWith({ routes: [r('/a', 'a.ts'), r('/b', 'b.ts'), r('/a2', 'a.ts')] }) });
+    const first = useStore.getState().routesByFile;
+    expect(first['a.ts'].map(x => x.path)).toEqual(['/a', '/a2']);
+    expect(first['c.ts']).toBeUndefined();
+    s.apply({ type: 'usedBy', usedBy: [] });
+    expect(useStore.getState().routesByFile).toBe(first);
+    s.apply({ type: 'domain', domain: domainWith({ routes: [r('/c', 'c.ts')] }) });
+    expect(Object.keys(useStore.getState().routesByFile)).toEqual(['c.ts']);
+  });
+
   it('a hello without a domain falls back to an empty one', () => {
     const { domain: _d, ...rest } = hello();
     useStore.getState().apply(rest as ReturnType<typeof hello>);
