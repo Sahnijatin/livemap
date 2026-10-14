@@ -19,7 +19,7 @@ export interface UpdateResult {
 }
 
 const CONFIG_FILES = new Set(['tsconfig.json', 'jsconfig.json', 'go.mod']);
-/** Files read concurrently during a scan. */
+/** Files read (or stat-ed) concurrently during a scan or removeDir. */
 const READ_AHEAD = 32;
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const sameList = (a: string[], b: string[]): boolean => a.length === b.length && a.every((x, i) => x === b[i]);
@@ -150,7 +150,11 @@ export class ProjectModel {
       // The directory may be back by now (deleted and recreated within the debounce, or a late
       // unlinkDir); files that exist again are left to their own add/change events.
       const gone: string[] = [];
-      for (const rel of under) if (await this.isGone(rel)) gone.push(rel);
+      for (let i = 0; i < under.length; i += READ_AHEAD) {
+        const batch = under.slice(i, i + READ_AHEAD);
+        const flags = await Promise.all(batch.map(rel => this.isGone(rel)));
+        batch.forEach((rel, j) => { if (flags[j]) gone.push(rel); });
+      }
       const results: UpdateResult[] = [];
       for (const rel of gone) results.push((await this.apply(rel, null))!.result);
       // One import re-resolution for the whole directory; touched goes on the last result.

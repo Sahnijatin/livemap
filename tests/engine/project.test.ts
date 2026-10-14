@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ProjectModel } from '../../src/engine/project.js';
@@ -313,5 +314,25 @@ describe('ProjectModel fix round 1', () => {
     fs.rmSync(path.join(root, 'src/a.ts'));
     await m.update('src/a.ts', 'unlink');
     expect(cache.has('src/a.ts')).toBe(false);
+  });
+
+  it('removeDir checks files on disk concurrently', async () => {
+    for (let i = 0; i < 50; i++) put(`gen/g${i}.ts`, `export const g${i} = 1;\n`);
+    const m = await scanned();
+    fs.rmSync(path.join(root, 'gen'), { recursive: true });
+    let inFlight = 0;
+    let max = 0;
+    const real = fsp.lstat.bind(fsp);
+    const lstat = vi.spyOn(fsp, 'lstat').mockImplementation(async p => {
+      inFlight++; max = Math.max(max, inFlight);
+      try { await new Promise(r => setTimeout(r, 2)); return await real(p); } finally { inFlight--; }
+    });
+    try {
+      const rs = await m.removeDir('gen');
+      expect(rs).toHaveLength(50);
+      expect(max).toBeGreaterThan(1);
+    } finally {
+      lstat.mockRestore();
+    }
   });
 });
