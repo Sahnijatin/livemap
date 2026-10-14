@@ -48,16 +48,19 @@ const DATA_EXT = /\.(json|ya?ml|toml|txt)$/;
 /** Ends in an example/sample/template segment (`.env.example`, `.env-sample`, `x.env.template.json`). */
 const endsAsExample = (s: string): boolean => /(^|[._-])(example|sample|template)$/.test(s.replace(DATA_EXT, ''));
 /**
- * Source code that merely has `.env` in its name (`config.env.ts`, `settings.env.py`): code in any
- * language LiveMap parses. It is shown like any other source file (LiveMap serves `settings.py`
- * whatever it holds); env files in data formats (`.env.json`, `.env.sh`) are not code.
+ * A known non-env format that merely has `.env` in its name: source code (`config.env.ts`,
+ * `settings.env.py`), docs, markup or SQL (`deploy.env.md`). It is shown like any other such file
+ * (LiveMap serves `settings.py` whatever it holds); env-style formats (`.env.json`, `.env.sh`) and
+ * unknown suffixes (`.env.local`, `.env.bak`) are not.
  */
 function isCode(name: string): boolean {
   const ext = name.slice(name.lastIndexOf('.') + 1);
   if (!name.includes('.') || !Object.hasOwn(EXT, ext)) return false;
-  const lang = EXT[ext];
-  return lang in GRAMMAR || lang === 'vue' || lang === 'svelte';
+  return !ENV_FORMATS.has(EXT[ext]);
 }
+
+/** Formats an env file is written in (`prod.env.json`, `.env.sh`); other known formats are not env files. */
+const ENV_FORMATS = new Set<Lang>(['json', 'yaml', 'toml', 'shell', 'text']);
 
 /**
  * Secret files: `.env`, `.env.*`, `.envrc(.*)`, `*.env`, `*.env.*` and credential rc files

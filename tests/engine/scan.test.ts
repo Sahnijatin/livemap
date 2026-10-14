@@ -94,4 +94,17 @@ describe('ProjectModel.scan', () => {
     const reads = [...hooks.reads.values()].reduce((a, b) => a + b, 0);
     expect(reads).toBeLessThanOrEqual(5);
   });
+
+  it('a nested reload in a full, truncated project reads no more files than there is room for', async () => {
+    for (let i = 0; i < 5; i++) put(`aa/f${i}.ts`, `export const f${i} = ${i};\n`);
+    for (let i = 0; i < 40; i++) put(`pkg/g${i}.ts`, `export const g${i} = ${i};\n`);
+    put('pkg/.gitignore', 'nothing/\n');
+    const m = new ProjectModel(root, { limit: 5 });
+    await m.scan();
+    expect(m.truncated).toBe(true);
+    put('pkg/.gitignore', 'still-nothing/\n');
+    hooks.reads.clear();
+    await m.reloadIgnores(['pkg/.gitignore']);
+    expect([...hooks.reads.values()].reduce((a, b) => a + b, 0)).toBe(0);
+  });
 });

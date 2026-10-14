@@ -198,7 +198,9 @@ export class ProjectModel {
       let full = false;
       const included: string[] = [];
       const unreached: string[] = [];
-      const fresh = walked.files.filter(rel => !this.files.has(rel) && (old(rel, false) || wasTruncated));
+      // Read no more than there is room for (a full, truncated model may have thousands unread).
+      const fresh = walked.files.filter(rel => !this.files.has(rel) && (old(rel, false) || wasTruncated))
+        .slice(0, Math.max(0, this.limit - this.files.size));
       await this.readEach(fresh, new Map(), async (rel, r) => {
         if (!r) return;
         if (this.files.size >= this.limit) { full = true; return; }

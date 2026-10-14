@@ -43,6 +43,7 @@ describe('languages', () => {
     for (const p of ['prod.env.json', 'secrets.env.yaml', 'staging.env.sh', 'prod.env.txt', 'app.env.toml']) {
       expect(isSecretEnvPath(p), p).toBe(true);
     }
+    for (const p of ['deploy.env.md', 'prod.env.html', 'prod.env.css', 'prod.env.sql']) expect(isSecretEnvPath(p), p).toBe(false);
     // Source code is code whatever its name (LiveMap serves settings.py too), in any language it parses.
     for (const p of ['example.env', 'sample.env', 'app.template.env', 'prod.env.example', 'config.env.ts', 'app.env.js', 'vite.env.d.ts', 'app.env.example.json', '.env.example.json', '.env.d.ts', 'config.env.py', 'settings.env.go', 'a.env.java', 'x.env.vue', 'x.env.rs', 'production.env.php']) {
       expect(isSecretEnvPath(p), p).toBe(false);
