@@ -244,15 +244,32 @@ describe('Watcher', () => {
     expect(model.get('tools/.gitignore')).toBeDefined(); // no longer matched by its own rules
   });
 
-  it('a .gitignore edit indexes and watches a directory it no longer ignores', async () => {
+  it('a .gitignore edit indexes and watches a directory it no longer ignores, without change entries', async () => {
     put('.gitignore', 'gen/\n');
-    put('gen/out.ts', 'export const out = 1;\n');
-    await startWatcher();
-    expect(model.get('gen/out.ts')).toBeUndefined();
+    put('gen/src/out.ts', 'export const out = 1;\n');
+    const w = await startWatcher();
+    const updates: { files: FileModel[]; removed: string[] }[] = [];
+    w.on('touched', (files: FileModel[], removed: string[] = []) => updates.push({ files, removed }));
+    expect(model.get('gen/src/out.ts')).toBeUndefined();
     put('.gitignore', '# nothing ignored\n');
-    await waitFor(() => changes.some(c => c.change.path === 'gen/out.ts' && c.change.kind === 'created'));
+    await waitFor(() => updates.some(u => u.files.some(f => f.path === 'gen/src/out.ts')));
+    // Only the .gitignore edit itself is a change; re-indexing is not reported as created files.
     await sleep(200);
-    put('gen/out.ts', 'export const out = 2;\nexport function more() {}\n');
-    await waitFor(() => changes.some(c => c.change.path === 'gen/out.ts' && c.change.kind === 'modified'), 4000);
+    expect(changes.map(c => c.change.path)).toEqual(['.gitignore']);
+    // The whole newly included subtree is watched, not just the directories that had files.
+    put('gen/top.ts', 'export const top = 1;\n');
+    await waitFor(() => model.get('gen/top.ts') !== undefined, 4000);
+    put('gen/src/out.ts', 'export const out = 2;\nexport function more() {}\n');
+    await waitFor(() => changes.some(c => c.change.path === 'gen/src/out.ts' && c.change.kind === 'modified'), 4000);
+  });
+
+  it('several .gitignore edits at once reload the rules once', async () => {
+    for (let i = 0; i < 5; i++) put(`p${i}/.gitignore`, 'tmp/\n');
+    const w = await startWatcher();
+    const reload = vi.spyOn(model, 'reloadIgnores');
+    for (let i = 0; i < 5; i++) put(`p${i}/.gitignore`, 'tmp/\nout/\n');
+    await waitFor(() => changes.filter(c => c.change.path.endsWith('.gitignore')).length >= 5);
+    expect(reload).toHaveBeenCalledTimes(1);
+    void w;
   });
 });

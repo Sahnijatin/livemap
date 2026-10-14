@@ -379,6 +379,9 @@ describe('startServer: WebSocket', () => {
     watcher.emit('touched', [model.get('src/a.ts')!]);
     await waitFor(() => ofType(c, 'files').length >= 1);
     expect(ofType(c, 'files')[0]).toMatchObject({ files: [{ path: 'src/a.ts' }], removed: [] });
+    watcher.emit('touched', [], ['src/b.ts']); // re-indexed after an ignore-rule change
+    await waitFor(() => ofType(c, 'files').length >= 2);
+    expect(ofType(c, 'files')[1]).toEqual({ type: 'files', files: [], removed: ['src/b.ts'] });
   });
 
   it('reports deletions as removed paths and keeps changes for later hellos', async () => {

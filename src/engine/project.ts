@@ -82,22 +82,9 @@ export class ProjectModel {
       }
       this.ctx = this.makeCtx(files);
       // Reads run READ_AHEAD at a time while files are parsed in order, so progress moves from the start.
-      const reads: (Promise<ReadResult> | undefined)[] = new Array(files.length);
-      let next = 0;
-      const readMore = (): void => {
-        if (next >= files.length) return;
-        const rel = files[next];
-        // Config files were read above; reuse that read so ctx and texts agree.
-        reads[next] = configs.has(rel) ? Promise.resolve(configs.get(rel)!) : readForModel(this.root, rel);
-        next++;
-      };
-      for (let k = 0; k < READ_AHEAD; k++) readMore();
       let unreadable = false;
-      for (let i = 0; i < files.length; i++) {
-        const r = await reads[i]!;
-        reads[i] = undefined;
-        readMore();
-        const rel = files[i];
+      let done = 0;
+      await this.readEach(files, configs, async (rel, r) => {
         if (r) {
           if (r.kind === 'text') this.texts.set(rel, r.text); else this.texts.delete(rel);
           this.files.set(rel, await this.build(rel, r));
@@ -105,8 +92,8 @@ export class ProjectModel {
           this.texts.delete(rel);
           unreadable = true;
         }
-        onProgress?.(i + 1, files.length);
-      }
+        onProgress?.(++done, files.length);
+      });
       // A file that vanished or failed to read mid-scan must not stay resolvable as an import.
       if (unreadable) this.relink([]);
     });
@@ -168,35 +155,60 @@ export class ProjectModel {
 
   /**
    * Re-reads every .gitignore and reconciles the model with the new rules: files now ignored are
-   * dropped (`deleted` results), files now included are read (`created`), then imports are
-   * re-resolved once (combined `touched` on the last result, as removeDir does).
+   * dropped, files now included are read, then imports are re-resolved once. Nothing changed on
+   * disk, so the result is a file update (upserted models and removed paths), not change entries.
    */
-  reloadIgnores(): Promise<UpdateResult[]> {
+  reloadIgnores(): Promise<{ files: FileModel[]; removed: string[] }> {
     return this.serial(async () => {
       this.isIgnored = createIgnore(this.root);
-      const results: UpdateResult[] = [];
+      const removed: string[] = [];
       for (const rel of [...this.files.keys()].sort(cmp)) {
-        if (this.isIgnored(rel, false)) results.push((await this.apply(rel, null))!.result);
+        if (!this.isIgnored(rel, false)) continue;
+        this.apply(rel, null);
+        removed.push(rel);
       }
       const { files } = await walk(this.root, this.isIgnored, this.limit);
-      for (const rel of files) {
-        if (this.files.has(rel)) continue;
-        if (this.files.size >= this.limit) { this.truncated = true; break; }
-        const r = await readForModel(this.root, rel);
-        const res = r && this.apply(rel, r);
-        if (res) results.push((await res).result);
-      }
-      if (!results.length) return results;
-      results[results.length - 1].touched = this.relink(results.map(r => r.path));
-      // New files were built before the relink; report them with their final imports.
-      for (const r of results) if (r.kind === 'created') r.after = this.files.get(r.path) ?? null;
-      return results;
+      const fresh = files.filter(rel => !this.files.has(rel));
+      const added: string[] = [];
+      await this.readEach(fresh, new Map(), async (rel, r) => {
+        if (!r || this.files.size >= this.limit) { if (r) this.truncated = true; return; }
+        const res = this.apply(rel, r);
+        if (res) { await res; added.push(rel); }
+      });
+      if (!removed.length && !added.length) return { files: [], removed };
+      const touched = this.relink([]);
+      const byPath = new Map<string, FileModel>();
+      for (const rel of added) byPath.set(rel, this.files.get(rel)!);
+      for (const f of touched) byPath.set(f.path, f);
+      return { files: [...byPath.values()].sort((x, y) => cmp(x.path, y.path)), removed };
     });
   }
 
   /** Runs a deferred re-resolution, if any; returns the files whose local imports changed. */
   flushRelink(): Promise<FileModel[]> {
     return this.serial(async () => (this.relinkPending ? this.relink([]) : []));
+  }
+
+  /**
+   * Reads `files` READ_AHEAD at a time and hands each result to `each` in order (one at a time).
+   * Results already in `known` are reused instead of read again.
+   */
+  private async readEach(files: string[], known: Map<string, ReadResult>, each: (rel: string, r: ReadResult) => Promise<void>): Promise<void> {
+    const reads: (Promise<ReadResult> | undefined)[] = new Array(files.length);
+    let next = 0;
+    const readMore = (): void => {
+      if (next >= files.length) return;
+      const rel = files[next];
+      reads[next] = known.has(rel) ? Promise.resolve(known.get(rel)!) : readForModel(this.root, rel);
+      next++;
+    };
+    for (let k = 0; k < READ_AHEAD; k++) readMore();
+    for (let i = 0; i < files.length; i++) {
+      const r = await reads[i]!;
+      reads[i] = undefined;
+      readMore();
+      await each(files[i], r);
+    }
   }
 
   /** True when the path no longer exists or is no longer a regular file; transient errors are not gone. */

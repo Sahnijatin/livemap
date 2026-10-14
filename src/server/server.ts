@@ -193,9 +193,9 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     scheduleUsedBy();
   };
   watcher.on('change', onChange);
-  const onTouched = (files: FileModel[]): void => {
+  const onTouched = (files: FileModel[], removed: string[] = []): void => {
     if (!isReady) return; // hello will carry the state
-    broadcast({ type: 'files', files, removed: [] });
+    broadcast({ type: 'files', files, removed });
     scheduleUsedBy();
   };
   watcher.on('touched', onTouched);

@@ -17,8 +17,9 @@ export interface WatcherOptions {
 /**
  * Turns filesystem events into ChangeSummaries. Events are debounced per path,
  * then processed one at a time; the model decides what happened from disk.
- * Emits 'change' (change: ChangeSummary, touched: FileModel[]), 'touched' (files: FileModel[]) for
- * import changes found after a burst, and 'error' (err: Error).
+ * Emits 'change' (change: ChangeSummary, touched: FileModel[]); 'touched' (files: FileModel[],
+ * removed: string[]) for model updates without a change of their own (imports re-resolved after a
+ * burst, files re-indexed after an ignore-rule change); and 'error' (err: Error).
  *
  * While more jobs are queued, file-set changes defer the model's import re-resolution (O(files)),
  * so a burst (a checkout adding hundreds of files) re-resolves once when the queue drains.
@@ -32,6 +33,8 @@ export class Watcher extends EventEmitter {
   private fsw: FSWatcher | null = null;
   private timers = new Map<string, NodeJS.Timeout>();
   private queue: Promise<void> = Promise.resolve();
+  /** .gitignore files changed since the last rules reload. */
+  private gitignores = new Set<string>();
   /** Jobs whose debounce fired but that have not started running. */
   private waiting = 0;
   private nextId = 1;
@@ -96,11 +99,20 @@ export class Watcher extends EventEmitter {
     if (!rel || isTempName(rel)) return;
     if (isGitignore(rel)) {
       if (this.gitignoreSkipped(rel)) return;
-      this.schedule(`f:${rel}`, async () => {
-        const results = await this.model.reloadIgnores();
-        this.watchCreated(results);
-        const own = await this.model.update(rel, ev); // null while its own rules ignore it
-        return own ? [...results, own] : results;
+      // One debounced reload for every .gitignore touched together (a checkout can change dozens).
+      this.gitignores.add(rel);
+      this.schedule('ignores', async () => {
+        const paths = [...this.gitignores].sort();
+        this.gitignores.clear();
+        const { files, removed } = await this.model.reloadIgnores();
+        this.watchIncluded(files.map(f => f.path));
+        if (!this.stopped && (files.length || removed.length)) this.emit('touched', files, removed);
+        const own: UpdateResult[] = [];
+        for (const p of paths) {
+          const r = await this.model.update(p, 'change'); // null while its own rules ignore it
+          if (r) own.push(r);
+        }
+        return own;
       });
       return;
     }
@@ -114,14 +126,25 @@ export class Watcher extends EventEmitter {
     this.schedule(`d:${rel}`, () => this.model.removeDir(rel));
   }
 
-  /** Directories that were ignored when chokidar crawled them are not watched; add them now. */
-  private watchCreated(results: UpdateResult[]): void {
-    const dirs = new Set<string>();
-    for (const r of results) {
-      const dir = path.posix.dirname(r.path);
-      if (r.kind === 'created' && dir !== '.') dirs.add(path.join(this.model.root, ...dir.split('/')));
+  /**
+   * Directories that were ignored when chokidar crawled them are not watched. For each newly
+   * included file, watch its topmost unwatched ancestor, which covers that whole subtree.
+   */
+  private watchIncluded(paths: string[]): void {
+    const fsw = this.fsw;
+    if (!fsw || paths.length === 0) return;
+    const watched = new Set(Object.keys(fsw.getWatched()));
+    const add = new Set<string>();
+    for (const rel of paths) {
+      let top: string | null = null;
+      for (let dir = path.posix.dirname(rel); dir !== '.'; dir = path.posix.dirname(dir)) {
+        const abs = path.join(this.model.root, ...dir.split('/'));
+        if (watched.has(abs)) break;
+        top = abs;
+      }
+      if (top) add.add(top);
     }
-    if (dirs.size) this.fsw?.add([...dirs]);
+    if (add.size) fsw.add([...add]);
   }
 
   private schedule(key: string, job: (deferRelink: boolean) => Promise<UpdateResult[]>): void {
@@ -152,7 +175,7 @@ export class Watcher extends EventEmitter {
     if (more || this.stopped) return;
     try {
       const touched = await this.model.flushRelink();
-      if (!this.stopped && touched.length) this.emit('touched', touched);
+      if (!this.stopped && touched.length) this.emit('touched', touched, []);
     } catch (e) {
       this.fail(e);
     }
