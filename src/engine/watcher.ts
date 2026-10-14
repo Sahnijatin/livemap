@@ -58,6 +58,9 @@ export class Watcher extends EventEmitter {
       // own ignoreInitial off means a later fsw.add() (a directory a .gitignore edit un-ignored)
       // reports the files its crawl finds, so none created during that crawl are missed.
       ignoreInitial: false,
+      // The scan never follows symlinks; neither does the watcher, or files under a symlinked
+      // directory would be indexed a second time under the link's path.
+      followSymlinks: false,
       awaitWriteFinish: false,
       ignored: (p: string, stats?: { isDirectory(): boolean }) => {
         const rel = this.rel(p);

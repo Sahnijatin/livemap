@@ -371,4 +371,15 @@ describe('Watcher', () => {
     expect(model.get('gen/x.ts')).toBeDefined();
   });
 
+
+  it('does not index files twice through a symlinked directory inside the project', async () => {
+    put('src/sub/a.ts', 'export const a = 1;\n');
+    fs.symlinkSync(path.join(root, 'src'), path.join(root, 'link'));
+    await startWatcher();
+    put('src/sub/a.ts', 'export const a = 2;\n');
+    put('src/sub/b.ts', 'export const b = 1;\n');
+    await waitFor(() => model.get('src/sub/b.ts') !== undefined);
+    await sleep(400);
+    expect(model.all().map(f => f.path).filter(p => p.startsWith('link/'))).toEqual([]);
+  });
 });
