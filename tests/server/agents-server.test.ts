@@ -9,7 +9,6 @@ import { Watcher } from '../../src/engine/watcher.js';
 import { AgentHub } from '../../src/agents/hub.js';
 import { Attributor } from '../../src/agents/attribution.js';
 import { PAUSE_MESSAGE } from '../../src/agents/control.js';
-import { cookieName } from '../../src/server/auth.js';
 import { startServer } from '../../src/server/server.js';
 import type { ServerMessage } from '../../src/shared/protocol.js';
 
@@ -127,11 +126,10 @@ afterEach(async () => {
 const codexPrompt = () => ({ agent: 'codex', event: 'UserPromptSubmit', payload: { session_id: 'c1', cwd: root, prompt: 'Add a widget' } });
 
 describe('POST /hook', () => {
-  it('is 401 without the token header, and the query or cookie token does not count', async () => {
+  it('is 401 without the token header, and a query token does not count', async () => {
     const s = await boot();
     expect((await hookPost(s, codexPrompt(), JSON_CT)).status).toBe(401);
     expect((await request(s.port, 'POST', `/hook?t=${s.token}`, { headers: JSON_CT, body: JSON.stringify(codexPrompt()) })).status).toBe(401);
-    expect((await hookPost(s, codexPrompt(), { ...JSON_CT, cookie: `${cookieName(s.port)}=${s.token}` })).status).toBe(401);
     expect((await hookPost(s, codexPrompt(), { ...JSON_CT, 'x-livemap-token': 'nope' })).status).toBe(401);
     expect(hub!.events()).toHaveLength(0);
   });

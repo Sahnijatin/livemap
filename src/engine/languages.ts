@@ -40,13 +40,47 @@ function extOf(path: string): string {
   return i <= 0 ? '' : b.slice(i + 1).toLowerCase();
 }
 
-/** `.env`, `.envrc`, `.env.*` and `.envrc.*` (also `-`/`_` variants) except `.example`, `.sample`, `.template`. */
+/** Files whose values are never stored or sent; only variable names are read from them. */
+const SECRET_NAMES = new Set(['.env', '.envrc', '.npmrc', '.netrc', '.pypirc']);
+
+/** Formats an env file is written in (`prod.env.json`, `.env.sh`); other known formats are not env files. */
+const ENV_FORMATS = new Set<Lang>(['json', 'yaml', 'toml', 'shell', 'text']);
+/** Data formats an env file or its example may be written in; stripped before example checks. */
+const DATA_EXT = /\.(json|ya?ml|toml|txt)$/;
+/** Ends in an example/sample/template segment (`.env.example`, `.env-sample`, `x.env.template.json`). */
+const endsAsExample = (s: string): boolean => /(^|[._-])(example|sample|template)$/.test(s.replace(DATA_EXT, ''));
+/**
+ * A known non-env format that merely has `.env` in its name: source code (`config.env.ts`,
+ * `settings.env.py`), docs, markup or SQL (`deploy.env.md`). It is shown like any other such file
+ * (LiveMap serves `settings.py` whatever it holds); env-style formats (`.env.json`, `.env.sh`) and
+ * unknown suffixes (`.env.local`, `.env.bak`) are not.
+ */
+function isCode(suffix: string): boolean {
+  const ext = suffix.slice(suffix.lastIndexOf('.') + 1);
+  return Object.hasOwn(EXT, ext) && !ENV_FORMATS.has(EXT[ext]);
+}
+
+/**
+ * Secret files: `.env`, `.env.*`, `.envrc(.*)`, `*.env`, `*.env.*` and credential rc files
+ * (`.npmrc`, `.netrc`, `.pypirc`, and their `.bak`-style copies). Examples are not secret when
+ * the example marker is the last segment (`.env.example`, `.env.example.json`) or the stem's last
+ * dot-segment with nothing but a data extension after `.env` (`example.env`,
+ * `app.template.env.json`). `*.env.*` source code (`config.env.ts`, `settings.env.py`) and
+ * `.env.d.ts` declarations are not secret; a `.env.*` JS file (`.env.local.js`) is.
+ */
 export function isSecretEnvPath(path: string): boolean {
   // Editor backups (`.env~`) and autosaves (`#.env#`) hold the same values as the file itself.
   // Agents on Windows send backslash paths: take the name after either separator.
   const b = baseName(path.replace(/\\/g, '/')).toLowerCase().replace(/^#(.*)#$/, '$1').replace(/~+$/, '');
-  if (!/^\.env(rc)?([._-]|$)/.test(b)) return false;
-  return !/[._-](example|sample|template)$/.test(b);
+  if (SECRET_NAMES.has(b)) return true;
+  const prefixed = /^\.(?:envrc|env|npmrc|netrc|pypirc)([._-].*)$/.exec(b);
+  if (prefixed) return !endsAsExample(prefixed[1]) && b !== '.env.d.ts';
+  const m = /^(.+)\.env(?:[._-](.+))?$/.exec(b);
+  if (!m) return false;
+  const [, stem, suffix] = m;
+  // `example.env` / `example.env.json` are examples; `example.env.local` is a real override.
+  if (/(^|\.)(example|sample|template)$/.test(stem) && (suffix === undefined || /^(json|ya?ml|toml|txt)$/.test(suffix))) return false;
+  return suffix === undefined || (!endsAsExample(suffix) && !isCode(suffix));
 }
 
 export function isBinaryPath(path: string): boolean {

@@ -11,7 +11,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('api', () => {
-  it('sends JSON with the same-origin cookie on POST and DELETE', async () => {
+  it('sends JSON on POST and DELETE (the token goes in a header, never a cookie)', async () => {
     fetchMock.mockResolvedValueOnce(json(201, { id: 3, target: 'a.ts', note: 'n', createdAt: 1 }));
     fetchMock.mockResolvedValueOnce(json(200, { paused: false, flags: [] }));
     fetchMock.mockResolvedValueOnce(json(200, { paused: true, flags: [] }));
@@ -21,7 +21,7 @@ describe('api', () => {
     const calls = fetchMock.mock.calls as [string, RequestInit][];
     expect(calls.map(c => [c[0], c[1].method])).toEqual([['/api/flags', 'POST'], ['/api/flags/3', 'DELETE'], ['/api/pause', 'POST']]);
     for (const [, init] of calls) {
-      expect(init.credentials).toBe('same-origin');
+      expect(init.credentials).toBeUndefined();
       expect((init.headers as Record<string, string>)['content-type']).toBe('application/json');
     }
     expect(JSON.parse(String(calls[0][1].body))).toEqual({ target: 'a.ts', note: 'n' });

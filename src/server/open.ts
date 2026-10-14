@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 
-const OPENABLE = /^http:\/\/127\.0\.0\.1:\d+\/(\?t=[0-9a-f]+)?$/;
+const OPENABLE = /^http:\/\/127\.0\.0\.1:\d+\/(\?launch=[0-9a-f]+)?$/;
 
-/** Only LiveMap's own loopback URL is ever handed to a shell opener. */
+/** Only LiveMap's own loopback launch URL (never the token itself) is handed to a shell opener. */
 export function isOpenableUrl(url: string): boolean {
   return OPENABLE.test(url);
 }

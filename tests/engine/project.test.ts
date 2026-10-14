@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ProjectModel } from '../../src/engine/project.js';
+import { indexStats } from '../../src/engine/imports.js';
 
 let root: string;
 function put(rel: string, data: string | Buffer): void {
@@ -115,11 +117,22 @@ describe('ProjectModel', () => {
 
   it('removeDir deletes every file under the directory', async () => {
     const m = await scanned();
+    fs.rmSync(path.join(root, 'src'), { recursive: true });
     const rs = await m.removeDir('src');
     expect(rs.map(r => r.path).sort()).toEqual(['src/a.ts', 'src/b.ts']);
     expect(rs.every(r => r.kind === 'deleted' && r.after === null)).toBe(true);
     expect(m.get('src/a.ts')).toBeUndefined();
     expect(m.all().map(f => f.path).sort()).toEqual(['.env', 'README.md']);
+  });
+
+  it('removeDir keeps files that are back on disk (directory deleted and recreated)', async () => {
+    const m = await scanned();
+    fs.rmSync(path.join(root, 'src'), { recursive: true });
+    put('src/a.ts', "import { hello } from './b';\nhello();\n");
+    const rs = await m.removeDir('src');
+    expect(rs.map(r => [r.path, r.kind])).toEqual([['src/b.ts', 'deleted']]);
+    expect(m.get('src/a.ts')).toBeDefined();
+    expect(m.get('src/b.ts')).toBeUndefined();
   });
 
   it('ignores ignored paths and honors directory patterns', async () => {
@@ -238,5 +251,281 @@ describe('ProjectModel fix round 1', () => {
     expect(rs[1].touched.map(f => f.path)).toEqual(['app.ts']);
     expect(m.get('app.ts')!.imports.local).toEqual([]);
     expect(await m.update('lib/x.ts', 'unlink')).toBeNull();
+  });
+
+  it('a deferred update skips the import re-resolution until flushRelink', async () => {
+    put('app.ts', "import { x } from './lib/x';\n");
+    const m = await scanned();
+    expect(m.get('app.ts')!.imports.local).toEqual([]);
+    put('lib/x.ts', 'export const x = 1;\n');
+    const r = await m.update('lib/x.ts', 'add', { deferRelink: true });
+    expect(r!.kind).toBe('created');
+    expect(r!.touched).toEqual([]);
+    expect(m.get('app.ts')!.imports.local).toEqual([]);
+    const touched = await m.flushRelink();
+    expect(touched.map(f => [f.path, f.imports.local])).toEqual([['app.ts', ['lib/x.ts']]]);
+    expect(m.get('app.ts')!.imports.local).toEqual(['lib/x.ts']);
+    expect(await m.flushRelink()).toEqual([]);
+  });
+
+  it('deferred updates in a burst resolve against the files the burst already added or removed', async () => {
+    put('lib/old.ts', 'export const old = 1;\n');
+    const m = await scanned();
+    put('lib/b.ts', 'export const b = 1;\n');
+    await m.update('lib/b.ts', 'add', { deferRelink: true });
+    fs.rmSync(path.join(root, 'lib/old.ts'));
+    await m.update('lib/old.ts', 'unlink', { deferRelink: true });
+    put('lib/a.ts', "import { b } from './b';\nimport { old } from './old';\n");
+    const a = await m.update('lib/a.ts', 'add', { deferRelink: true });
+    expect(a!.after!.imports.local).toEqual(['lib/b.ts']);
+  });
+
+  it('reloadIgnores drops newly ignored files and indexes newly included ones', async () => {
+    put('.gitignore', 'gen/\n');
+    put('gen/out.ts', "import { hello } from '../src/b';\nexport const out = hello;\n");
+    put('secrets.json', '{"k":"v"}\n');
+    const m = await scanned();
+    expect(m.get('gen/out.ts')).toBeUndefined();
+    put('.gitignore', 'secrets.json\n');
+    const r = await m.reloadIgnores(['.gitignore']);
+    expect(r.removed).toEqual(['secrets.json']);
+    expect(r.files.map(f => f.path)).toEqual(['gen/out.ts']);
+    expect(r.files[0].imports.local).toEqual(['src/b.ts']);
+    expect(m.get('secrets.json')).toBeUndefined();
+    expect(m.content('secrets.json')).toBeNull();
+    expect(m.get('gen/out.ts')!.imports.local).toEqual(['src/b.ts']);
+    expect(await m.reloadIgnores(['.gitignore'])).toEqual({ files: [], removed: [], created: [] });
+  });
+
+  it('reloadIgnores reads nested .gitignore files created after their directory was seen', async () => {
+    const m = await scanned();
+    put('pkg/keep.ts', 'export const k = 1;\n');
+    expect(m.ignored('pkg/generated/x.ts')).toBe(false);
+    put('pkg/.gitignore', 'generated/\n');
+    await m.reloadIgnores(['pkg/.gitignore']);
+    expect(m.ignored('pkg/generated/x.ts')).toBe(true);
+  });
+
+  it('deferred Go and JVM imports see directories the burst already created', async () => {
+    put('go.mod', 'module shop\n');
+    const m = await scanned();
+    put('src/com/acme/util/Strings.java', 'package com.acme.util;\npublic class Strings {}\n');
+    await m.update('src/com/acme/util/Strings.java', 'add', { deferRelink: true });
+    put('src/com/acme/App.java', 'package com.acme;\nimport com.acme.util.*;\npublic class App {}\n');
+    const app = await m.update('src/com/acme/App.java', 'add', { deferRelink: true });
+    expect(app!.after!.imports).toEqual({ local: ['src/com/acme/util/Strings.java'], external: [] });
+    put('internal/db/db.go', 'package db\n');
+    await m.update('internal/db/db.go', 'add', { deferRelink: true });
+    put('cmd/main.go', 'package main\nimport "shop/internal/db"\n');
+    const main = await m.update('cmd/main.go', 'add', { deferRelink: true });
+    expect(main!.after!.imports.local).toEqual(['internal/db/db.go']);
+  });
+
+  it('forgets a deleted file\'s cached import specifiers', async () => {
+    const m = await scanned();
+    const cache = (m as unknown as { specCache: Map<string, unknown> }).specCache;
+    expect(cache.has('src/a.ts')).toBe(true);
+    fs.rmSync(path.join(root, 'src/a.ts'));
+    await m.update('src/a.ts', 'unlink');
+    expect(cache.has('src/a.ts')).toBe(false);
+  });
+
+  it('removeDir checks files on disk concurrently', async () => {
+    for (let i = 0; i < 50; i++) put(`gen/g${i}.ts`, `export const g${i} = 1;\n`);
+    const m = await scanned();
+    fs.rmSync(path.join(root, 'gen'), { recursive: true });
+    let inFlight = 0;
+    let max = 0;
+    const real = fsp.lstat.bind(fsp);
+    const lstat = vi.spyOn(fsp, 'lstat').mockImplementation(async p => {
+      inFlight++; max = Math.max(max, inFlight);
+      try { await new Promise(r => setTimeout(r, 2)); return await real(p); } finally { inFlight--; }
+    });
+    try {
+      const rs = await m.removeDir('gen');
+      expect(rs).toHaveLength(50);
+      expect(max).toBeGreaterThan(1);
+    } finally {
+      lstat.mockRestore();
+    }
+  });
+
+  it('a config change is never deferred, so the rest of a burst uses the new aliases', async () => {
+    put('lib/x.ts', 'export const x = 1;\n');
+    const m = await scanned();
+    put('tsconfig.json', '{ "compilerOptions": { "paths": { "~lib/*": ["lib/*"] } } }');
+    await m.update('tsconfig.json', 'add', { deferRelink: true });
+    put('a.ts', "import { x } from '~lib/x';\n");
+    const a = await m.update('a.ts', 'add', { deferRelink: true });
+    expect(a!.after!.imports.local).toEqual(['lib/x.ts']);
+  });
+
+  it('a Go burst builds the directory index once and keeps it current', async () => {
+    put('go.mod', 'module shop\n');
+    const m = await scanned();
+    const before = indexStats.builds;
+    for (let i = 0; i < 20; i++) {
+      put(`pkg${i}/p.go`, `package pkg${i}\n`);
+      await m.update(`pkg${i}/p.go`, 'add', { deferRelink: true });
+      put(`cmd${i}/main.go`, `package main\nimport "shop/pkg${i}"\n`);
+      const r = await m.update(`cmd${i}/main.go`, 'add', { deferRelink: true });
+      expect(r!.after!.imports.local).toEqual([`pkg${i}/p.go`]);
+    }
+    fs.rmSync(path.join(root, 'pkg0'), { recursive: true });
+    await m.update('pkg0/p.go', 'unlink', { deferRelink: true });
+    put('cmd0/main.go', 'package main\nimport "shop/pkg0"\n// edited\n');
+    expect((await m.update('cmd0/main.go', 'change', { deferRelink: true }))!.after!.imports.local).toEqual([]);
+    expect(indexStats.builds - before).toBe(1);
+  });
+
+  it('drops a file\'s cached specifiers when it stops being text', async () => {
+    const m = await scanned();
+    const cache = (m as unknown as { specCache: Map<string, unknown> }).specCache;
+    expect(cache.has('src/a.ts')).toBe(true);
+    put('src/a.ts', 'x'.repeat(1_048_577));
+    await m.update('src/a.ts', 'change');
+    expect(m.get('src/a.ts')!.flags.tooLarge).toBe(true);
+    expect(cache.has('src/a.ts')).toBe(false);
+  });
+
+  it('reloadIgnores leaves new, never-ignored files to their own events', async () => {
+    const m = await scanned();
+    put('fresh.ts', 'export const fresh = 1;\n'); // its add event is still queued
+    put('.gitignore', 'nothing/\n');
+    const r = await m.reloadIgnores(['.gitignore']);
+    expect(r.files.map(f => f.path)).not.toContain('fresh.ts');
+    expect((await m.update('fresh.ts', 'add'))!.kind).toBe('created');
+  });
+
+  it('reloadIgnores reports the topmost newly included directories, empty ones too', async () => {
+    put('.gitignore', 'gen/\nlogs/\n');
+    put('gen/a/x.ts', 'export const x = 1;\n');
+    fs.mkdirSync(path.join(root, 'logs/empty'), { recursive: true });
+    const m = await scanned();
+    put('.gitignore', '# nothing\n');
+    let dirs: string[] = [];
+    await m.reloadIgnores(['.gitignore'], { onIncluded: d => { dirs = d; } });
+    expect(dirs).toEqual(['gen', 'logs']);
+  });
+
+  it('a directory un-ignored by a reload uses its current .gitignore, not rules cached while it was ignored', async () => {
+    put('sub/.gitignore', '*.log\n');
+    put('sub/a.txt', 'a\n');
+    const m = await scanned();
+    put('.gitignore', 'sub/\n');
+    await m.reloadIgnores(['.gitignore']);
+    put('sub/.gitignore', '*.txt\n'); // no event: sub is ignored
+    put('.gitignore', '# nothing\n');
+    await m.reloadIgnores(['.gitignore']);
+    expect(m.ignored('sub/a.txt')).toBe(true);
+    expect(m.get('sub/a.txt')).toBeUndefined();
+  });
+
+  it('a nested .gitignore change walks only its own subtree', async () => {
+    put('pkg/.gitignore', 'gen/\n');
+    put('pkg/gen/x.ts', 'export const x = 1;\n');
+    put('other/deep/y.ts', 'export const y = 1;\n');
+    const m = await scanned();
+    put('pkg/.gitignore', '# nothing\n');
+    const readdir = vi.spyOn(fsp, 'readdir');
+    try {
+      const r = await m.reloadIgnores(['pkg/.gitignore']);
+      expect(r.files.map(f => f.path)).toEqual(['pkg/gen/x.ts']);
+      const visited = readdir.mock.calls.map(c => path.relative(root, String(c[0])).split(path.sep).join('/'));
+      expect(visited.some(d => d.startsWith('other'))).toBe(false);
+      expect(visited).toContain('pkg');
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+
+  it('removeDir can defer its relink to flushRelink', async () => {
+    put('lib/x.ts', 'export const x = 1;\n');
+    put('app.ts', "import { x } from './lib/x';\n");
+    const m = await scanned();
+    fs.rmSync(path.join(root, 'lib'), { recursive: true });
+    const rs = await m.removeDir('lib', { deferRelink: true });
+    expect(rs.map(r => r.path)).toEqual(['lib/x.ts']);
+    expect(rs[0].touched).toEqual([]);
+    expect(m.get('app.ts')!.imports.local).toEqual(['lib/x.ts']);
+    expect((await m.flushRelink()).map(f => f.path)).toEqual(['app.ts']);
+    expect(m.get('app.ts')!.imports.local).toEqual([]);
+  });
+
+  it('reloadIgnores hands included dirs to the watcher before reading them', async () => {
+    put('.gitignore', 'gen/\n');
+    put('gen/a.ts', 'export const a = 1;\n');
+    const m = await scanned();
+    put('.gitignore', '# nothing\n');
+    let seenWhileUnread: boolean | null = null;
+    const r = await m.reloadIgnores(['.gitignore'], { onIncluded: dirs => { seenWhileUnread = dirs.includes('gen') && !m.get('gen/a.ts'); } });
+    expect(seenWhileUnread).toBe(true);
+    expect(r.files.map(f => f.path)).toEqual(['gen/a.ts']);
+  });
+
+  it('after a truncated scan, newly reachable files come back as created changes, not silent updates', async () => {
+    for (const n of ['a', 'b', 'c']) put(`gen/${n}.ts`, `export const ${n} = 1;\n`);
+    put('zz/z.ts', 'export const z = 1;\n');
+    fs.rmSync(path.join(root, 'src'), { recursive: true });
+    fs.rmSync(path.join(root, 'README.md'));
+    fs.rmSync(path.join(root, '.env'));
+    const m = new ProjectModel(root, { limit: 3 });
+    await m.scan();
+    put('.gitignore', 'gen/\n');
+    const r = await m.reloadIgnores(['.gitignore']);
+    expect(r.created.map(c => [c.path, c.kind]).sort()).toEqual([['.gitignore', 'created'], ['zz/z.ts', 'created']]);
+    expect(r.files.map(f => f.path)).not.toContain('zz/z.ts');
+    expect(await m.update('zz/z.ts', 'add')).toBeNull();
+  });
+
+
+  it('a reload that frees room indexes files a truncated scan never reached', async () => {
+    for (const n of ['a', 'b', 'c']) put(`gen/${n}.ts`, `export const ${n} = 1;\n`);
+    put('zz/z.ts', 'export const z = 1;\n');
+    fs.rmSync(path.join(root, 'src'), { recursive: true });
+    fs.rmSync(path.join(root, 'README.md'));
+    fs.rmSync(path.join(root, '.env'));
+    const m = new ProjectModel(root, { limit: 3 });
+    await m.scan();
+    expect(m.truncated).toBe(true);
+    expect(m.get('zz/z.ts')).toBeUndefined();
+    put('.gitignore', 'gen/\n'); // the .gitignore itself takes one slot
+    await m.reloadIgnores(['.gitignore']);
+    expect(m.get('zz/z.ts')).toBeDefined();
+    expect(m.truncated).toBe(false);
+  });
+
+  it('a directory replaced by a symlink to outside the project counts as gone', async () => {
+    put('lib/a.ts', 'export const a = 1;\n');
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-outside-'));
+    try {
+      fs.writeFileSync(path.join(outside, 'a.ts'), 'export const leaked = 1;\n');
+      const m = await scanned();
+      fs.rmSync(path.join(root, 'lib'), { recursive: true });
+      fs.symlinkSync(outside, path.join(root, 'lib'));
+      expect((await m.removeDir('lib')).map(r => r.path)).toEqual(['lib/a.ts']);
+      expect(m.get('lib/a.ts')).toBeUndefined();
+      expect(m.content('lib/a.ts')).toBeNull();
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('a transient failure resolving the root is not cached', async () => {
+    put('lib/a.ts', 'export const a = 1;\n');
+    const m = new ProjectModel(root); // not scanned: the root has not been resolved yet
+    const real = fsp.realpath.bind(fsp);
+    let fail = true;
+    const spy = vi.spyOn(fsp, 'realpath').mockImplementation(async p => {
+      if (fail && String(p) === root) { fail = false; throw Object.assign(new Error('gone for a moment'), { code: 'ENOENT' }); }
+      return real(p);
+    });
+    const isGone = (rel: string) => (m as unknown as { isGone(rel: string): Promise<boolean> }).isGone(rel);
+    try {
+      expect(await isGone('lib/a.ts')).toBe(true); // the root was briefly missing
+      expect(await isGone('lib/a.ts')).toBe(false); // it is back, and so is the file
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

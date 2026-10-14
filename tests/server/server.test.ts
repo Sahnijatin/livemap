@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -7,7 +7,7 @@ import path from 'node:path';
 import WebSocket from 'ws';
 import { ProjectModel } from '../../src/engine/project.js';
 import { Watcher } from '../../src/engine/watcher.js';
-import { startServer, safeSend, DEFAULT_PORT, MAX_BUFFERED_BYTES } from '../../src/server/server.js';
+import { startServer, safeSend, sendTracked, DEFAULT_PORT, MAX_BUFFERED_BYTES, LAUNCH_TTL_MS } from '../../src/server/server.js';
 import type { ServerMessage } from '../../src/shared/protocol.js';
 
 type Started = Awaited<ReturnType<typeof startServer>>;
@@ -66,12 +66,12 @@ function connect(port: number, query: string, headers: Record<string, string> = 
 const ofType = <T extends ServerMessage['type']>(c: Client, t: T) =>
   c.msgs.filter((m): m is Extract<ServerMessage, { type: T }> => m.type === t);
 
-async function boot(opts: { ready?: boolean; port?: number; ui?: string } = {}): Promise<Started> {
+async function boot(opts: { ready?: boolean; port?: number; ui?: string; warn?: (msg: string) => void } = {}): Promise<Started> {
   model = new ProjectModel(root);
   await model.scan();
   watcher = new Watcher(model, { debounceMs: 30 });
   await watcher.start();
-  srv = await startServer({ model, watcher, port: opts.port ?? 0, uiDir: opts.ui ?? uiDir });
+  srv = await startServer({ model, watcher, port: opts.port ?? 0, uiDir: opts.ui ?? uiDir, warn: opts.warn });
   if (opts.ready !== false) srv.ready();
   return srv;
 }
@@ -146,23 +146,99 @@ describe('startServer: HTTP auth', () => {
     expect(JSON.parse(ok.body)).toEqual({ ok: true });
   });
 
-  it('R10: an unauthenticated page load gets a 401 HTML guidance page with no project data; API stays JSON', async () => {
+  it('R10: the UI shell loads without a token but carries no project data; API stays 401 JSON', async () => {
     const s = await boot();
-    for (const p of ['/', '/?t=deadbeef', '/some/route']) {
+    for (const p of ['/', '/?t=deadbeef', '/assets/app.js']) {
       const r = await get(s.port, p);
-      expect(r.status, p).toBe(401);
-      expect(r.headers['content-type'], p).toMatch(/^text\/html/);
+      expect(r.status, p).toBe(200);
       expect(r.headers['set-cookie'], p).toBeUndefined();
-      expect(r.body, p).toContain('<h1>LiveMap</h1>');
-      expect(r.body, p).toContain('Open the link printed in your terminal. It includes a one-time key.');
       expect(r.body, p).not.toContain(path.basename(root));
       expect(r.body, p).not.toContain('a.ts');
-      expect(r.body, p).not.toMatch(/<script|<link|src=/i);
     }
     const api = await get(s.port, '/api/file?path=src/a.ts');
     expect(api.status).toBe(401);
     expect(api.headers['content-type']).toMatch(/application\/json/);
     expect(JSON.parse(api.body)).toEqual({ error: 'unauthorized' });
+  });
+
+  it('a launch URL carries a one-time code, not the token, and redirects once to the token URL', async () => {
+    const s = await boot();
+    const launch = s.launchUrl();
+    expect(launch).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${s.port}/\\?launch=[0-9a-f]{32}$`));
+    expect(launch).not.toContain(s.token);
+    const q = launch.slice(launch.indexOf('/?'));
+    const first = await get(s.port, q);
+    expect(first.status).toBe(302);
+    expect(first.headers.location).toBe(`/?t=${s.token}`);
+    expect(first.headers['cache-control']).toBe('no-store');
+    expect(first.headers['set-cookie']).toBeUndefined();
+    // Spent: a second use (someone who read it from a process list) gets the plain shell.
+    const again = await get(s.port, q);
+    expect(again.status).toBe(200);
+    expect(again.body).not.toContain(s.token);
+    expect((await get(s.port, '/?launch=00000000000000000000000000000000')).status).toBe(200);
+    expect(s.launchUrl()).not.toBe(launch);
+  });
+
+  it('HEAD does not spend a launch code; reusing a spent code warns that someone else may have used it', async () => {
+    const warnings: string[] = [];
+    const s = await boot({ warn: m => warnings.push(m) });
+    const q = s.launchUrl().replace(/^http:\/\/[^/]+/, '');
+    const head = await new Promise<number>((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: s.port, path: q, method: 'HEAD', headers: { host: `127.0.0.1:${s.port}` } }, r => { r.resume(); resolve(r.statusCode ?? 0); });
+      req.on('error', reject);
+      req.end();
+    });
+    expect(head).toBe(200);
+    expect((await get(s.port, q)).status).toBe(302);
+    expect(warnings).toEqual([]);
+    expect((await get(s.port, q)).status).toBe(200);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/launch link was used more than once/i);
+    await get(s.port, q);
+    expect(warnings).toHaveLength(1); // once per link, not on every reload
+  });
+
+  it('a browser prefetch or prerender does not spend a launch code', async () => {
+    const s = await boot();
+    const q = s.launchUrl().replace(/^http:\/\/[^/]+/, '');
+    for (const h of [{ 'sec-purpose': 'prefetch;prerender' }, { purpose: 'prefetch' }, { 'x-purpose': 'preview' }, { 'x-moz': 'prefetch' }] as Record<string, string>[]) {
+      const r = await get(s.port, q, h);
+      expect(r.status).toBe(503);
+      expect(r.headers['cache-control']).toBe('no-store');
+    }
+    expect((await get(s.port, q)).status).toBe(302);
+  });
+
+  it('a spent launch code opened after it expired still warns', async () => {
+    const warnings: string[] = [];
+    const s = await boot({ warn: m => warnings.push(m) });
+    const q = s.launchUrl().replace(/^http:\/\/[^/]+/, '');
+    expect((await get(s.port, q)).status).toBe(302); // someone else redeemed it
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + LAUNCH_TTL_MS + 1);
+      expect((await get(s.port, q)).status).toBe(200);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/used more than once/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a launch code expires unused, and opening it late says so', async () => {
+    const warnings: string[] = [];
+    const s = await boot({ warn: m => warnings.push(m) });
+    const q = s.launchUrl().replace(/^http:\/\/[^/]+/, '');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + LAUNCH_TTL_MS + 1);
+      expect((await get(s.port, q)).status).toBe(200);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/expired/i);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('accepts the x-livemap-token header', async () => {
@@ -171,47 +247,13 @@ describe('startServer: HTTP auth', () => {
     expect((await get(s.port, '/api/health', { 'x-livemap-token': s.token.slice(1) })).status).toBe(401);
   });
 
-  it('GET / with the token sets an HttpOnly SameSite=Strict cookie that then authenticates', async () => {
+  it('never sets or accepts a cookie: cookies ignore ports, so any local server would receive it', async () => {
     const s = await boot();
     const page = await get(s.port, `/?t=${s.token}`);
     expect(page.status).toBe(200);
     expect(page.body).toContain('<title>LiveMap</title>');
-    const cookie = String(page.headers['set-cookie']?.[0] ?? '');
-    expect(cookie).toMatch(new RegExp(`^lm_token_${s.port}=[0-9a-f]{32}`));
-    expect(cookie).toMatch(/HttpOnly/);
-    expect(cookie).toMatch(/SameSite=Strict/);
-    expect(cookie).toMatch(/Path=\//);
-    const jar = cookie.split(';')[0];
-    expect((await get(s.port, '/assets/app.js', { cookie: jar })).status).toBe(200);
-    expect((await get(s.port, '/api/health', { cookie: jar })).status).toBe(200);
-    expect((await get(s.port, '/api/health', { cookie: `lm_token_${s.port}=nope` })).status).toBe(401);
-    expect((await get(s.port, '/api/health', { cookie: `lm_token=${s.token}` })).status).toBe(401);
-    expect((await get(s.port, '/')).status).toBe(401);
-    expect((await get(s.port, '/assets/app.js')).status).toBe(401);
-  });
-
-  it('scopes the cookie per port so two instances never collide', async () => {
-    const a = await boot();
-    const b = await startServer({ model, watcher, port: 0, uiDir });
-    try {
-      b.ready();
-      const ca = String((await get(a.port, `/?t=${a.token}`)).headers['set-cookie']?.[0]).split(';')[0];
-      const cb = String((await get(b.port, `/?t=${b.token}`)).headers['set-cookie']?.[0]).split(';')[0];
-      expect(ca.split('=')[0]).not.toBe(cb.split('=')[0]);
-      // A browser sends both cookies to both ports (cookies ignore ports).
-      const both = `${ca}; ${cb}`;
-      expect((await get(a.port, '/api/health', { cookie: both })).status).toBe(200);
-      expect((await get(b.port, '/api/health', { cookie: both })).status).toBe(200);
-      expect((await get(a.port, '/api/health', { cookie: cb })).status).toBe(401);
-      expect((await get(b.port, '/api/health', { cookie: ca })).status).toBe(401);
-      // The other instance's token under this instance's cookie name is rejected too.
-      expect((await get(a.port, '/api/health', { cookie: `lm_token_${a.port}=${b.token}` })).status).toBe(401);
-      const wa = connect(a.port, '', { cookie: cb });
-      await waitFor(() => wa.closed !== null);
-      expect(wa.closed!.code).toBe(4401);
-    } finally {
-      await b.close();
-    }
+    expect(page.headers['set-cookie']).toBeUndefined();
+    expect((await get(s.port, '/api/health', { cookie: `lm_token_${s.port}=${s.token}` })).status).toBe(401);
   });
 
   it('rejects a foreign Host header with 403 (DNS rebinding)', async () => {
@@ -285,7 +327,7 @@ describe('startServer: static files', () => {
     expect(r.status).toBe(503);
     expect(r.body).toBe('LiveMap UI is not built');
     expect((await get(s.port, `/api/health?t=${s.token}`)).status).toBe(200);
-    expect((await get(s.port, '/')).status).toBe(401);
+    expect((await get(s.port, '/')).status).toBe(503);
   });
 });
 
@@ -321,11 +363,11 @@ describe('startServer: WebSocket', () => {
     expect(JSON.stringify(hello)).not.toContain('supersecretvalue');
   });
 
-  it('accepts the lm_token cookie', async () => {
+  it('does not accept a token cookie', async () => {
     const s = await boot();
     const c = connect(s.port, '', { cookie: `lm_token_${s.port}=${s.token}` });
-    await waitFor(() => c.msgs.length >= 1);
-    expect(c.msgs[0].type).toBe('hello');
+    await waitFor(() => c.closed !== null);
+    expect(c.closed!.code).toBe(4401);
   });
 
   it('rejects a cross-origin Origin and a foreign Host', async () => {
@@ -350,16 +392,33 @@ describe('startServer: WebSocket', () => {
     put(root, 'src/c.ts', 'import { b } from "./b";\nexport const c = b * 2;\n');
     await waitFor(() => ofType(c, 'change').length >= 1, 1000);
     expect(Date.now() - t0).toBeLessThan(1000);
-    const change = ofType(c, 'change')[0].change;
-    expect(change).toMatchObject({ path: 'src/c.ts', kind: 'created' });
-    await waitFor(() => ofType(c, 'files').length >= 1);
-    const files = ofType(c, 'files')[0];
-    expect(files.files.map(f => f.path)).toContain('src/c.ts');
-    expect(files.removed).toEqual([]);
-    const iChange = c.msgs.findIndex(m => m.type === 'change');
-    const iFiles = c.msgs.findIndex(m => m.type === 'files');
-    expect(iChange).toBeLessThan(iFiles);
+    const msg = ofType(c, 'change')[0];
+    expect(msg.change).toMatchObject({ path: 'src/c.ts', kind: 'created' });
+    // The change carries its file updates, so the UI applies both at once (one render, one fetch).
+    expect(msg.files.map(f => f.path)).toContain('src/c.ts');
+    expect(msg.removed).toEqual([]);
+    expect(ofType(c, 'files')).toEqual([]);
     await waitFor(() => ofType(c, 'usedBy').some(m => m.usedBy.some(e => e.file === 'src/b.ts' && e.usedIn.includes('src/c.ts'))), 3000);
+  });
+
+  it('broadcasts files re-resolved after a burst (watcher "touched")', async () => {
+    const s = await boot();
+    const c = connect(s.port, `?t=${s.token}`);
+    await waitFor(() => c.msgs.length >= 1);
+    watcher.emit('touched', [model.get('src/a.ts')!]);
+    await waitFor(() => ofType(c, 'files').length >= 1);
+    expect(ofType(c, 'files')[0]).toMatchObject({ files: [{ path: 'src/a.ts' }], removed: [] });
+    watcher.emit('touched', [], ['src/b.ts']); // re-indexed after an ignore-rule change
+    await waitFor(() => ofType(c, 'files').length >= 2);
+    expect(ofType(c, 'files')[1]).toEqual({ type: 'files', files: [], removed: ['src/b.ts'] });
+  });
+
+  it('sends every client a fresh hello when the watcher resets', async () => {
+    const s = await boot();
+    const c = connect(s.port, `?t=${s.token}`);
+    await waitFor(() => c.msgs.length >= 1);
+    watcher.emit('reset');
+    await waitFor(() => ofType(c, 'hello').length >= 2);
   });
 
   it('reports deletions as removed paths and keeps changes for later hellos', async () => {
@@ -367,7 +426,7 @@ describe('startServer: WebSocket', () => {
     const c = connect(s.port, `?t=${s.token}`);
     await waitFor(() => c.msgs.length >= 1);
     fs.rmSync(path.join(root, 'src/a.ts'));
-    await waitFor(() => ofType(c, 'files').some(m => m.removed.includes('src/a.ts')));
+    await waitFor(() => ofType(c, 'change').some(m => m.removed.includes('src/a.ts')));
     const late = connect(s.port, `?t=${s.token}`);
     await waitFor(() => late.msgs.length >= 1);
     const hello = late.msgs[0];
@@ -429,5 +488,29 @@ describe('safeSend backpressure', () => {
     safeSend(f as unknown as WebSocket, 'x');
     expect(f.sent).toEqual([]);
     expect(f.terminated).toBe(true);
+  });
+  it('the snapshot allowance shrinks as the client drains it', () => {
+    const allowances = new WeakMap<WebSocket, number>();
+    const f = fake(0);
+    const ws = f as unknown as WebSocket;
+    sendTracked(ws, 'x'.repeat(5000), 5000, allowances); // a hello of 5000 bytes
+    f.bufferedAmount = MAX_BUFFERED_BYTES + 4000; // still mostly the hello
+    sendTracked(ws, 'a', null, allowances);
+    expect(f.terminated).toBe(false);
+    f.bufferedAmount = 100; // drained
+    sendTracked(ws, 'b', null, allowances);
+    f.bufferedAmount = MAX_BUFFERED_BYTES + 200; // now genuinely behind
+    sendTracked(ws, 'c', null, allowances);
+    expect(f.terminated).toBe(true);
+    expect(f.sent).toEqual(['x'.repeat(5000), 'a', 'b']);
+  });
+  it('allows extra buffer for a large snapshot the client is still receiving', () => {
+    const f = fake(MAX_BUFFERED_BYTES + 1000);
+    safeSend(f as unknown as WebSocket, 'x', 2000);
+    expect(f.sent).toEqual(['x']);
+    expect(f.terminated).toBe(false);
+    const g = fake(MAX_BUFFERED_BYTES + 3000);
+    safeSend(g as unknown as WebSocket, 'x', 2000);
+    expect(g.terminated).toBe(true);
   });
 });

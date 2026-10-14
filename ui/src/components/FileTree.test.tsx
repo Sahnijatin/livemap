@@ -62,7 +62,7 @@ describe('FileTree rendering cost', () => {
     useStore.getState().apply(hello([file('src/a.ts', [sym('a')]), file('src/b.ts'), file('src/c.ts')]));
     mount();
 
-    act(() => useStore.getState().apply({ type: 'change', change: change('src/a.ts', 'modified', { at: Date.now() }) }));
+    act(() => useStore.getState().apply({ type: 'change', files: [], removed: [], change: change('src/a.ts', 'modified', { at: Date.now() }) }));
     expect(new Set(renders)).toEqual(new Set(['src/a.ts']));
     expect(host.querySelector('.b-edit')).not.toBeNull();
 
@@ -136,7 +136,7 @@ describe('FileTree render cap', () => {
     for (let d = 0; d < 3; d++) for (let i = 0; i < 700; i++) files.push(file(`d${d}/f${i}.ts`));
     useStore.getState().apply(hello(files));
     mount();
-    act(() => useStore.getState().apply({ type: 'change', change: change('d1/f699.ts', 'modified', { at: Date.now() }) }));
+    act(() => useStore.getState().apply({ type: 'change', files: [], removed: [], change: change('d1/f699.ts', 'modified', { at: Date.now() }) }));
     expect(rows()).toBe(DIR_BATCH + 1);
     expect(host.querySelector('[data-file="d1/f699.ts"] .b-edit')).not.toBeNull();
   });
@@ -151,7 +151,7 @@ describe('FileTree collapsed folder indicator', () => {
     act(() => header('a').click()); // user closes folder a
     expect(host.querySelector('[data-file="a/x.ts"]')).toBeNull();
     expect(header('a').querySelector('.dlive')).toBeNull();
-    act(() => useStore.getState().apply({ type: 'change', change: change('a/x.ts', 'modified', { at: Date.now() }) }));
+    act(() => useStore.getState().apply({ type: 'change', files: [], removed: [], change: change('a/x.ts', 'modified', { at: Date.now() }) }));
     expect(host.querySelector('[data-file="a/x.ts"]')).toBeNull(); // the user's choice is kept
     const dot = header('a').querySelector('.dlive')!;
     expect(dot).not.toBeNull();
@@ -182,7 +182,7 @@ describe('FileRow badges', () => {
     const x = () => host.querySelector('[data-file="a/x.ts"]')!;
     expect(x().querySelector('.b-err')!.textContent).toBe('parse error'); // alone: full text
     expect(x().querySelector('.fmeta')).toBeNull();
-    act(() => useStore.getState().apply({ type: 'change', change: change('a/x.ts', 'modified', { at: Date.now() }) }));
+    act(() => useStore.getState().apply({ type: 'change', files: [], removed: [], change: change('a/x.ts', 'modified', { at: Date.now() }) }));
     const dot = x().querySelector('.b-err')!;
     expect(dot.classList.contains('b-dot')).toBe(true);
     expect(dot.getAttribute('aria-label')).toBe('parse error');

@@ -2,8 +2,8 @@ import type { Flag } from '@shared/types.js';
 import { authHeaders } from './connection';
 
 /**
- * State-changing calls to the local server. Same-origin with the session cookie; every request
- * sends `content-type: application/json` (the server refuses anything else). Throws an Error
+ * State-changing calls to the local server, authenticated by the x-livemap-token header; every
+ * request sends `content-type: application/json` (the server refuses anything else). Throws an Error
  * with a readable message on a network failure or a non-2xx reply.
  */
 /** A failed request; `status` is the HTTP status, or 0 when the server was not reachable. */
@@ -19,7 +19,6 @@ async function request(method: 'POST' | 'DELETE', url: string, body?: unknown): 
   try {
     res = await fetch(url, {
       method,
-      credentials: 'same-origin',
       headers: { 'content-type': 'application/json', ...authHeaders() },
       body: body === undefined ? undefined : JSON.stringify(body),
     });

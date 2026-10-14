@@ -123,7 +123,7 @@ async function main(): Promise<void> {
 
   let server: Awaited<ReturnType<typeof startServer>>;
   try {
-    server = await startServer({ model, watcher, port: args.port, uiDir, hub, attributor });
+    server = await startServer({ model, watcher, port: args.port, uiDir, hub, attributor, warn: m => process.stderr.write(`livemap: warning: ${m}\n`) });
   } catch (e) {
     fail(`could not start server: ${(e as Error).message}`);
   }
@@ -161,7 +161,7 @@ async function main(): Promise<void> {
 
   process.stdout.write(`LiveMap is watching ${path.basename(root)}\n  ${server.url}\n`);
   // Open now so the browser shows indexing progress instead of waiting for the scan (spec §13).
-  if (args.open) openBrowser(server.url);
+  if (args.open) openBrowser(server.launchUrl());
 
   // Watch before scanning: edits made during the scan queue behind it in the model (update is
   // serialized after scan), and the server only records changes until ready().

@@ -58,6 +58,10 @@ test('live update flow: browse, inspect, edit, break, delete', async ({ page }) 
   // R11: the token is stripped from the address bar after load.
   await expect(page).not.toHaveURL(/[?&]t=/);
 
+  await expect(fileRow(page, SERVICE)).toBeVisible({ timeout: 15_000 });
+  // A reload (no ?t= any more) still connects: the tab keeps its key in sessionStorage, not a cookie.
+  await page.reload();
+  expect(await page.context().cookies()).toEqual([]);
   const row = fileRow(page, SERVICE);
   await expect(row).toBeVisible({ timeout: 15_000 });
   await expect(row.locator('.fn')).toHaveText('orderService.ts');

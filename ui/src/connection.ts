@@ -5,23 +5,57 @@ const WS_UNAUTHORIZED = 4401;
 const BACKOFF_START_MS = 500;
 const BACKOFF_MAX_MS = 5000;
 
-/** The key from the first load's `?t=`, kept in memory only; the HttpOnly cookie covers reloads. */
+const TOKEN_KEY = 'livemap.token';
+
+/**
+ * The key from `?t=`, kept in memory and in sessionStorage so a reload of this tab still works.
+ * sessionStorage is scoped to this origin (port included), unlike a cookie, which every server
+ * on 127.0.0.1 would receive.
+ */
 let token: string | null = null;
 let started = false;
 
-/** Reads `?t=` once and removes it from the address bar (R11). */
+function remembered(): string | null {
+  try {
+    return window.sessionStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function remember(t: string): void {
+  try {
+    window.sessionStorage.setItem(TOKEN_KEY, t);
+  } catch {
+    // Storage blocked: the token still works until this page is reloaded.
+  }
+}
+
+function forget(): void {
+  token = null;
+  try {
+    window.sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // Storage blocked: nothing was stored.
+  }
+}
+
+/** Reads `?t=` once and removes it from the address bar (R11); falls back to this tab's stored key. */
 export function takeToken(): string | null {
   const url = new URL(window.location.href);
   const t = url.searchParams.get('t');
   if (t) {
     token = t;
+    remember(t);
     url.searchParams.delete('t');
     window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
+  } else {
+    token = remembered();
   }
   return token;
 }
 
-/** Headers for API requests: the token when we have it, otherwise the cookie does the work. */
+/** Headers for API requests. */
 export function authHeaders(): Record<string, string> {
   return token ? { 'x-livemap-token': token } : {};
 }
@@ -36,7 +70,10 @@ function wsUrl(): string {
 export function connect(): void {
   if (started) return;
   started = true;
-  takeToken();
+  if (!takeToken()) {
+    useStore.getState().setConnection('unauthorized');
+    return; // without a key the server would only refuse us
+  }
   const store = useStore.getState();
   let delay = BACKOFF_START_MS;
 
@@ -64,6 +101,7 @@ export function connect(): void {
     };
     ws.onclose = ev => {
       if (ev.code === WS_UNAUTHORIZED) {
+        forget(); // e.g. LiveMap restarted with a new key; a reload should not retry this one
         useStore.getState().setConnection('unauthorized');
         return; // a bad key never gets better by retrying
       }

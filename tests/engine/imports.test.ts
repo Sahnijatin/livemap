@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { Lang } from '../../src/shared/types.js';
 import { extractImports, readTsconfigAliases, indexStats, type ImportCtx } from '../../src/engine/imports.js';
 
-const FILES = ['src/a.ts','src/lib/b.ts','src/lib/index.ts','src/ui/c.tsx','pkg/__init__.py','pkg/mod.py','pkg/sub/x.py','app/main.py','internal/db/db.go','internal/db/conn.go','src/lib.rs','src/api.rs','src/api/routes.rs','src/main/java/com/shop/Order.java','lib/util.rb','include/geo.h'];
+const FILES = ['src/main/java/com/shop.java','src/a.ts','src/lib/b.ts','src/lib/index.ts','src/ui/c.tsx','pkg/__init__.py','pkg/mod.py','pkg/sub/x.py','app/main.py','internal/db/db.go','internal/db/conn.go','src/lib.rs','src/api.rs','src/api/routes.rs','src/main/java/com/shop/Order.java','lib/util.rb','include/geo.h'];
 const set = new Set(FILES);
 const imp = (path: string, lang: Lang, src: string, ctx: Partial<ImportCtx> = {}) =>
   extractImports(path, lang, src, { has: p => set.has(p), files: FILES, aliases: [], goModule: null, ...ctx });
@@ -30,6 +30,14 @@ describe('extractImports', () => {
   });
   it('java', () => {
     expect(imp('src/main/java/com/shop/App.java','java','import com.shop.Order;\nimport java.util.List;')).toEqual({ local: ['src/main/java/com/shop/Order.java'], external: ['java.util'] });
+    expect(imp('src/main/java/com/App.java','java','import com.shop.*;\nimport java.util.*;')).toEqual({ local: ['src/main/java/com/shop/Order.java'], external: ['java.util'] });
+    expect(imp('src/main/java/com/App.java','java','import static com.shop.Order.*;').local).toEqual(['src/main/java/com/shop/Order.java']);
+    // A wildcard resolves only to the class it names (its nested classes), never to a shorter prefix.
+    expect(imp('src/main/java/com/App.java','java','import com.shop.Order.*;').local).toEqual(['src/main/java/com/shop/Order.java']);
+    expect(imp('src/main/java/com/App.java','java','import static com.shop.Order.Inner.*;').local).toEqual(['src/main/java/com/shop/Order.java']);
+    // Only class-like (capitalized) segments count, so a lowercase package never matches a stray file.
+    expect(imp('src/main/java/com/App.java','java','import shop.Order.lib.*;').local).toEqual(['src/main/java/com/shop/Order.java']);
+    expect(imp('src/main/java/com/App.java','java','import com.shop.util.*;')).toEqual({ local: [], external: ['com.shop.util'] });
   });
   it('ruby', () => {
     expect(imp('app.rb','ruby',"require_relative 'lib/util'\nrequire 'json'")).toEqual({ local: ['lib/util.rb'], external: ['json'] });
@@ -75,6 +83,30 @@ describe('indexing and fixes', () => {
   it('ignores imports in comments', () => {
     expect(imp('src/a.ts','typescript',`// import x from './lib/b'\n/* require('lodash') */\nimport u from 'http://x'; import y from './lib'`))
       .toEqual({ local: ['src/lib/index.ts'], external: [] });
+  });
+  it('re-resolving unchanged JS text reuses its cached specifiers but sees the new file set', () => {
+    const specCache: NonNullable<ImportCtx['specCache']> = new Map();
+    const src = "import b from './lib/b'; import n from './lib/new';";
+    const before = indexStats.jsParses;
+    expect(imp('src/a.ts', 'typescript', src, { specCache }).local).toEqual(['src/lib/b.ts']);
+    const files = [...FILES, 'src/lib/new.ts'];
+    const more = new Set(files);
+    expect(extractImports('src/a.ts', 'typescript', src, { has: p => more.has(p), files, aliases: [], goModule: null, specCache }).local)
+      .toEqual(['src/lib/b.ts', 'src/lib/new.ts']);
+    expect(indexStats.jsParses - before).toBe(1);
+  });
+  it('keeps only the latest text per file in the specifier cache, and caches nothing without one', () => {
+    const specCache: NonNullable<ImportCtx['specCache']> = new Map();
+    const v1 = "import b from './lib/b'; // v1";
+    const v2 = "import b from './lib/b'; // v2";
+    let before = indexStats.jsParses;
+    for (const v of [v1, v2, v1, v1]) imp('src/cache.ts', 'typescript', v, { specCache });
+    expect(indexStats.jsParses - before).toBe(3);
+    expect(specCache.size).toBe(1);
+    before = indexStats.jsParses;
+    imp('src/cache.ts', 'typescript', v1);
+    imp('src/cache.ts', 'typescript', v1);
+    expect(indexStats.jsParses - before).toBe(2);
   });
   it('prefers the longest alias prefix', () => {
     expect(imp('src/a.ts','typescript',`import b from '@a/lib/b'`, { aliases: [['@a',['nowhere']],['@a/lib',['src/lib']]] }).local).toEqual(['src/lib/b.ts']);

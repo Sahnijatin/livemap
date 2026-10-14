@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
@@ -194,5 +194,192 @@ describe('Watcher', () => {
     await watcher!.stop();
     await sleep(400);
     expect(changes).toHaveLength(0);
+  });
+
+  it('re-resolves imports once per burst, not once per file, and reports the result', async () => {
+    const N = 40;
+    put('src/app.ts', Array.from({ length: N }, (_, i) => `import { n${i} } from './n${i}';`).join('\n') + '\n');
+    const w = await startWatcher();
+    const touched: FileModel[] = [];
+    w.on('touched', (files: FileModel[]) => touched.push(...files));
+    const relink = vi.spyOn(model as unknown as { relink: (skip: string[]) => FileModel[] }, 'relink');
+    for (let i = 0; i < N; i++) put(`src/n${i}.ts`, `export const n${i} = ${i};\n`);
+    await waitFor(() => changes.length >= N, 5000);
+    await waitFor(() => model.get('src/app.ts')!.imports.local.length === N, 5000);
+    expect(relink.mock.calls.length).toBeLessThan(N / 4);
+    const reported = [...changes.flatMap(c => c.touched), ...touched].filter(f => f.path === 'src/app.ts');
+    expect(reported.at(-1)!.imports.local).toHaveLength(N);
+  });
+
+  it('does not defer the re-resolution forever while events keep coming', async () => {
+    model = new ProjectModel(root);
+    await model.scan();
+    const w = new Watcher(model, { maxDeferMs: 100 });
+    w.on('change', (change: ChangeSummary, touched: FileModel[]) => changes.push({ change, touched, t: Date.now() }));
+    await w.start();
+    watcher = w;
+    // Slow updates plus a steady stream of new files keep the queue non-empty throughout.
+    const update = model.update.bind(model);
+    vi.spyOn(model, 'update').mockImplementation(async (...a) => { await sleep(60); return update(...a); });
+    const relinkAt: number[] = [];
+    const relink = (model as unknown as { relink: (skip: string[]) => FileModel[] }).relink.bind(model);
+    vi.spyOn(model as unknown as { relink: (skip: string[]) => FileModel[] }, 'relink').mockImplementation(skip => { relinkAt.push(Date.now()); return relink(skip); });
+    for (let i = 0; i < 30; i++) { put(`src/s${i}.ts`, `export const s${i} = 1;\n`); await sleep(5); }
+    // 30 slow jobs (~1.8 s of backlog): without a cap, only the first job and the final drain relink.
+    await waitFor(() => changes.length >= 30, 8000);
+    await sleep(100);
+    expect(relinkAt.length).toBeGreaterThanOrEqual(5);
+    const gaps = relinkAt.slice(1).map((t, i) => t - relinkAt[i]);
+    expect(Math.max(...gaps)).toBeLessThan(400);
+  });
+
+  it('watches a self-ignoring nested .gitignore (without indexing it) and reloads when it is edited', async () => {
+    put('tools/.gitignore', '*\n');
+    put('tools/run.ts', 'export const run = 1;\n');
+    await startWatcher();
+    expect(model.get('tools/run.ts')).toBeUndefined();
+    expect(model.get('tools/.gitignore')).toBeUndefined();
+    put('tools/.gitignore', '*.tmp\n');
+    await waitFor(() => model.get('tools/run.ts') !== undefined);
+    expect(model.get('tools/.gitignore')).toBeDefined(); // no longer matched by its own rules
+  });
+
+  it('a .gitignore edit indexes and watches a directory it no longer ignores, without change entries', async () => {
+    put('.gitignore', 'gen/\n');
+    put('gen/src/out.ts', 'export const out = 1;\n');
+    const w = await startWatcher();
+    const updates: { files: FileModel[]; removed: string[] }[] = [];
+    w.on('touched', (files: FileModel[], removed: string[] = []) => updates.push({ files, removed }));
+    expect(model.get('gen/src/out.ts')).toBeUndefined();
+    put('.gitignore', '# nothing ignored\n');
+    await waitFor(() => updates.some(u => u.files.some(f => f.path === 'gen/src/out.ts')));
+    // Only the .gitignore edit itself is a change; re-indexing is not reported as created files.
+    await sleep(200);
+    expect(changes.map(c => c.change.path)).toEqual(['.gitignore']);
+    // The whole newly included subtree is watched, not just the directories that had files.
+    put('gen/top.ts', 'export const top = 1;\n');
+    await waitFor(() => model.get('gen/top.ts') !== undefined, 4000);
+    put('gen/src/out.ts', 'export const out = 2;\nexport function more() {}\n');
+    await waitFor(() => changes.some(c => c.change.path === 'gen/src/out.ts' && c.change.kind === 'modified'), 4000);
+  });
+
+  it('several .gitignore edits at once reload the rules once', async () => {
+    for (let i = 0; i < 5; i++) put(`p${i}/.gitignore`, 'tmp/\n');
+    const w = await startWatcher();
+    const reload = vi.spyOn(model, 'reloadIgnores');
+    for (let i = 0; i < 5; i++) put(`p${i}/.gitignore`, 'tmp/\nout/\n');
+    await waitFor(() => changes.filter(c => c.change.path.endsWith('.gitignore')).length >= 5);
+    expect(reload).toHaveBeenCalledTimes(1);
+    void w;
+  });
+
+  it('watches a newly included directory that is still empty', async () => {
+    put('.gitignore', 'gen/\n');
+    fs.mkdirSync(path.join(root, 'gen'));
+    await startWatcher();
+    put('.gitignore', '# nothing\n');
+    await waitFor(() => changes.some(c => c.change.path === '.gitignore'));
+    await sleep(200);
+    put('gen/x.ts', 'export const x = 1;\n');
+    await waitFor(() => model.get('gen/x.ts') !== undefined, 4000);
+  });
+
+  it('deleting several .gitignore files relinks once, not once per file', async () => {
+    for (let i = 0; i < 6; i++) put(`q${i}/.gitignore`, 'tmp/\n');
+    await startWatcher();
+    const relink = vi.spyOn(model as unknown as { relink: (skip: string[]) => FileModel[] }, 'relink');
+    for (let i = 0; i < 6; i++) fs.rmSync(path.join(root, `q${i}/.gitignore`));
+    await waitFor(() => changes.filter(c => c.change.kind === 'deleted').length >= 6);
+    await sleep(100);
+    expect(relink.mock.calls.length).toBeLessThanOrEqual(2);
+  });
+
+  it('a .gitignore batch already taken by a running reload does not trigger a full reload', async () => {
+    put('a/.gitignore', 'x/\n');
+    put('b/.gitignore', 'x/\n');
+    await startWatcher();
+    const update = model.update.bind(model);
+    vi.spyOn(model, 'update').mockImplementation(async (...args) => {
+      if (args[0] === 'slow.ts') await sleep(400);
+      return update(...args);
+    });
+    const reload = vi.spyOn(model, 'reloadIgnores');
+    put('slow.ts', 'export const s = 1;\n'); // keeps the queue busy
+    await sleep(250);
+    put('a/.gitignore', 'y/\n');
+    await sleep(180); // the ignores job is queued behind slow.ts
+    put('b/.gitignore', 'y/\n');
+    await waitFor(() => changes.filter(c => c.change.path.endsWith('.gitignore')).length >= 2, 5000);
+    await sleep(400);
+    for (const call of reload.mock.calls) expect(call[0]).not.toEqual([]);
+  });
+
+  it('does not queue a flush when no relink is deferred', async () => {
+    await startWatcher();
+    const flush = vi.spyOn(model, 'flushRelink');
+    put('src/keep.ts', 'export const keep = 2;\n');
+    await waitFor(() => changes.length >= 1);
+    await sleep(50);
+    expect(flush).not.toHaveBeenCalled();
+  });
+
+  it('a directory ignored and then included again is watched again', async () => {
+    put('data/sub/x.ts', 'export const x = 1;\n');
+    await startWatcher();
+    put('.gitignore', 'data/\n');
+    await waitFor(() => model.get('data/sub/x.ts') === undefined);
+    put('.gitignore', '# nothing\n');
+    await waitFor(() => model.get('data/sub/x.ts') !== undefined);
+    await sleep(300);
+    put('data/sub/x.ts', 'export const x = 3;\nexport function more() {}\n');
+    await waitFor(() => changes.some(c => c.change.path === 'data/sub/x.ts' && c.change.kind === 'modified'), 4000);
+  });
+
+  it('stop() drops pending .gitignore paths, so a restart does not reload them', async () => {
+    put('a/.gitignore', 'x/\n'); put('b/.gitignore', 'x/\n');
+    const w = await startWatcher();
+    put('a/.gitignore', 'y/\n');
+    await sleep(60); // seen, still debouncing
+    await w.stop();
+    await w.start();
+    const reload = vi.spyOn(model, 'reloadIgnores');
+    put('b/.gitignore', 'y/\n');
+    await waitFor(() => reload.mock.calls.length >= 1, 4000);
+    expect(reload.mock.calls[0][0]).toEqual(['b/.gitignore']);
+  });
+
+  it('a throwing touched listener does not lose the .gitignore change itself', async () => {
+    put('.gitignore', 'gen/\n');
+    put('gen/x.ts', 'export const x = 1;\n');
+    const w = await startWatcher();
+    w.on('touched', () => { throw new Error('listener failed'); });
+    put('.gitignore', '# nothing\n');
+    await waitFor(() => changes.some(c => c.change.path === '.gitignore'), 4000);
+    expect(errors.map(e => e.message)).toContain('listener failed');
+  });
+
+  it('a rules reload that fails partway falls back to a rescan and a reset', async () => {
+    put('.gitignore', 'gen/\n');
+    put('gen/x.ts', 'export const x = 1;\n');
+    const w = await startWatcher();
+    let resets = 0;
+    w.on('reset', () => { resets++; });
+    vi.spyOn(model, 'reloadIgnores').mockImplementationOnce(async () => { throw new Error('reload failed'); });
+    put('.gitignore', '# nothing\n');
+    await waitFor(() => resets === 1, 4000);
+    expect(errors.map(e => e.message)).toContain('reload failed');
+    expect(model.get('gen/x.ts')).toBeDefined();
+  });
+
+
+  it('does not index files twice through a symlinked directory inside the project', async () => {
+    put('src/sub/a.ts', 'export const a = 1;\n');
+    fs.symlinkSync(path.join(root, 'src'), path.join(root, 'link'));
+    await startWatcher();
+    put('src/sub/a.ts', 'export const a = 2;\n');
+    put('src/sub/b.ts', 'export const b = 1;\n');
+    await waitFor(() => model.get('src/sub/b.ts') !== undefined);
+    await sleep(400);
+    expect(model.all().map(f => f.path).filter(p => p.startsWith('link/'))).toEqual([]);
   });
 });
