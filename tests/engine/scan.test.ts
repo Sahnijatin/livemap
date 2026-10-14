@@ -134,4 +134,17 @@ describe('ProjectModel.scan', () => {
     expect(m.all().map(f => f.path)).toEqual(['a/.gitignore', 'a/l2.gen.ts', 'a/l3.gen.ts', 'b.ts']);
     expect(m.truncated).toBe(false);
   });
+
+  it('a nested reload in a truncated project can fill the freed room from anywhere', async () => {
+    for (let i = 0; i < 3; i++) put(`a/f${i}.ts`, `export const f${i} = ${i};\n`);
+    put('a/.gitignore', '# nothing\n');
+    put('b/late.ts', 'export const late = 1;\n');
+    const m = new ProjectModel(root, { limit: 4 });
+    await m.scan();
+    expect(m.get('b/late.ts')).toBeUndefined();
+    put('a/.gitignore', 'f0.ts\nf1.ts\n');
+    await m.reloadIgnores(['a/.gitignore']);
+    expect(m.get('b/late.ts')).toBeDefined();
+    expect(m.truncated).toBe(false);
+  });
 });

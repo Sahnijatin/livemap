@@ -116,7 +116,8 @@ export class Watcher extends EventEmitter {
         if (paths.length === 0) return []; // an earlier queued job already took this batch
         const { files, removed, created } = await this.model.reloadIgnores(paths, {
           // Directories that were ignored when chokidar crawled were never watched; watch them
-          // before the reload reads them (files appearing meanwhile come back in `created`).
+          // before the reload reads them. chokidar's crawl of them reports every file it finds
+          // (ignoreInitial is off), so files created meanwhile get their own add events.
           onIncluded: dirs => this.watchIncluded(dirs),
         });
         // A throwing listener must not lose the .gitignore files' own changes below.

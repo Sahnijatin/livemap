@@ -86,7 +86,7 @@ export class ProjectModel {
       const configs = new Map<string, ReadResult>();
       for (const rel of CONFIG_FILES) {
         if (!walked.has(rel)) continue;
-        const r = await readForModel(this.root, rel);
+        const r = await this.read(rel);
         configs.set(rel, r);
         if (r?.kind === 'text') this.texts.set(rel, r.text);
       }
@@ -117,7 +117,7 @@ export class ProjectModel {
   update(rel: string, _event: 'add' | 'change' | 'unlink', opts: { deferRelink?: boolean } = {}): Promise<UpdateResult | null> {
     return this.serial(async () => {
       if (this.ignored(rel)) return null;
-      const r = await readForModel(this.root, rel);
+      const r = await this.read(rel);
       // readForModel returns null for any failure; a known file is deleted only if it is really gone.
       if (!r && this.files.has(rel) && !(await this.isGone(rel))) return null;
       if (r && !this.files.has(rel) && this.files.size >= this.limit) { this.truncated = true; return null; }
@@ -178,8 +178,9 @@ export class ProjectModel {
       const old = this.isIgnored;
       const changedDirs = changed.map(parentDir);
       this.isIgnored = changed.length ? createIgnore(this.root, { previous: old, changed: changedDirs }) : createIgnore(this.root);
-      // A nested .gitignore only affects its own subtree; the root one affects everything.
-      const whole = !changed.length || changedDirs.includes('');
+      // A nested .gitignore only affects its own subtree; the root one affects everything, and so
+      // does any change in a truncated model (freed room may be filled from anywhere).
+      const whole = !changed.length || changedDirs.includes('') || this.truncated;
       const roots = whole ? [''] : topmost(changedDirs);
       const within = (rel: string): boolean => whole || roots.some(d => rel.startsWith(`${d}/`));
       const removed: string[] = [];
@@ -188,7 +189,7 @@ export class ProjectModel {
         this.apply(rel, null);
         removed.push(rel);
       }
-      const walked = await walk(this.root, this.isIgnored, this.limit, roots);
+      const walked = await walk(this.root, this.isIgnored, this.limit, roots, { dirs: true });
       const dirs = topmost(walked.dirs.filter(d => old(d, true)));
       if (dirs.length) opts.onIncluded?.(dirs);
       // Files the old rules ignored come back as a file update. After a truncated scan, other
@@ -264,7 +265,7 @@ export class ProjectModel {
 
   /** Reads `files` with eachAhead; results already in `known` are reused instead of read again. */
   private readEach(files: string[], known: Map<string, ReadResult>, each: (rel: string, r: ReadResult) => Promise<void>, stop?: () => boolean): Promise<number> {
-    return this.eachAhead(files, rel => (known.has(rel) ? Promise.resolve(known.get(rel)!) : readForModel(this.root, rel)), each, stop);
+    return this.eachAhead(files, rel => (known.has(rel) ? Promise.resolve(known.get(rel)!) : this.read(rel)), each, stop);
   }
 
   /** True when the path no longer exists or is no longer a regular file inside the root; transient errors are not gone. */
@@ -282,10 +283,20 @@ export class ProjectModel {
     }
   }
 
+  /** readForModel with the cached real root. */
+  private async read(rel: string): Promise<ReadResult> {
+    return readForModel(this.root, rel, await this.realRoot().catch(() => undefined));
+  }
+
   private realRootP: Promise<string> | null = null;
-  /** The root's realpath, resolved once. */
+  /** The root's realpath, resolved once it succeeds (a failure is retried next time). */
   private realRoot(): Promise<string> {
-    return (this.realRootP ??= fs.realpath(this.root));
+    if (!this.realRootP) {
+      const p = fs.realpath(this.root);
+      this.realRootP = p;
+      p.catch(() => { if (this.realRootP === p) this.realRootP = null; });
+    }
+    return this.realRootP;
   }
 
   private serial<T>(fn: () => Promise<T>): Promise<T> {

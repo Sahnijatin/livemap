@@ -41,24 +41,32 @@ export function buildUsedBy(files: FileModel[], contents: (p: string) => string 
     if (!textCache.has(p)) textCache.set(p, contents(p));
     return textCache.get(p)!;
   };
+  // Each importer's token set once per build, not once per exported name it is checked against.
+  const tokenSets = new Map<string, Set<string> | null>();
+  const tokens = (p: string): Set<string> | null => {
+    let set = tokenSets.get(p);
+    if (set === undefined) {
+      const t = text(p);
+      set = t === null ? null : tokensOf(p, t, cache);
+      tokenSets.set(p, set);
+    }
+    return set;
+  };
   const out: UsedByEntry[] = [];
   for (const f of files) {
     const users = importers.get(f.path);
     if (!users) continue;
     const names = new Set(f.symbols.filter(s => s.exported && s.name).map(s => s.name));
     for (const name of names) {
-      let uses: (path: string, t: string) => boolean;
+      let uses: (path: string) => boolean;
       if (IDENT.test(name)) {
-        uses = (p, t) => tokensOf(p, t, cache).has(name);
+        uses = p => tokens(p)?.has(name) ?? false;
       } else {
         // \b-equivalent boundary that also treats `$` as part of an identifier.
         const re = new RegExp(`(?<![\\w$])${escape(name)}(?![\\w$])`);
-        uses = (_p, t) => re.test(t);
+        uses = p => { const t = text(p); return t !== null && re.test(t); };
       }
-      const usedIn = users.filter(u => {
-        const t = text(u);
-        return t !== null && uses(u, t);
-      });
+      const usedIn = users.filter(uses);
       if (usedIn.length) out.push({ file: f.path, symbol: name, usedIn: [...new Set(usedIn)].sort(cmp) });
     }
   }

@@ -510,4 +510,22 @@ describe('ProjectModel fix round 1', () => {
       fs.rmSync(outside, { recursive: true, force: true });
     }
   });
+
+  it('a transient failure resolving the root is not cached', async () => {
+    put('lib/a.ts', 'export const a = 1;\n');
+    const m = new ProjectModel(root); // not scanned: the root has not been resolved yet
+    const real = fsp.realpath.bind(fsp);
+    let fail = true;
+    const spy = vi.spyOn(fsp, 'realpath').mockImplementation(async p => {
+      if (fail && String(p) === root) { fail = false; throw Object.assign(new Error('gone for a moment'), { code: 'ENOENT' }); }
+      return real(p);
+    });
+    const isGone = (rel: string) => (m as unknown as { isGone(rel: string): Promise<boolean> }).isGone(rel);
+    try {
+      expect(await isGone('lib/a.ts')).toBe(true); // the root was briefly missing
+      expect(await isGone('lib/a.ts')).toBe(false); // it is back, and so is the file
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

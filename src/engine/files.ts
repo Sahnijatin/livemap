@@ -138,8 +138,8 @@ function readGitignore(dir: string): string {
 }
 
 /**
- * Every non-ignored regular file (sorted) and every directory visited, under the root or only
- * under the `from` directories. Passing a matcher from createIgnore lets the walk tell it which
+ * Every non-ignored regular file (sorted), under the root or only under the `from` directories,
+ * and with `opts.dirs` every directory visited. Passing a matcher from createIgnore lets the walk tell it which
  * directories have no .gitignore.
  */
 export async function walk(
@@ -147,6 +147,7 @@ export async function walk(
   ignored: ((rel: string, isDir: boolean) => boolean) & { prime?: IgnoreFn['prime'] },
   limit = 25000,
   from: string[] = [''],
+  opts: { dirs?: boolean } = {},
 ): Promise<{ files: string[]; dirs: string[]; truncated: boolean }> {
   const files: string[] = [];
   const dirs: string[] = [];
@@ -167,7 +168,7 @@ export async function walk(
       if (e.isSymbolicLink()) continue;
       const rel = (dirRel ? `${dirRel}/` : '') + e.name;
       if (e.isDirectory()) {
-        if (!ignored(rel, true)) { dirs.push(rel); await visit(rel); }
+        if (!ignored(rel, true)) { if (opts.dirs) dirs.push(rel); await visit(rel); }
       } else if (e.isFile()) {
         if (isTempName(rel) || ignored(rel, false)) continue;
         if (files.length >= limit) { truncated = true; return; }
@@ -178,7 +179,7 @@ export async function walk(
 
   for (const dir of from) {
     if (dir === '') await visit('');
-    else if (!ignored(dir, true)) { dirs.push(dir); await visit(dir); }
+    else if (!ignored(dir, true)) { if (opts.dirs) dirs.push(dir); await visit(dir); }
   }
   files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   return { files, dirs, truncated };
@@ -253,7 +254,8 @@ async function readCapped(abs: string, sizeHint: number): Promise<Buffer | null>
   }
 }
 
-export async function readForModel(root: string, rel: string): Promise<ReadResult> {
+/** `realRoot` (the root's realpath, if the caller has it) saves resolving it on every read. */
+export async function readForModel(root: string, rel: string, realRoot?: string): Promise<ReadResult> {
   const abs = path.resolve(root, ...rel.split('/'));
   if (abs === path.resolve(root) || !insideRoot(path.resolve(root), abs)) return null;
   let size: number;
@@ -261,7 +263,7 @@ export async function readForModel(root: string, rel: string): Promise<ReadResul
     const st = await fs.lstat(abs);
     if (st.isSymbolicLink() || !st.isFile()) return null;
     // Also reject paths that pass through a symlinked directory leading outside root.
-    if (!insideRoot(await fs.realpath(root), await fs.realpath(abs))) return null;
+    if (!insideRoot(realRoot ?? (await fs.realpath(root)), await fs.realpath(abs))) return null;
     size = st.size;
   } catch {
     return null;
