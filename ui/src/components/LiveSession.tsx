@@ -1,0 +1,85 @@
+import clsx from 'clsx';
+import { useStore } from '../store';
+import { agentName, latestMessage } from '../agents';
+import { layerOf } from '../layers';
+import { baseName, isRecent, useNow } from '../recent';
+import { removeFlag } from '../api';
+import { COUNTER_LABELS, CountUp, useLiveState } from './Activity';
+import { FlagBox } from './FlagBox';
+import { FlagIcon, LayerTile } from './icons';
+
+function YourFlags() {
+  const flags = useStore(s => s.control.flags);
+  const select = useStore(s => s.select);
+  const showToast = useStore(s => s.showToast);
+  if (!flags.length) return null;
+  const sorted = [...flags].sort((a, b) => Number(!!a.deliveredAt) - Number(!!b.deliveredAt) || b.createdAt - a.createdAt).slice(0, 12);
+  return (
+    <div className="sec">
+      <h4>Your flags</h4>
+      <div className="flaglist">
+        {sorted.map(f => (
+          <div className={clsx('flagrow fi', f.deliveredAt && 'done')} key={f.id}>
+            <span className="fl-ic"><FlagIcon /></span>
+            <div className="fl-tx">
+              {f.target
+                ? <button type="button" className="linkbtn" onClick={() => select(f.target)} title={f.target}>{baseName(f.target)}</button>
+                : <b>Project</b>}
+              <span>{f.note}</span>
+              <small>{f.deliveredAt ? `Delivered to ${agentName(f.deliveredTo?.agent)}` : 'Waiting for the next action'}</small>
+            </div>
+            {!f.deliveredAt && (
+              <button type="button" className="fl-x" aria-label={`Remove flag: ${f.note}`} onClick={() => removeFlag(f.id).catch(e => showToast(e instanceof Error ? e.message : 'Could not remove the flag', 'error'))}>×</button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Inspector overview when nothing is selected: what the agent is doing and how to steer it. */
+export function LiveSession() {
+  const files = useStore(s => s.files);
+  const recent = useStore(s => s.recent);
+  const events = useStore(s => s.events);
+  const select = useStore(s => s.select);
+  const { session, step, counts, working, paused } = useLiveState();
+  const now = useNow();
+  const msg = latestMessage(events, session?.id);
+  const recentPaths = Object.entries(recent)
+    .filter(([p]) => files[p])
+    .sort((a, b) => b[1].at - a[1].at)
+    .slice(0, 8);
+
+  return (
+    <>
+      <div className="live-h"><h3>Live session</h3>{working && !paused && <span className="livetag"><i />Live</span>}{paused && <span className="livetag paused"><i />Paused</span>}</div>
+      <div className={clsx('nowcard', working && !paused && 'working')}>
+        <span className="lbl">{working && !paused ? <span className="spinner" aria-hidden="true" /> : <i className="ndot" aria-hidden="true" />}<span className="truncate">{step.line}</span></span>
+        <p>{msg?.text ? msg.text.slice(0, 600) : session ? `${agentName(session.agent)} has not said anything yet.` : 'No agent has worked in this project since LiveMap started. Start one to watch it here.'}</p>
+      </div>
+      <div className="mstats">
+        {COUNTER_LABELS.map(([k, l]) => <div className="mstat" key={k}><b><CountUp value={counts[k]} /></b><span>{l.charAt(0).toUpperCase() + l.slice(1)}</span></div>)}
+      </div>
+      <div className="sec">
+        <h4>Recently changed</h4>
+        <div className="recent">
+          {recentPaths.length ? recentPaths.map(([p, r]) => (
+            <button type="button" className="rrow fi" key={p} onClick={() => select(p)} title={p}>
+              <LayerTile layer={layerOf(p, files[p])} />
+              <code>{baseName(p)}</code>
+              {isRecent(r, now) && <span className={clsx('badge', r.kind === 'created' ? 'b-new' : 'b-edit')}>{r.kind === 'created' ? 'New' : 'Edited'}</span>}
+            </button>
+          )) : <div className="muted">Nothing yet. Edits show up here as they happen.</div>}
+        </div>
+      </div>
+      <YourFlags />
+      <div className="sec">
+        <h4>Flag the project</h4>
+        <FlagBox target={null} />
+      </div>
+      <div className="muted" style={{ fontSize: 12 }}>Select any file to see what is inside it, what it connects to, and why it changed.</div>
+    </>
+  );
+}
