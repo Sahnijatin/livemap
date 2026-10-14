@@ -17,6 +17,8 @@ export interface ServerOptions {
   port?: number;
   uiDir: string;
   token?: string;
+  /** Security warnings for the person running LiveMap (the CLI prints them to stderr). */
+  warn?: (message: string) => void;
 }
 
 export interface LiveMapServer {
@@ -28,7 +30,8 @@ export interface LiveMapServer {
   /**
    * A URL for a browser opener: a single-use code (expires after LAUNCH_TTL_MS) that redirects to
    * `url`. Opener and browser arguments are readable by other local users, so the token never
-   * goes there; a code read from them later is already spent.
+   * goes there; a code read from them later is already spent. A local user who redeems it before
+   * the browser does still wins that race, but the browser then hits a spent code and `warn` fires.
    */
   launchUrl(): string;
   close(): Promise<void>;
@@ -151,8 +154,8 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   let usedByTimer: NodeJS.Timeout | null = null;
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
-  /** One-time launch codes to their expiry time (see launchUrl). */
-  const launches = new Map<string, number>();
+  /** One-time launch codes (see launchUrl). */
+  const launches = new Map<string, { expires: number; spent: boolean }>();
 
   /** Room each client may still need for draining its last hello (see sendTracked). */
   const allowances = new WeakMap<WebSocket, number>();
@@ -211,15 +214,17 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     if (isApiPath(url.pathname) && !authenticate(req, url, token)) return json(res, 401, { error: 'unauthorized' });
     if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method not allowed' }, { allow: 'GET, HEAD' });
 
-    const launch = url.pathname === '/' ? url.searchParams.get('launch') : null;
-    if (launch !== null) {
-      const expires = launches.get(launch);
-      launches.delete(launch); // single use, whether or not it is still fresh
-      if (expires !== undefined && Date.now() <= expires) {
+    // Only a GET spends a launch code, so a HEAD or link check does not lock the browser out.
+    const launch = req.method === 'GET' && url.pathname === '/' ? url.searchParams.get('launch') : null;
+    const entry = launch === null ? undefined : launches.get(launch);
+    if (entry && Date.now() <= entry.expires) {
+      if (!entry.spent) {
+        entry.spent = true; // kept until it expires, so a second use can be reported
         res.writeHead(302, { ...BASE_HEADERS, location: `/?t=${token}`, 'content-length': '0' });
         res.end();
         return;
       }
+      opts.warn?.('the browser launch link was already used. If that was not you, stop LiveMap and start it again for a new key.');
     }
 
     if (url.pathname === '/api/health') return json(res, 200, { ok: true });
@@ -275,9 +280,9 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     server,
     launchUrl(): string {
       const now = Date.now();
-      for (const [code, expires] of launches) if (expires < now) launches.delete(code);
+      for (const [code, { expires }] of launches) if (expires < now) launches.delete(code);
       const code = newToken();
-      launches.set(code, now + LAUNCH_TTL_MS);
+      launches.set(code, { expires: now + LAUNCH_TTL_MS, spent: false });
       return `http://${HOST}:${port}/?launch=${code}`;
     },
     setIndexing(done: number, total: number): void {

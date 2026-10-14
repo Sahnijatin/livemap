@@ -66,12 +66,12 @@ function connect(port: number, query: string, headers: Record<string, string> = 
 const ofType = <T extends ServerMessage['type']>(c: Client, t: T) =>
   c.msgs.filter((m): m is Extract<ServerMessage, { type: T }> => m.type === t);
 
-async function boot(opts: { ready?: boolean; port?: number; ui?: string } = {}): Promise<Started> {
+async function boot(opts: { ready?: boolean; port?: number; ui?: string; warn?: (msg: string) => void } = {}): Promise<Started> {
   model = new ProjectModel(root);
   await model.scan();
   watcher = new Watcher(model, { debounceMs: 30 });
   await watcher.start();
-  srv = await startServer({ model, watcher, port: opts.port ?? 0, uiDir: opts.ui ?? uiDir });
+  srv = await startServer({ model, watcher, port: opts.port ?? 0, uiDir: opts.ui ?? uiDir, warn: opts.warn });
   if (opts.ready !== false) srv.ready();
   return srv;
 }
@@ -178,6 +178,23 @@ describe('startServer: HTTP auth', () => {
     expect(again.body).not.toContain(s.token);
     expect((await get(s.port, '/?launch=00000000000000000000000000000000')).status).toBe(200);
     expect(s.launchUrl()).not.toBe(launch);
+  });
+
+  it('HEAD does not spend a launch code; reusing a spent code warns that someone else may have used it', async () => {
+    const warnings: string[] = [];
+    const s = await boot({ warn: m => warnings.push(m) });
+    const q = s.launchUrl().replace(/^http:\/\/[^/]+/, '');
+    const head = await new Promise<number>((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: s.port, path: q, method: 'HEAD', headers: { host: `127.0.0.1:${s.port}` } }, r => { r.resume(); resolve(r.statusCode ?? 0); });
+      req.on('error', reject);
+      req.end();
+    });
+    expect(head).toBe(200);
+    expect((await get(s.port, q)).status).toBe(302);
+    expect(warnings).toEqual([]);
+    expect((await get(s.port, q)).status).toBe(200);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/launch link was already used/i);
   });
 
   it('a launch code expires unused', async () => {
