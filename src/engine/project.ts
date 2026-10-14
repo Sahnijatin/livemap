@@ -119,7 +119,6 @@ export class ProjectModel {
         if (opts.deferRelink && !CONFIG_FILES.has(rel)) {
           if (!this.relinkPending) this.ctx = this.liveCtx(); // first deferral of a burst
           this.relinkPending = true;
-          if (this.liveIndex) indexUpdate(this.liveIndex, rel, result.kind !== 'deleted');
         } else {
           result.touched = this.relink([rel]);
           result.after = this.files.get(rel) ?? null;
@@ -235,6 +234,7 @@ export class ProjectModel {
     if (!r) {
       if (!before) return null;
       this.files.delete(rel); this.texts.delete(rel); this.lastGood.delete(rel); this.specCache.delete(rel);
+      if (this.liveIndex) indexUpdate(this.liveIndex, rel, false);
       return Promise.resolve({
         result: { path: rel, kind: 'deleted', before, after: null, beforeText, afterText: null, touched: [] },
         setChanged: true,
@@ -246,6 +246,7 @@ export class ProjectModel {
       // Commit text and model together only after a successful build.
       if (r.kind === 'text') this.texts.set(rel, r.text); else { this.texts.delete(rel); this.specCache.delete(rel); }
       this.files.set(rel, after);
+      if (!before && this.liveIndex) indexUpdate(this.liveIndex, rel, true);
       const afterText = r.kind === 'text' ? r.text : null;
       return {
         result: { path: rel, kind: before ? 'modified' : 'created', before, after, beforeText, afterText, touched: [] },

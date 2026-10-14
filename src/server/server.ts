@@ -67,7 +67,6 @@ function json(res: http.ServerResponse, status: number, body: unknown, extra: Re
 
 const isApiPath = (pathname: string): boolean => pathname === '/api' || pathname.startsWith('/api/');
 
-/** Shown to a browser that opens LiveMap without the key: guidance only, never project data. */
 /** A project-relative POSIX path, or null when it is empty, absolute or climbs out with `..`. */
 export function safeRelPath(raw: string | null): string | null {
   if (raw === null) return null;

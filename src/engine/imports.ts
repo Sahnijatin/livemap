@@ -72,10 +72,12 @@ export function indexUpdate(idx: FileIndex, f: string, present: boolean): void {
   }
 }
 
+const NO_FILES: string[] = [];
+
 /** The ctx's own index, or one built once per ctx.files array. */
 function indexOf(ctx: ImportCtx): FileIndex {
   if (ctx.index) return ctx.index;
-  const files = ctx.files ?? [];
+  const files = ctx.files ?? NO_FILES;
   let idx = INDEXES.get(files);
   if (!idx) {
     idx = buildIndex(files);
