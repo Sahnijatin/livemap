@@ -21,6 +21,7 @@ async function start(search: string) {
 }
 
 beforeEach(() => {
+  window.sessionStorage.clear();
   vi.useFakeTimers();
   FakeWebSocket.instances = [];
   vi.stubGlobal('WebSocket', FakeWebSocket);
@@ -40,10 +41,24 @@ describe('connect', () => {
     expect(conn.authHeaders()).toEqual({ 'x-livemap-token': 'abc123' });
   });
 
-  it('relies on the cookie when there is no ?t=', async () => {
+  it('keeps the token in sessionStorage so a reload without ?t= still connects', async () => {
+    await start('?t=abc123');
     const { conn } = await start('');
-    expect(last().url).toBe(`ws://${window.location.host}/ws`);
-    expect(conn.authHeaders()).toEqual({});
+    expect(last().url).toBe(`ws://${window.location.host}/ws?t=abc123`);
+    expect(conn.authHeaders()).toEqual({ 'x-livemap-token': 'abc123' });
+  });
+
+  it('reports unauthorized without opening a socket when there is no token at all', async () => {
+    const { useStore } = await start('');
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(useStore.getState().connection).toBe('unauthorized');
+  });
+
+  it('a new ?t= replaces the stored token', async () => {
+    await start('?t=old');
+    const { conn } = await start('?t=new');
+    expect(conn.authHeaders()).toEqual({ 'x-livemap-token': 'new' });
+    expect(window.sessionStorage.getItem('livemap.token')).toBe('new');
   });
 
   it('reconnects with backoff 0.5 s doubling to a 5 s cap, and resets after a successful open', async () => {
@@ -79,7 +94,7 @@ describe('connect', () => {
   });
 
   it('feeds messages to the store and ignores malformed ones', async () => {
-    const { useStore } = await start('');
+    const { useStore } = await start('?t=k');
     last().onopen!();
     last().onmessage!({ data: 'not json' });
     last().onmessage!({ data: JSON.stringify({ type: 'hello', root: '/p/x', name: 'x', files: [], changes: [], usedBy: [], indexing: false }) });

@@ -146,18 +146,14 @@ describe('startServer: HTTP auth', () => {
     expect(JSON.parse(ok.body)).toEqual({ ok: true });
   });
 
-  it('R10: an unauthenticated page load gets a 401 HTML guidance page with no project data; API stays JSON', async () => {
+  it('R10: the UI shell loads without a token but carries no project data; API stays 401 JSON', async () => {
     const s = await boot();
-    for (const p of ['/', '/?t=deadbeef', '/some/route']) {
+    for (const p of ['/', '/?t=deadbeef', '/assets/app.js']) {
       const r = await get(s.port, p);
-      expect(r.status, p).toBe(401);
-      expect(r.headers['content-type'], p).toMatch(/^text\/html/);
+      expect(r.status, p).toBe(200);
       expect(r.headers['set-cookie'], p).toBeUndefined();
-      expect(r.body, p).toContain('<h1>LiveMap</h1>');
-      expect(r.body, p).toContain('Open the link printed in your terminal. It includes a one-time key.');
       expect(r.body, p).not.toContain(path.basename(root));
       expect(r.body, p).not.toContain('a.ts');
-      expect(r.body, p).not.toMatch(/<script|<link|src=/i);
     }
     const api = await get(s.port, '/api/file?path=src/a.ts');
     expect(api.status).toBe(401);
@@ -171,47 +167,13 @@ describe('startServer: HTTP auth', () => {
     expect((await get(s.port, '/api/health', { 'x-livemap-token': s.token.slice(1) })).status).toBe(401);
   });
 
-  it('GET / with the token sets an HttpOnly SameSite=Strict cookie that then authenticates', async () => {
+  it('never sets or accepts a cookie: cookies ignore ports, so any local server would receive it', async () => {
     const s = await boot();
     const page = await get(s.port, `/?t=${s.token}`);
     expect(page.status).toBe(200);
     expect(page.body).toContain('<title>LiveMap</title>');
-    const cookie = String(page.headers['set-cookie']?.[0] ?? '');
-    expect(cookie).toMatch(new RegExp(`^lm_token_${s.port}=[0-9a-f]{32}`));
-    expect(cookie).toMatch(/HttpOnly/);
-    expect(cookie).toMatch(/SameSite=Strict/);
-    expect(cookie).toMatch(/Path=\//);
-    const jar = cookie.split(';')[0];
-    expect((await get(s.port, '/assets/app.js', { cookie: jar })).status).toBe(200);
-    expect((await get(s.port, '/api/health', { cookie: jar })).status).toBe(200);
-    expect((await get(s.port, '/api/health', { cookie: `lm_token_${s.port}=nope` })).status).toBe(401);
-    expect((await get(s.port, '/api/health', { cookie: `lm_token=${s.token}` })).status).toBe(401);
-    expect((await get(s.port, '/')).status).toBe(401);
-    expect((await get(s.port, '/assets/app.js')).status).toBe(401);
-  });
-
-  it('scopes the cookie per port so two instances never collide', async () => {
-    const a = await boot();
-    const b = await startServer({ model, watcher, port: 0, uiDir });
-    try {
-      b.ready();
-      const ca = String((await get(a.port, `/?t=${a.token}`)).headers['set-cookie']?.[0]).split(';')[0];
-      const cb = String((await get(b.port, `/?t=${b.token}`)).headers['set-cookie']?.[0]).split(';')[0];
-      expect(ca.split('=')[0]).not.toBe(cb.split('=')[0]);
-      // A browser sends both cookies to both ports (cookies ignore ports).
-      const both = `${ca}; ${cb}`;
-      expect((await get(a.port, '/api/health', { cookie: both })).status).toBe(200);
-      expect((await get(b.port, '/api/health', { cookie: both })).status).toBe(200);
-      expect((await get(a.port, '/api/health', { cookie: cb })).status).toBe(401);
-      expect((await get(b.port, '/api/health', { cookie: ca })).status).toBe(401);
-      // The other instance's token under this instance's cookie name is rejected too.
-      expect((await get(a.port, '/api/health', { cookie: `lm_token_${a.port}=${b.token}` })).status).toBe(401);
-      const wa = connect(a.port, '', { cookie: cb });
-      await waitFor(() => wa.closed !== null);
-      expect(wa.closed!.code).toBe(4401);
-    } finally {
-      await b.close();
-    }
+    expect(page.headers['set-cookie']).toBeUndefined();
+    expect((await get(s.port, '/api/health', { cookie: `lm_token_${s.port}=${s.token}` })).status).toBe(401);
   });
 
   it('rejects a foreign Host header with 403 (DNS rebinding)', async () => {
@@ -285,7 +247,7 @@ describe('startServer: static files', () => {
     expect(r.status).toBe(503);
     expect(r.body).toBe('LiveMap UI is not built');
     expect((await get(s.port, `/api/health?t=${s.token}`)).status).toBe(200);
-    expect((await get(s.port, '/')).status).toBe(401);
+    expect((await get(s.port, '/')).status).toBe(503);
   });
 });
 
@@ -321,11 +283,11 @@ describe('startServer: WebSocket', () => {
     expect(JSON.stringify(hello)).not.toContain('supersecretvalue');
   });
 
-  it('accepts the lm_token cookie', async () => {
+  it('does not accept a token cookie', async () => {
     const s = await boot();
     const c = connect(s.port, '', { cookie: `lm_token_${s.port}=${s.token}` });
-    await waitFor(() => c.msgs.length >= 1);
-    expect(c.msgs[0].type).toBe('hello');
+    await waitFor(() => c.closed !== null);
+    expect(c.closed!.code).toBe(4401);
   });
 
   it('rejects a cross-origin Origin and a foreign Host', async () => {

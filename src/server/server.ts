@@ -7,7 +7,7 @@ import type { Watcher } from '../engine/watcher.js';
 import { buildUsedBy } from '../engine/usedby.js';
 import type { ServerMessage, UsedByEntry } from '../shared/protocol.js';
 import type { ChangeSummary, FileModel } from '../shared/types.js';
-import { authenticate, hostAllowed, newToken, originAllowed, sessionCookie } from './auth.js';
+import { authenticate, hostAllowed, newToken, originAllowed } from './auth.js';
 import { serveStatic } from './static.js';
 
 export interface ServerOptions {
@@ -57,30 +57,6 @@ function json(res: http.ServerResponse, status: number, body: unknown, extra: Re
 const isApiPath = (pathname: string): boolean => pathname === '/api' || pathname.startsWith('/api/');
 
 /** Shown to a browser that opens LiveMap without the key: guidance only, never project data. */
-export const UNAUTHORIZED_PAGE = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LiveMap</title>
-<style>
-:root{color-scheme:light dark}
-body{margin:0;min-height:100vh;display:grid;place-items:center;background:#eef0f5;color:#1d1d1f;font:15px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,"Segoe UI",sans-serif;padding:16px;box-sizing:border-box}
-main{max-width:420px;text-align:center;background:#fff;border-radius:28px;padding:32px 28px;box-shadow:0 2px 4px rgba(0,0,0,.04),0 20px 50px rgba(17,24,39,.13)}
-i{display:block;width:48px;height:48px;border-radius:15px;margin:0 auto 16px;background:conic-gradient(from 210deg,#0a7cff,#a64df0,#f0287a,#ff8a00,#0a7cff)}
-h1{margin:0 0 8px;font-size:24px;letter-spacing:-.02em}
-p{margin:0;color:#55595f;text-wrap:balance}
-@media (prefers-color-scheme:dark){body{background:#0b0d13;color:#f2f3f7}main{background:#1a1e2a;box-shadow:0 20px 60px rgba(0,0,0,.5)}p{color:#b4b9c4}}
-</style></head>
-<body><main><i aria-hidden="true"></i><h1>LiveMap</h1><p>Open the link printed in your terminal. It includes a one-time key.</p></main></body></html>
-`;
-
-function unauthorizedPage(res: http.ServerResponse): void {
-  res.writeHead(401, {
-    ...BASE_HEADERS,
-    'content-type': 'text/html; charset=utf-8',
-    'content-length': String(Buffer.byteLength(UNAUTHORIZED_PAGE)),
-    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'",
-  });
-  res.end(UNAUTHORIZED_PAGE);
-}
-
 /** A project-relative POSIX path, or null when it is empty, absolute or climbs out with `..`. */
 export function safeRelPath(raw: string | null): string | null {
   if (raw === null) return null;
@@ -138,7 +114,6 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   const token = opts.token ?? newToken();
   const name = path.basename(model.root);
 
-  let port = 0; // set once bound; no request can arrive before that
   let isReady = false;
   let indexing = { done: 0, total: 0 };
   let lastIndexingSent = 0;
@@ -192,11 +167,9 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     } catch {
       return json(res, 400, { error: 'bad request' });
     }
-    const source = authenticate(req, url, token, port);
-    if (!source) {
-      if (isApiPath(url.pathname)) return json(res, 401, { error: 'unauthorized' });
-      return unauthorizedPage(res);
-    }
+    // The UI shell is static and holds no project data, so it loads without a token (a reload has
+    // none in its URL); the page then sends the token it kept in sessionStorage with every request.
+    if (isApiPath(url.pathname) && !authenticate(req, url, token)) return json(res, 401, { error: 'unauthorized' });
     if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method not allowed' }, { allow: 'GET, HEAD' });
 
     if (url.pathname === '/api/health') return json(res, 200, { ok: true });
@@ -211,9 +184,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     }
     if (isApiPath(url.pathname)) return json(res, 404, { error: 'not found' });
 
-    const headers: Record<string, string> = { ...BASE_HEADERS };
-    if (source !== 'cookie') headers['set-cookie'] = sessionCookie(token, port);
-    await serveStatic(uiDir, url.pathname, res, headers);
+    await serveStatic(uiDir, url.pathname, res, { ...BASE_HEADERS });
   };
 
   const server = http.createServer((req, res) => {
@@ -233,7 +204,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
       return reject(socket, 400, 'Bad Request');
     }
     if (url.pathname !== '/ws') return reject(socket, 404, 'Not Found');
-    const authed = authenticate(req, url, token, port) !== null;
+    const authed = authenticate(req, url, token);
     wss.handleUpgrade(req, socket, head, ws => {
       ws.on('error', () => {});
       if (!authed) {
@@ -245,7 +216,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   });
 
 
-  port = await bind(server, opts.port ?? DEFAULT_PORT);
+  const port = await bind(server, opts.port ?? DEFAULT_PORT);
 
   return {
     url: `http://${HOST}:${port}/?t=${token}`,
