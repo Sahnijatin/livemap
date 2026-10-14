@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../store';
-import { file, sym, change, emptyDomain } from '../fixtures';
+import { file, sym, change, emptyDomain, event, session } from '../fixtures';
 import { FileTree } from './FileTree';
 import { rowRenderProbe } from './FileRow';
 import { DIR_BATCH, ROW_BUDGET } from '../treeModel';
@@ -149,6 +149,7 @@ describe('FileTree collapsed folder indicator', () => {
     useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts')]));
     mount();
     act(() => header('a').click()); // user closes folder a
+    act(() => { vi.advanceTimersByTime(400); }); // past the fold animation
     expect(host.querySelector('[data-file="a/x.ts"]')).toBeNull();
     expect(header('a').querySelector('.dlive')).toBeNull();
     act(() => useStore.getState().apply({ type: 'change', files: [], removed: [], change: change('a/x.ts', 'modified', { at: Date.now() }) }));
@@ -161,6 +162,25 @@ describe('FileTree collapsed folder indicator', () => {
     act(() => header('a').click()); // reopened: the row itself shows the badge
     expect(header('a').querySelector('.dlive')).toBeNull();
     expect(host.querySelector('[data-file="a/x.ts"] .b-edit')).not.toBeNull();
+  });
+
+  it('folds a closing folder shut before removing its rows, and unfolds an opening one', () => {
+    useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts')]));
+    mount();
+    const group = () => host.querySelector('[data-file="a/x.ts"]')?.closest('.dgroup') ?? null;
+    expect(group()!.getAttribute('role')).toBe('group');
+    expect(group()!.className).toBe('dgroup');
+    act(() => header('a').click());
+    expect(header('a').getAttribute('aria-expanded')).toBe('false');
+    expect(group()!.classList.contains('fold')).toBe(true);
+    expect(group()!.hasAttribute('inert')).toBe(true);
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(group()).toBeNull();
+    act(() => header('a').click());
+    expect(group()!.classList.contains('unfold')).toBe(true);
+    expect(group()!.hasAttribute('inert')).toBe(false);
+    act(() => { vi.advanceTimersByTime(500); });
+    expect(group()!.className).toBe('dgroup');
   });
 
   it('marks a user-closed folder that holds the selected file', () => {
@@ -190,5 +210,105 @@ describe('FileRow badges', () => {
     expect(x().querySelector('.b-edit')).not.toBeNull();
     expect(x().querySelector('.fmeta')).toBeNull();
     expect(host.querySelector('[data-file="a/y.ts"] .fmeta')!.textContent).toBe('1');
+  });
+});
+
+describe('FileTree live target', () => {
+  const scrollSpy = vi.fn();
+  const w = (store = useStore.getState()) => store;
+  const working = () => session({ id: 's1', status: 'working', lastAt: Date.now() });
+  const startEdit = (path: string) =>
+    event({ sessionId: 's1', type: 'tool_start', at: Date.now(), tool: { id: 'x1', name: 'Edit', label: 'Edit', paths: [path] } });
+  const target = (path: string) => {
+    act(() => w().apply({ type: 'session', session: working() }));
+    act(() => w().apply({ type: 'agentEvent', event: startEdit(path) }));
+  };
+
+  beforeEach(() => {
+    scrollSpy.mockClear();
+    (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView = scrollSpy;
+  });
+  afterEach(() => { delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView; });
+
+  it('shows NOW on the target and suppresses New on it', () => {
+    useStore.getState().apply(hello([file('src/a.ts'), file('src/b.ts')]));
+    mount();
+    act(() => useStore.getState().apply({ type: 'change', files: [], removed: [], change: change('src/a.ts', 'created', { at: Date.now() }) }));
+    expect(host.querySelector('.b-new')).not.toBeNull();
+    target('src/a.ts');
+    const row = host.querySelector('[data-file="src/a.ts"]')!;
+    expect(row.querySelector('.b-now')?.textContent).toBe('Now');
+    expect(row.querySelector('.b-new')).toBeNull();
+    expect(host.querySelectorAll('.b-now')).toHaveLength(1);
+  });
+
+  it('expands a collapsed folder and scrolls the target into view without changing selection', () => {
+    useStore.getState().apply(hello([file('src/a.ts'), file('lib/b.ts')]));
+    mount();
+    act(() => host.querySelector<HTMLElement>('[data-dir="lib"]')!.click());
+    act(() => { vi.advanceTimersByTime(400); }); // past the fold animation
+    expect(host.querySelector('[data-file="lib/b.ts"]')).toBeNull();
+    const before = useStore.getState().selected;
+    target('lib/b.ts');
+    expect(host.querySelector('[data-file="lib/b.ts"]')).not.toBeNull();
+    expect(scrollSpy).toHaveBeenCalled();
+    expect(useStore.getState().selected).toBe(before);
+  });
+
+  it('does not scroll after the user scrolled the tree within 5 s, and resumes after', () => {
+    useStore.getState().apply(hello([file('src/a.ts'), file('src/b.ts')]));
+    mount();
+    act(() => { host.querySelector('.tree')!.dispatchEvent(new Event('scroll')); });
+    target('src/a.ts');
+    expect(scrollSpy).not.toHaveBeenCalled();
+    act(() => { vi.advanceTimersByTime(6000); });
+    act(() => w().apply({ type: 'agentEvent', event: { ...startEdit('src/b.ts'), tool: { id: 'x2', name: 'Edit', label: 'Edit', paths: ['src/b.ts'] } } }));
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores scroll events caused by its own smooth scroll, but not wheel; scrollend ends the guard', () => {
+    useStore.getState().apply(hello([file('src/a.ts'), file('src/b.ts'), file('src/c.ts')]));
+    mount();
+    const tree = host.querySelector('.tree')!;
+    const next = (path: string, id: string) =>
+      act(() => w().apply({ type: 'agentEvent', event: { ...startEdit(path), tool: { id, name: 'Edit', label: 'Edit', paths: [path] } } }));
+    target('src/a.ts');
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    act(() => { tree.dispatchEvent(new Event('scroll')); }); // our own animation
+    next('src/b.ts', 'x2');
+    expect(scrollSpy).toHaveBeenCalledTimes(2);
+    act(() => { tree.dispatchEvent(new Event('wheel', { bubbles: true })); }); // always the user
+    next('src/c.ts', 'x3');
+    expect(scrollSpy).toHaveBeenCalledTimes(2);
+    act(() => { vi.advanceTimersByTime(6000); });
+    next('src/a.ts', 'x4');
+    expect(scrollSpy).toHaveBeenCalledTimes(3);
+    act(() => { tree.dispatchEvent(new Event('scrollend')); });
+    act(() => { tree.dispatchEvent(new Event('scroll')); }); // after scrollend a scroll is the user's
+    next('src/b.ts', 'x5');
+    expect(scrollSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('uses instant scrolling under reduced motion and smooth otherwise', () => {
+    useStore.getState().apply(hello([file('src/a.ts'), file('src/b.ts')]));
+    mount();
+    target('src/a.ts');
+    expect(scrollSpy.mock.calls[0][0]).toMatchObject({ behavior: 'smooth' });
+    const orig = window.matchMedia;
+    window.matchMedia = ((q: string) => ({ matches: q.includes('reduce'), media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
+    try {
+      act(() => { vi.advanceTimersByTime(1000); });
+      act(() => w().apply({ type: 'agentEvent', event: { ...startEdit('src/b.ts'), tool: { id: 'x2', name: 'Edit', label: 'Edit', paths: ['src/b.ts'] } } }));
+      expect(scrollSpy.mock.calls[1][0]).toMatchObject({ behavior: 'auto' });
+    } finally { window.matchMedia = orig; }
+  });
+
+  it('does not re-render the tree for agent events that leave the target unchanged', () => {
+    useStore.getState().apply(hello([file('src/a.ts'), file('src/b.ts')]));
+    mount();
+    target('src/a.ts');
+    renders.length = 0;
+    act(() => w().apply({ type: 'agentEvent', event: event({ sessionId: 's1', type: 'message', text: 'thinking out loud' }) }));
+    expect(renders).toEqual([]);
   });
 });
