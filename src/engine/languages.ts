@@ -47,14 +47,24 @@ const SECRET_NAMES = new Set(['.env', '.envrc', '.npmrc', '.netrc', '.pypirc']);
 const DATA_EXT = /\.(json|ya?ml|toml|txt)$/;
 /** Ends in an example/sample/template segment (`.env.example`, `.env-sample`, `x.env.template.json`). */
 const endsAsExample = (s: string): boolean => /(^|[._-])(example|sample|template)$/.test(s.replace(DATA_EXT, ''));
-/** JS/TS source that merely has `.env` in its name (`config.env.ts`, `vite.env.d.ts`). */
-const JS_CODE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
+/**
+ * Source code that merely has `.env` in its name (`config.env.ts`, `settings.env.py`): code in any
+ * language LiveMap parses. It is shown like any other source file (LiveMap serves `settings.py`
+ * whatever it holds); env files in data formats (`.env.json`, `.env.sh`) are not code.
+ */
+function isCode(name: string): boolean {
+  const ext = name.slice(name.lastIndexOf('.') + 1);
+  if (!name.includes('.') || !Object.hasOwn(EXT, ext)) return false;
+  const lang = EXT[ext];
+  return lang in GRAMMAR || lang === 'vue' || lang === 'svelte';
+}
 
 /**
  * Secret files: `.env`, `.env.*`, `.envrc(.*)`, `*.env`, `*.env.*` and credential rc files
  * (`.npmrc`, `.netrc`, `.pypirc`, and their `.bak`-style copies). Examples are not secret when
  * the example marker is the last segment (`.env.example`, `.env.example.json`) or the stem's last
- * dot-segment with nothing but a data extension after `.env` (`example.env`, `app.template.env.json`). `*.env.*` JS/TS source (`config.env.ts`) and
+ * dot-segment with nothing but a data extension after `.env` (`example.env`,
+ * `app.template.env.json`). `*.env.*` source code (`config.env.ts`, `settings.env.py`) and
  * `.env.d.ts` declarations are not secret; a `.env.*` JS file (`.env.local.js`) is.
  */
 export function isSecretEnvPath(path: string): boolean {
@@ -68,7 +78,7 @@ export function isSecretEnvPath(path: string): boolean {
   const [, stem, suffix] = m;
   // `example.env` / `example.env.json` are examples; `example.env.local` is a real override.
   if (/(^|\.)(example|sample|template)$/.test(stem) && (suffix === undefined || DATA_EXT.test(`.${suffix}`))) return false;
-  return suffix === undefined || (!endsAsExample(suffix) && !JS_CODE.test(`.${suffix}`));
+  return suffix === undefined || (!endsAsExample(suffix) && !isCode(`.${suffix}`));
 }
 
 export function isBinaryPath(path: string): boolean {
