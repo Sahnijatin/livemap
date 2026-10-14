@@ -78,6 +78,8 @@ export class Watcher extends EventEmitter {
     this.stopped = true;
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();
+    this.gitignores.clear(); // their debounced job was just cancelled
+    this.deferSince = null;
     const fsw = this.fsw;
     this.fsw = null;
     if (fsw) await fsw.close();

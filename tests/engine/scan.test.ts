@@ -81,4 +81,17 @@ describe('ProjectModel.scan', () => {
     expect(m.get('a.ts')!.imports.local).toEqual(['lib/x.ts']);
     expect(hooks.reads.get('tsconfig.json')).toBe(1);
   });
+
+  it('a reload in a truncated project stops reading once the file limit is reached', async () => {
+    for (let i = 0; i < 40; i++) put(`more/f${i}.ts`, `export const f${i} = ${i};\n`);
+    put('aa/gen.ts', 'export const g = 1;\n');
+    const m = new ProjectModel(root, { limit: 5 });
+    await m.scan();
+    expect(m.truncated).toBe(true);
+    put('.gitignore', 'aa/\n');
+    hooks.reads.clear();
+    await m.reloadIgnores(['.gitignore']);
+    const reads = [...hooks.reads.values()].reduce((a, b) => a + b, 0);
+    expect(reads).toBeLessThanOrEqual(5);
+  });
 });

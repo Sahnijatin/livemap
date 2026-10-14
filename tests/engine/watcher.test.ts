@@ -334,4 +334,17 @@ describe('Watcher', () => {
     put('data/sub/x.ts', 'export const x = 3;\nexport function more() {}\n');
     await waitFor(() => changes.some(c => c.change.path === 'data/sub/x.ts' && c.change.kind === 'modified'), 4000);
   });
+
+  it('stop() drops pending .gitignore paths, so a restart does not reload them', async () => {
+    put('a/.gitignore', 'x/\n'); put('b/.gitignore', 'x/\n');
+    const w = await startWatcher();
+    put('a/.gitignore', 'y/\n');
+    await sleep(60); // seen, still debouncing
+    await w.stop();
+    await w.start();
+    const reload = vi.spyOn(model, 'reloadIgnores');
+    put('b/.gitignore', 'y/\n');
+    await waitFor(() => reload.mock.calls.length >= 1, 4000);
+    expect(reload.mock.calls[0][0]).toEqual(['b/.gitignore']);
+  });
 });

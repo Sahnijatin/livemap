@@ -211,7 +211,8 @@ export class ProjectModel {
       const touched = this.relink([]);
       const byPath = new Map<string, FileModel>();
       for (const rel of included) byPath.set(rel, this.files.get(rel)!);
-      for (const f of touched) if (!unreached.includes(f.path)) byPath.set(f.path, f);
+      const isUnreached = new Set(unreached);
+      for (const f of touched) if (!isUnreached.has(f.path)) byPath.set(f.path, f);
       const created: UpdateResult[] = unreached.map(rel => ({
         path: rel, kind: 'created', before: null, after: this.files.get(rel) ?? null, beforeText: null, afterText: this.texts.get(rel) ?? null, touched: [],
       }));
