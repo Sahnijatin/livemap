@@ -31,6 +31,15 @@ function remember(t: string): void {
   }
 }
 
+function forget(): void {
+  token = null;
+  try {
+    window.sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // Storage blocked: nothing was stored.
+  }
+}
+
 /** Reads `?t=` once and removes it from the address bar (R11); falls back to this tab's stored key. */
 export function takeToken(): string | null {
   const url = new URL(window.location.href);
@@ -92,6 +101,7 @@ export function connect(): void {
     };
     ws.onclose = ev => {
       if (ev.code === WS_UNAUTHORIZED) {
+        forget(); // e.g. LiveMap restarted with a new key; a reload should not retry this one
         useStore.getState().setConnection('unauthorized');
         return; // a bad key never gets better by retrying
       }

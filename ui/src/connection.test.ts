@@ -84,6 +84,16 @@ describe('connect', () => {
     expect(FakeWebSocket.instances.length).toBe(before + 1);
   });
 
+  it('forgets a stored key the server rejects, so a reload shows the gate instead of retrying it', async () => {
+    await start('?t=stale');
+    last().onclose!({ code: 4401 });
+    expect(window.sessionStorage.getItem('livemap.token')).toBeNull();
+    const before = FakeWebSocket.instances.length;
+    const { useStore } = await start('');
+    expect(FakeWebSocket.instances.length).toBe(before);
+    expect(useStore.getState().connection).toBe('unauthorized');
+  });
+
   it('never retries after close code 4401 and reports unauthorized', async () => {
     const { useStore } = await start('?t=bad');
     last().onclose!({ code: 4401 });
