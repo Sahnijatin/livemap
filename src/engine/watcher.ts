@@ -39,6 +39,10 @@ export class Watcher extends EventEmitter {
   private waiting = 0;
   private nextId = 1;
   private stopped = false;
+  /** Paths released by unwatchIgnored (see watchIncluded). */
+  private unwatched = new Set<string>();
+  /** chokidar finished its initial crawl. */
+  private ready = false;
 
   constructor(model: ProjectModel, opts: WatcherOptions = {}) {
     super();
@@ -49,8 +53,12 @@ export class Watcher extends EventEmitter {
 
   start(): Promise<void> {
     this.stopped = false;
+    this.ready = false;
     const fsw = watch(this.model.root, {
-      ignoreInitial: true,
+      // Initial adds are dropped in onFile until 'ready' (the scan covers them). Leaving chokidar's
+      // own ignoreInitial off means a later fsw.add() (a directory a .gitignore edit un-ignored)
+      // reports the files its crawl finds, so none created during that crawl are missed.
+      ignoreInitial: false,
       awaitWriteFinish: false,
       ignored: (p: string, stats?: { isDirectory(): boolean }) => {
         const rel = this.rel(p);
@@ -65,7 +73,7 @@ export class Watcher extends EventEmitter {
     for (const ev of ['add', 'change', 'unlink'] as const) fsw.on(ev, (p: string) => this.onFile(p, ev));
     fsw.on('unlinkDir', (p: string) => this.onDir(p));
     fsw.on('error', (e: unknown) => this.fail(e));
-    return new Promise(resolve => fsw.once('ready', () => resolve()));
+    return new Promise(resolve => fsw.once('ready', () => { this.ready = true; resolve(); }));
   }
 
   async stop(): Promise<void> {
@@ -95,6 +103,7 @@ export class Watcher extends EventEmitter {
   }
 
   private onFile(p: string, ev: FileEvent): void {
+    if (!this.ready && ev === 'add') return; // chokidar's initial crawl
     const rel = this.rel(p);
     if (!rel || isTempName(rel)) return;
     if (isGitignore(rel)) {
@@ -108,8 +117,9 @@ export class Watcher extends EventEmitter {
         const { files, removed, created } = await this.model.reloadIgnores(paths, {
           // Directories that were ignored when chokidar crawled were never watched; watch them
           // before the reload reads them (files appearing meanwhile come back in `created`).
-          onIncluded: dirs => this.fsw?.add(dirs.map(d => path.join(this.model.root, ...d.split('/')))),
+          onIncluded: dirs => this.watchIncluded(dirs),
         });
+        this.unwatchIgnored();
         if (!this.stopped && (files.length || removed.length)) this.emit('touched', files, removed);
         const own: UpdateResult[] = [...created];
         for (const p of paths) {
@@ -129,6 +139,40 @@ export class Watcher extends EventEmitter {
     const rel = this.rel(p);
     if (!rel || this.model.ignored(rel, true)) return;
     this.schedule(`d:${rel}`, deferRelink => this.model.removeDir(rel, { deferRelink }));
+  }
+
+  /**
+   * Releases chokidar's watches on directories the current rules ignore. unwatch() closes only the
+   * named path's own watcher (directories and files each have one), so every watched directory in
+   * an ignored subtree, and every entry in it, is passed.
+   */
+  private unwatchIgnored(): void {
+    const fsw = this.fsw;
+    if (!fsw) return;
+    const drop: string[] = [];
+    for (const [abs, entries] of Object.entries(fsw.getWatched())) {
+      const rel = this.rel(abs);
+      if (!rel || !this.model.ignored(rel, true)) continue;
+      drop.push(abs, ...entries.map(e => path.join(abs, e)));
+    }
+    if (!drop.length) return;
+    for (const abs of drop) this.unwatched.add(abs);
+    fsw.unwatch(drop);
+  }
+
+  /**
+   * Watches directories a reload newly includes. unwatch() also put each path it released on
+   * chokidar's own ignore list, which add() clears only for the paths it is given, so those are
+   * re-added too.
+   */
+  private watchIncluded(dirs: string[]): void {
+    const fsw = this.fsw;
+    if (!fsw || dirs.length === 0) return;
+    const add = new Set(dirs.map(d => path.join(this.model.root, ...d.split('/'))));
+    for (const abs of this.unwatched) {
+      if ([...add].some(d => abs === d || abs.startsWith(d + path.sep))) { add.add(abs); this.unwatched.delete(abs); }
+    }
+    fsw.add([...add]);
   }
 
   private schedule(key: string, job: (deferRelink: boolean) => Promise<UpdateResult[]>): void {

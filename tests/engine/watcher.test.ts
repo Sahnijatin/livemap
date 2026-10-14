@@ -322,4 +322,24 @@ describe('Watcher', () => {
     await sleep(50);
     expect(flush).not.toHaveBeenCalled();
   });
+
+  it('stops watching a directory a .gitignore edit now ignores, and can watch it again', async () => {
+    put('data/sub/x.ts', 'export const x = 1;\n');
+    const w = await startWatcher();
+    put('.gitignore', 'data/\n');
+    await waitFor(() => model.get('data/sub/x.ts') === undefined);
+    await sleep(200);
+    const seen: string[] = [];
+    const onFile = (w as unknown as { onFile: (p: string, ev: string) => void }).onFile.bind(w);
+    vi.spyOn(w as unknown as { onFile: (p: string, ev: string) => void }, 'onFile').mockImplementation((p, ev) => { seen.push(p); onFile(p, ev); });
+    put('data/sub/x.ts', 'export const x = 2;\n');
+    put('data/y.ts', 'export const y = 1;\n');
+    await sleep(400);
+    expect(seen.filter(p => p.includes(`${path.sep}data${path.sep}`)), JSON.stringify(seen)).toEqual([]);
+    put('.gitignore', '# nothing\n');
+    await waitFor(() => model.get('data/sub/x.ts') !== undefined && model.get('data/y.ts') !== undefined);
+    await sleep(300);
+    put('data/sub/x.ts', 'export const x = 3;\nexport function more() {}\n');
+    await waitFor(() => changes.some(c => c.change.path === 'data/sub/x.ts' && c.change.kind === 'modified'), 4000);
+  });
 });
