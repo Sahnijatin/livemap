@@ -15,5 +15,5 @@ export default defineConfig({
     target: 'es2020',
     chunkSizeWarningLimit: 1200,
   },
-  test: { include: ['src/**/*.test.{ts,tsx}'], environment: 'node' },
+  test: { include: ['src/**/*.test.{ts,tsx}'], environment: 'node', setupFiles: ['src/test-setup.ts'] },
 });
