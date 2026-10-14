@@ -27,6 +27,10 @@ const CONSTRAINT_START = new RegExp('^(?:constraint\\s|like\\s|primary\\s+key\\b
   + `|unique\\b\\s*(?:\\(|(?:key|index)\\b|${IDENT}\\s*\\()`
   + `|(?:key|index|fulltext|spatial)\\b(?:\\s+(?:key|index)\\b)?\\s*(?:\\(|[A-Za-z_][\\w$]*\\s+\\(|(?:"[^"\\n]*"|\`[^\`\\n]*\`|\\[[^\\]\\n]*\\])\\s*\\())`, 'i');
 const ADD = /^add\s+(?:column\s+)?(?:if\s+not\s+exists\s+)?/i;
+/** `DROP [COLUMN] [IF EXISTS] name`; without COLUMN, constraint/index/key forms are not columns. */
+const DROP = new RegExp(`^drop\\s+(?:column\\s+(?:if\\s+exists\\s+)?|(?:if\\s+exists\\s+)?(?!(?:constraint|index|key|primary|foreign|unique|check|partition|default)\\b))(${IDENT})`, 'i');
+/** `RENAME [COLUMN] a TO b`; `RENAME TO t` renames the table and is not a column. */
+const RENAME = new RegExp(`^rename\\s+(?:column\\s+)?(?!to\\b)(${IDENT})\\s+to\\s+(${IDENT})`, 'i');
 /** Words that start a column constraint rather than a type, for typeless (SQLite) columns. */
 const NOT_TYPES = new Set(['PRIMARY', 'NOT', 'NULL', 'REFERENCES', 'UNIQUE', 'DEFAULT', 'CHECK', 'CONSTRAINT', 'GENERATED', 'COLLATE']);
 
@@ -66,6 +70,23 @@ class Columns {
     const { type, line: _line, ...flags } = f;
     Object.assign(old, flags);
     if (!old.type) old.type = type;
+  }
+  /** Removes the column; false when there is none of that name. */
+  remove(name: string): boolean {
+    const f = this.byName.get(name);
+    if (!f) return false;
+    this.list.splice(this.list.indexOf(f), 1);
+    this.byName.delete(name);
+    return true;
+  }
+  /** Renames the column in place; false when there is none of that name. */
+  rename(from: string, to: string): boolean {
+    const f = this.byName.get(from);
+    if (!f) return false;
+    this.byName.delete(from);
+    f.name = to;
+    this.byName.set(to, f);
+    return true;
   }
 }
 
@@ -192,17 +213,26 @@ function parseSql(sql: string, line: Line, rel: string, out: Entity[], tables: M
     if (semi < from) { semi = scan.indexOf(';', from); if (semi === -1) semi = scan.length; }
     const end = Math.min(semi, k + 1 < events.length ? events[k + 1].index : scan.length);
     const table = bare(m[1]);
-    const added = new Columns();
+    // The ALTER's actions in order: columns added (constraints fold into the added set), dropped, renamed.
+    type Op = { add: Columns } | { drop: string } | { rename: [string, string] };
+    const ops: Op[] = [];
     for (const r of topLevelParts(scan, pairs, from, end)) {
       const p = part(scan, r);
       const add = ADD.exec(p.text);
-      if (!add) continue;
-      const rest = p.text.slice(add[0].length);
-      if (CONSTRAINT_START.test(rest)) { constraint(rest, added, line(p.at), true); continue; }
-      const f = column(rest, line(p.at));
-      if (f) added.upsert(f);
+      if (add) {
+        const added = new Columns();
+        const rest = p.text.slice(add[0].length);
+        if (CONSTRAINT_START.test(rest)) constraint(rest, added, line(p.at), true);
+        else { const f = column(rest, line(p.at)); if (f) added.upsert(f); }
+        if (added.list.length) ops.push({ add: added });
+        continue;
+      }
+      const drop = DROP.exec(p.text);
+      if (drop) { ops.push({ drop: unquote(drop[1]) }); continue; }
+      const ren = RENAME.exec(p.text);
+      if (ren) ops.push({ rename: [unquote(ren[1]), unquote(ren[2])] });
     }
-    if (!added.list.length) continue;
+    if (!ops.length) continue;
     const key = table.toLowerCase();
     let target = tables.get(key);
     if (!target) {
@@ -211,7 +241,13 @@ function parseSql(sql: string, line: Line, rel: string, out: Entity[], tables: M
       out.push(target.entity);
       tables.set(key, target);
     }
-    for (const f of added.list) target.cols.upsert(f);
+    const t = target;
+    for (const op of ops) {
+      if ('add' in op) { for (const f of op.add.list) t.cols.upsert(f); continue; }
+      // Columns this file knows change here; on a fragment, the rest is recorded for the merge.
+      if ('drop' in op) { if (!t.cols.remove(op.drop) && t.entity.partial) (t.entity.dropped ??= []).push(op.drop); continue; }
+      if (!t.cols.rename(...op.rename) && t.entity.partial) (t.entity.renamed ??= []).push(op.rename);
+    }
   }
 }
 

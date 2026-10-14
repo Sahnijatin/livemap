@@ -357,3 +357,34 @@ describe('review fixes: Flask url_prefix and JS Expo screens', () => {
   });
 });
 
+describe('review fixes: SQL migrations that drop and rename columns', () => {
+  const sql = (path: string, fields: string[], extra: Partial<Entity> = {}): FileModel =>
+    fm(path, { lang: 'sql', entities: [{ name: 'orders', table: 'orders', orm: 'sql', file: path, line: 1, fields: fields.map(n => ({ name: n, type: 'TEXT' })), ...extra }] });
+
+  it('applies later migrations in path order', () => {
+    const idx = buildDomainIndex([
+      sql('db/003_cleanup.sql', [], { partial: true, dropped: ['legacy_code'], renamed: [['name', 'title']] }),
+      sql('db/001_create.sql', ['id', 'legacy_code', 'name']),
+      sql('db/002_status.sql', ['status'], { partial: true }),
+    ], noText);
+    expect(idx.tables[0].fields.map(f => f.name)).toEqual(['id', 'title', 'status']);
+  });
+
+  it('a column dropped and added again comes back', () => {
+    const idx = buildDomainIndex([
+      sql('db/001.sql', ['id', 'note']),
+      sql('db/002.sql', [], { partial: true, dropped: ['note'] }),
+      sql('db/003.sql', ['note'], { partial: true }),
+    ], noText);
+    expect(idx.tables[0].fields.map(f => f.name)).toEqual(['id', 'note']);
+  });
+
+  it('never drops or renames a field an ORM model declares', () => {
+    const idx = buildDomainIndex([
+      fm('prisma/schema.prisma', { lang: 'prisma', entities: [{ name: 'Order', table: 'orders', orm: 'prisma', file: 'prisma/schema.prisma', line: 1, fields: [{ name: 'id', type: 'Int' }, { name: 'name', type: 'String' }] }] }),
+      sql('db/002.sql', [], { partial: true, dropped: ['name'], renamed: [['id', 'key']] }),
+    ], noText);
+    expect(idx.tables[0].fields.map(f => f.name)).toEqual(['id', 'name']);
+  });
+});
+

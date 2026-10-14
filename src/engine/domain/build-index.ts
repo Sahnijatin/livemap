@@ -127,9 +127,14 @@ function buildTables(files: FileModel[]): Table[] {
       if (!e.partial && !modelTable.has(e.name)) modelTable.set(e.name, e.table);
     }
   }
-  // Head first: an ORM entity over SQL migrations (whatever the path order), then other full entities, then fragments.
-  const rank = (e: Entity): number => (e.partial ? 2 : e.orm === 'sql' ? 1 : 0);
-  for (const g of groups.values()) g.sort((a, b) => rank(a.e) - rank(b.e));
+  // ORM models first (they describe the current table), then SQL in migration order: by path (numbered and
+  // timestamped migration names sort in order), then line. The head is the first full entity in that order.
+  const isOrm = (e: Entity): boolean => e.orm !== 'sql';
+  for (const g of groups.values()) {
+    g.sort((a, b) => Number(isOrm(b.e)) - Number(isOrm(a.e)) || cmp(a.file, b.file) || a.e.line - b.e.line);
+    const head = g.findIndex(x => !x.e.partial);
+    if (head > 0) g.unshift(...g.splice(head, 1));
+  }
   // A relation target is reported as the merged table's own `table`; a model name (Room `User::class`, Drizzle
   // `usersTable`) maps through its table; the raw name only when neither matches.
   const keyTable = new Map([...groups].map(([k, g]) => [k, g[0].e.table]));
@@ -140,18 +145,32 @@ function buildTables(files: FileModel[]): Table[] {
   const tables: Table[] = [];
   for (const g of groups.values()) {
     const head = g[0].e;
-    const fields: Table['fields'] = [];
-    const seen = new Set<string>();
-    const relations: Table['relations'] = [];
+    // Fields by lowercased name, in order; `orm` marks fields an ORM model declares (migrations never remove those).
+    const byName = new Map<string, { field: Table['fields'][number]; orm: boolean }>();
     for (const { e, file } of g) {
       for (const fd of e.fields) {
         const k = fd.name.toLowerCase();
-        if (seen.has(k)) continue;
-        seen.add(k);
-        fields.push({ ...fd, file });
-        if (fd.fk) relations.push({ field: fd.name, to: canonical(fd.fk.table), many: false, via: 'fk' });
-        if (fd.relation) relations.push({ field: fd.name, to: canonical(modelTable.get(fd.relation.model) ?? fd.relation.model), many: fd.relation.many, via: 'relation' });
+        if (!byName.has(k)) byName.set(k, { field: { ...fd, file }, orm: isOrm(e) });
       }
+      for (const d of e.dropped ?? []) {
+        const k = d.toLowerCase();
+        if (byName.get(k)?.orm === false) byName.delete(k);
+      }
+      for (const [from, to] of e.renamed ?? []) {
+        const k = from.toLowerCase();
+        const hit = byName.get(k);
+        if (!hit || hit.orm || byName.has(to.toLowerCase())) continue;
+        // Re-insert under the new name at the same position.
+        const entries = [...byName].map(([key, v]) => (key === k ? [to.toLowerCase(), { ...v, field: { ...v.field, name: to } }] as const : [key, v] as const));
+        byName.clear();
+        for (const [key, v] of entries) byName.set(key, v);
+      }
+    }
+    const fields: Table['fields'] = [...byName.values()].map(v => v.field);
+    const relations: Table['relations'] = [];
+    for (const fd of fields) {
+      if (fd.fk) relations.push({ field: fd.name, to: canonical(fd.fk.table), many: false, via: 'fk' });
+      if (fd.relation) relations.push({ field: fd.name, to: canonical(modelTable.get(fd.relation.model) ?? fd.relation.model), many: fd.relation.many, via: 'relation' });
     }
     const sources = g.map(({ e, file }) => ({ file, line: e.line })).sort((a, b) => cmp(a.file, b.file) || a.line - b.line);
     tables.push({ name: head.name, table: head.table, orm: head.orm, sources, fields, relations });

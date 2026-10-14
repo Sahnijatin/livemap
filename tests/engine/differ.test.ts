@@ -124,6 +124,13 @@ describe('buildChange', () => {
     expect(JSON.stringify(c)).not.toContain('=1');
   });
 
+  it('a new migration that drops and renames columns reports them on its change card', () => {
+    const base: FileModel = { path: 'db/003.sql', lang: 'sql', size: 0, lines: 0, symbols: [], imports: { local: [], external: [] }, routes: [], entities: [], env: [], flags: {} };
+    const frag = { name: 'orders', table: 'orders', orm: 'sql', file: 'db/003.sql', line: 1, fields: [], partial: true as const, dropped: ['legacy_code'], renamed: [['name', 'title']] as [string, string][] };
+    const c = buildChange({ path: 'db/003.sql', kind: 'created', before: null, after: { ...base, entities: [frag] }, beforeText: null, afterText: '', touched: [] }, 1);
+    expect(c.entities.changed).toEqual([{ name: 'orders', addedFields: ['title'], removedFields: ['legacy_code', 'name'], changedFields: [] }]);
+  });
+
   it('a field that only moved to another line is not changed', () => {
     const base: FileModel = { path: 's.prisma', lang: 'prisma', size: 0, lines: 0, symbols: [], imports: { local: [], external: [] }, routes: [], entities: [], env: [], flags: {} };
     const ent = (offset: number) => ({ name: 'User', table: 'users', orm: 'prisma', file: 's.prisma', line: 1, fields: [{ name: 'id', type: 'Int', line: 2 + offset }, { name: 'email', type: 'String', line: 3 + offset }] });

@@ -109,3 +109,30 @@ describe('schema-sql analyzer', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+describe('schema-sql: DROP and RENAME COLUMN', () => {
+  const fields = (e: { fields: { name: string }[] }) => e.fields.map(f => f.name);
+
+  it('applies them to a table created earlier in the same file', () => {
+    const [t] = run('db/schema.sql', `CREATE TABLE orders (id INT PRIMARY KEY, legacy_code TEXT, name TEXT, total INT);
+ALTER TABLE orders DROP COLUMN legacy_code;
+ALTER TABLE orders RENAME COLUMN name TO title;
+ALTER TABLE orders DROP COLUMN IF EXISTS total CASCADE, ADD COLUMN status TEXT;`);
+    expect(fields(t)).toEqual(['id', 'title', 'status']);
+  });
+
+  it('records them on an ALTER-only migration for the merge', () => {
+    const [t] = run('db/migrations/003_cleanup.sql', 'ALTER TABLE orders DROP COLUMN legacy_code, RENAME COLUMN name TO title;\nALTER TABLE orders DROP legacy2;');
+    expect(t).toMatchObject({ table: 'orders', partial: true, fields: [], dropped: ['legacy_code', 'legacy2'], renamed: [['name', 'title']] });
+  });
+
+  it('does not treat other DROP and RENAME forms as columns', () => {
+    const out = run('db/m.sql', `ALTER TABLE orders DROP CONSTRAINT fk_user;
+ALTER TABLE orders DROP INDEX idx_a;
+ALTER TABLE orders DROP PRIMARY KEY;
+ALTER TABLE orders DROP FOREIGN KEY fk_x;
+ALTER TABLE orders RENAME TO purchases;`);
+    expect(out).toEqual([]);
+  });
+});
+
