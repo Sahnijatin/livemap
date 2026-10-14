@@ -173,7 +173,7 @@ export class ProjectModel {
   reloadIgnores(
     changed: string[] = [],
     opts: { onIncluded?: (dirs: string[]) => void } = {},
-  ): Promise<{ files: FileModel[]; removed: string[]; dirs: string[]; created: UpdateResult[] }> {
+  ): Promise<{ files: FileModel[]; removed: string[]; created: UpdateResult[] }> {
     return this.serial(async () => {
       const old = this.isIgnored;
       const changedDirs = changed.map(parentDir);
@@ -209,7 +209,7 @@ export class ProjectModel {
       });
       if (whole) this.truncated = walked.truncated || full;
       else if (full) this.truncated = true;
-      if (!removed.length && !included.length && !unreached.length) return { files: [], removed, dirs, created: [] };
+      if (!removed.length && !included.length && !unreached.length) return { files: [], removed, created: [] };
       const touched = this.relink([]);
       const byPath = new Map<string, FileModel>();
       for (const rel of included) byPath.set(rel, this.files.get(rel)!);
@@ -218,7 +218,7 @@ export class ProjectModel {
       const created: UpdateResult[] = unreached.map(rel => ({
         path: rel, kind: 'created', before: null, after: this.files.get(rel) ?? null, beforeText: null, afterText: this.texts.get(rel) ?? null, touched: [],
       }));
-      return { files: [...byPath.values()].sort((x, y) => cmp(x.path, y.path)), removed, dirs, created };
+      return { files: [...byPath.values()].sort((x, y) => cmp(x.path, y.path)), removed, created };
     });
   }
 

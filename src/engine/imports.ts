@@ -163,7 +163,7 @@ function longestFirst(aliases: ImportCtx['aliases']): ImportCtx['aliases'] {
 }
 
 function jsImports(path: string, src: string, ctx: ImportCtx, local: Set<string>, external: Set<string>): void {
-  const dir = posix.dirname(path) === '.' ? '' : posix.dirname(path);
+  const dir = parentDir(path);
   for (const spec of jsSpecs(path, src, ctx.specCache)) {
     if (spec.startsWith('./') || spec.startsWith('../') || spec === '.' || spec === '..') {
       const r = resolveJsPath(join(dir, spec), ctx);
@@ -202,7 +202,7 @@ function pyModule(base: string, ctx: ImportCtx): string | null {
 }
 
 function pythonImports(path: string, src: string, ctx: ImportCtx, local: Set<string>, external: Set<string>): void {
-  const dir = posix.dirname(path) === '.' ? '' : posix.dirname(path);
+  const dir = parentDir(path);
   const roots = ['', 'src'];
   const add = (mod: string, names: string[], rel: number): boolean => {
     const bases = rel > 0
@@ -255,7 +255,7 @@ function goImports(path: string, src: string, ctx: ImportCtx, local: Set<string>
 }
 
 function rustImports(path: string, src: string, ctx: ImportCtx, local: Set<string>, external: Set<string>): void {
-  const dir = posix.dirname(path) === '.' ? '' : posix.dirname(path);
+  const dir = parentDir(path);
   const stem = posix.basename(path, '.rs');
   const modDir = ['lib', 'main', 'mod'].includes(stem) ? dir : join(dir, stem);
   const tryMod = (base: string, name: string): string | null => {
@@ -280,7 +280,7 @@ function rustImports(path: string, src: string, ctx: ImportCtx, local: Set<strin
     let base: string, rest: string[];
     if (first === 'crate') { base = crateRoot; rest = head.slice(1); }
     else if (first === 'self') { base = modDir; rest = head.slice(1); }
-    else if (first === 'super') { base = posix.dirname(modDir) === '.' ? '' : posix.dirname(modDir); rest = head.slice(1); }
+    else if (first === 'super') { base = parentDir(modDir); rest = head.slice(1); }
     else if (tryMod(modDir, first)) { base = modDir; rest = head; }
     else { external.add(first); continue; }
     const attempt = (segments: string[]): void => {
@@ -324,7 +324,7 @@ function jvmImports(src: string, ctx: ImportCtx, ext: string, local: Set<string>
 }
 
 function rubyImports(path: string, src: string, ctx: ImportCtx, local: Set<string>, external: Set<string>): void {
-  const dir = posix.dirname(path) === '.' ? '' : posix.dirname(path);
+  const dir = parentDir(path);
   const withExt = (p: string) => (p.endsWith('.rb') ? p : p + '.rb');
   for (const m of src.matchAll(/^[ \t]*require_relative[ \t(]+['"]([^'"\n]+)['"]/gm)) {
     const p = join(dir, withExt(m[1]));
@@ -337,7 +337,7 @@ function rubyImports(path: string, src: string, ctx: ImportCtx, local: Set<strin
 }
 
 function cImports(path: string, src: string, ctx: ImportCtx, local: Set<string>, external: Set<string>): void {
-  const dir = posix.dirname(path) === '.' ? '' : posix.dirname(path);
+  const dir = parentDir(path);
   for (const m of src.matchAll(/^[ \t]*#[ \t]*include[ \t]*(?:"([^"\n]+)"|<([^>\n]+)>)/gm)) {
     if (m[1]) {
       const hit = [join(dir, m[1]), join('', m[1]), join('include', m[1]), join('src', m[1])].find(p => !p.startsWith('..') && ctx.has(p));

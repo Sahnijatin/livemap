@@ -294,7 +294,7 @@ describe('ProjectModel fix round 1', () => {
     expect(m.get('secrets.json')).toBeUndefined();
     expect(m.content('secrets.json')).toBeNull();
     expect(m.get('gen/out.ts')!.imports.local).toEqual(['src/b.ts']);
-    expect(await m.reloadIgnores(['.gitignore'])).toEqual({ files: [], removed: [], dirs: [], created: [] });
+    expect(await m.reloadIgnores(['.gitignore'])).toEqual({ files: [], removed: [], created: [] });
   });
 
   it('reloadIgnores reads nested .gitignore files created after their directory was seen', async () => {
@@ -403,8 +403,9 @@ describe('ProjectModel fix round 1', () => {
     fs.mkdirSync(path.join(root, 'logs/empty'), { recursive: true });
     const m = await scanned();
     put('.gitignore', '# nothing\n');
-    const r = await m.reloadIgnores(['.gitignore']);
-    expect(r.dirs).toEqual(['gen', 'logs']);
+    let dirs: string[] = [];
+    await m.reloadIgnores(['.gitignore'], { onIncluded: d => { dirs = d; } });
+    expect(dirs).toEqual(['gen', 'logs']);
   });
 
   it('a directory un-ignored by a reload uses its current .gitignore, not rules cached while it was ignored', async () => {
