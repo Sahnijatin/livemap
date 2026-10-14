@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -7,7 +7,7 @@ import path from 'node:path';
 import WebSocket from 'ws';
 import { ProjectModel } from '../../src/engine/project.js';
 import { Watcher } from '../../src/engine/watcher.js';
-import { startServer, safeSend, DEFAULT_PORT, MAX_BUFFERED_BYTES } from '../../src/server/server.js';
+import { startServer, safeSend, DEFAULT_PORT, MAX_BUFFERED_BYTES, LAUNCH_TTL_MS } from '../../src/server/server.js';
 import type { ServerMessage } from '../../src/shared/protocol.js';
 
 type Started = Awaited<ReturnType<typeof startServer>>;
@@ -159,6 +159,37 @@ describe('startServer: HTTP auth', () => {
     expect(api.status).toBe(401);
     expect(api.headers['content-type']).toMatch(/application\/json/);
     expect(JSON.parse(api.body)).toEqual({ error: 'unauthorized' });
+  });
+
+  it('a launch URL carries a one-time code, not the token, and redirects once to the token URL', async () => {
+    const s = await boot();
+    const launch = s.launchUrl();
+    expect(launch).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${s.port}/\\?launch=[0-9a-f]{32}$`));
+    expect(launch).not.toContain(s.token);
+    const q = launch.slice(launch.indexOf('/?'));
+    const first = await get(s.port, q);
+    expect(first.status).toBe(302);
+    expect(first.headers.location).toBe(`/?t=${s.token}`);
+    expect(first.headers['cache-control']).toBe('no-store');
+    expect(first.headers['set-cookie']).toBeUndefined();
+    // Spent: a second use (someone who read it from a process list) gets the plain shell.
+    const again = await get(s.port, q);
+    expect(again.status).toBe(200);
+    expect(again.body).not.toContain(s.token);
+    expect((await get(s.port, '/?launch=00000000000000000000000000000000')).status).toBe(200);
+    expect(s.launchUrl()).not.toBe(launch);
+  });
+
+  it('a launch code expires unused', async () => {
+    const s = await boot();
+    const q = s.launchUrl().replace(/^http:\/\/[^/]+/, '');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + LAUNCH_TTL_MS + 1);
+      expect((await get(s.port, q)).status).toBe(200);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('accepts the x-livemap-token header', async () => {

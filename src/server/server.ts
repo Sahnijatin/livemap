@@ -25,6 +25,12 @@ export interface LiveMapServer {
   port: number;
   token: string;
   server: http.Server;
+  /**
+   * A URL for a browser opener: a single-use code (expires after LAUNCH_TTL_MS) that redirects to
+   * `url`. Opener and browser arguments are readable by other local users, so the token never
+   * goes there; a code read from them later is already spent.
+   */
+  launchUrl(): string;
   close(): Promise<void>;
   /** Indexing progress; broadcast (throttled) until ready() is called. */
   setIndexing(done: number, total: number): void;
@@ -41,6 +47,8 @@ const MAX_CHANGES = 500;
 const USED_BY_INTERVAL_MS = 1000;
 const INDEXING_INTERVAL_MS = 100;
 const WS_UNAUTHORIZED = 4401;
+/** How long a launch code from launchUrl() stays redeemable. */
+export const LAUNCH_TTL_MS = 2 * 60_000;
 
 const BASE_HEADERS: Record<string, string> = {
   'x-content-type-options': 'nosniff',
@@ -127,6 +135,8 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   let usedByTimer: NodeJS.Timeout | null = null;
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
+  /** One-time launch codes to their expiry time (see launchUrl). */
+  const launches = new Map<string, number>();
 
   /** Byte size of the last hello sent to each client: room it may still be draining. */
   const helloBytes = new WeakMap<WebSocket, number>();
@@ -187,6 +197,17 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     if (isApiPath(url.pathname) && !authenticate(req, url, token)) return json(res, 401, { error: 'unauthorized' });
     if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method not allowed' }, { allow: 'GET, HEAD' });
 
+    const launch = url.pathname === '/' ? url.searchParams.get('launch') : null;
+    if (launch !== null) {
+      const expires = launches.get(launch);
+      launches.delete(launch); // single use, whether or not it is still fresh
+      if (expires !== undefined && Date.now() <= expires) {
+        res.writeHead(302, { ...BASE_HEADERS, location: `/?t=${token}`, 'content-length': '0' });
+        res.end();
+        return;
+      }
+    }
+
     if (url.pathname === '/api/health') return json(res, 200, { ok: true });
     if (url.pathname === '/api/file') {
       const rel = safeRelPath(url.searchParams.get('path'));
@@ -238,6 +259,13 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     port,
     token,
     server,
+    launchUrl(): string {
+      const now = Date.now();
+      for (const [code, expires] of launches) if (expires < now) launches.delete(code);
+      const code = newToken();
+      launches.set(code, now + LAUNCH_TTL_MS);
+      return `http://${HOST}:${port}/?launch=${code}`;
+    },
     setIndexing(done: number, total: number): void {
       indexing = { done, total };
       if (isReady) return;
