@@ -59,7 +59,9 @@ function anchor(p: string, cwd?: string): string {
 
 /** Path relative to root in POSIX form, or null when it lies outside the root. Relative paths resolve against `cwd` when given. */
 function relToRoot(p: string, root: string, cwd?: string): string | null {
-  const path = anchor(p, cwd);
+  const anchored = anchor(p, cwd);
+  // An absolute path may still hold `.` and `..` (`/p/src/../lib/a.ts`); compare it collapsed.
+  const path = isAbs(anchored) ? collapse(anchored) : anchored;
   const r = posix(root).replace(/\/+$/, '');
   if (isAbs(path)) {
     if (path === r || !path.startsWith(r + '/')) return null;

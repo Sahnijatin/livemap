@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { AgentHub } from '../../src/agents/hub.js';
+import { AgentHub, transcriptKey } from '../../src/agents/hub.js';
 import type { ClaudeTailer } from '../../src/agents/claude.js';
 import type { AgentEvent, RawAgentEvent } from '../../src/shared/types.js';
 
@@ -511,3 +511,50 @@ describe('I4: tailer lifetime', () => {
     expect(made[1].started).toBe(1);
   });
 });
+
+describe('review fixes: session status', () => {
+  const ev = (type: RawAgentEvent['type'], at: number, extra: Partial<RawAgentEvent> = {}): RawAgentEvent =>
+    ({ agent: 'claude-code', sessionId: 's', at, type, ...extra } as RawAgentEvent);
+  const hints = { agent: 'claude-code' as const, cwd: ROOT, hooks: true };
+
+  it('a transcript event older than the idle status does not flip a finished session back to working', () => {
+    const h = mk();
+    h.ingestRaw([ev('message', 1000, { text: 'Done.' })], hints);
+    h.ingestRaw([ev('status', 1100, { status: 'idle' } as Partial<RawAgentEvent>)], hints);
+    h.ingestRaw([ev('message', 1000, { text: 'Done.' })], hints); // the tailer catches up late
+    expect(h.sessions()[0].status).toBe('idle');
+    h.ingestRaw([ev('prompt', 2000, { text: 'next' })], hints);
+    expect(h.sessions()[0].status).toBe('working');
+  });
+
+  it('a tool that never reports an end stops counting as running after 10 minutes', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    const h = mk({ idleMs: 60_000 });
+    h.ingestRaw([ev('tool_start', Date.now(), { tool: { id: 't', name: 'Bash', label: '$ x', paths: [] } })], { ...hints, hooks: false });
+    vi.advanceTimersByTime(9 * 60_000);
+    expect(h.sessions()[0].status).toBe('working');
+    vi.advanceTimersByTime(2 * 60_000);
+    expect(h.sessions()[0].status).toBe('idle');
+  });
+});
+
+describe('review fixes: transcript keys', () => {
+  it('a transcript that does not exist yet gets the same key as once it exists, through a symlinked dir', () => {
+    const real = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-tk-')));
+    const link = `${real}-link`;
+    try {
+      fs.mkdirSync(path.join(real, 'projects'));
+      fs.symlinkSync(real, link);
+      const viaLink = path.join(link, 'projects', 's.jsonl');
+      const before = transcriptKey(viaLink);
+      fs.writeFileSync(path.join(real, 'projects', 's.jsonl'), '');
+      expect(transcriptKey(viaLink)).toBe(before);
+      expect(transcriptKey(path.join(real, 'projects', 's.jsonl'))).toBe(before);
+    } finally {
+      fs.rmSync(link, { force: true });
+      fs.rmSync(real, { recursive: true, force: true });
+    }
+  });
+});
+

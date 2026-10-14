@@ -22,6 +22,8 @@ const TAILER_IDLE_MS = 30 * 60_000;
 const MAX_OFFSETS = 1000;
 /** Output of the failed tool_end the hub adds after a tool start it blocked. */
 export const BLOCKED_OUTPUT = 'Blocked by LiveMap';
+/** A started tool with no end and no other session activity for this long no longer keeps the session working. */
+export const STALE_TOOL_MS = 10 * 60_000;
 
 const DISPLAY: Record<AgentKind, string> = { 'claude-code': 'Claude Code', codex: 'Codex', cursor: 'Cursor', git: 'Git', other: 'Agent' };
 
@@ -37,11 +39,20 @@ export interface AgentHubOptions {
 export interface HookOptions { /** False when the hook can no longer receive an answer: nothing is blocked or delivered. */ canBlock?: boolean }
 export interface IngestHints { agent: AgentKind; cwd: string; transcriptPath?: string; hooks: boolean }
 
-interface SessionState { session: AgentSession; titled: boolean; lastMessage?: string; firedLastAt: number; dirty: boolean; open: Set<string> }
+interface SessionState {
+  session: AgentSession; titled: boolean; lastMessage?: string; firedLastAt: number; dirty: boolean; open: Set<string>;
+  /** When the session last went idle (event time): older transcript lines arriving late do not revive it. */
+  idleAt?: number;
+}
 interface StartInfo { name: string; label: string; paths: string[]; secret: boolean }
 
-function realFile(file: string): string {
-  try { return fs.realpathSync(file); } catch { return path.resolve(file); }
+/**
+ * One key per transcript file. A hook may name it before Claude creates it (SessionStart), so a
+ * missing file is keyed by its directory's real path, matching the key once it exists.
+ */
+export function transcriptKey(file: string): string {
+  try { return fs.realpathSync(file); } catch { /* not created yet */ }
+  try { return path.join(fs.realpathSync(path.dirname(file)), path.basename(file)); } catch { return path.resolve(file); }
 }
 
 async function readLastBytes(file: string): Promise<string> {
@@ -196,7 +207,7 @@ export class AgentHub extends EventEmitter {
   }
 
   watchClaudeTranscript(transcript: string): void {
-    const file = realFile(transcript);
+    const file = transcriptKey(transcript);
     if (this.tailers.has(file)) return;
     const startOffset = this.offsets.get(file);
     this.offsets.delete(file);
@@ -335,18 +346,28 @@ export class AgentHub extends EventEmitter {
 
     if (event.type === 'prompt' && event.text) this.setTitle(st, event.text);
     if (event.type === 'message' && event.text) st.lastMessage = event.text;
-    const status = event.type === 'status' && event.status === 'idle' ? 'idle' : 'working';
-    if (status === 'idle') st.open.clear();
+    let status: AgentSession['status'] = event.type === 'status' && event.status === 'idle' ? 'idle' : 'working';
+    if (status === 'idle') {
+      st.open.clear();
+      st.idleAt = event.at;
+    } else if (st.session.status === 'idle' && st.idleAt !== undefined && event.at <= st.idleAt) {
+      status = 'idle'; // a transcript line from the turn that already ended, read after its Stop
+    }
     if (st.session.status !== status) st.dirty = true;
     st.session.status = status;
     this.touch(st, event.at);
     this.fire('event', event);
   }
 
-  /** Marks quiet sessions idle, except while a tool they started is still running. */
+  /**
+   * Marks quiet sessions idle, except while a tool they started is still running, up to
+   * STALE_TOOL_MS: a tool that never reports an end (interrupted, crashed) stops counting then.
+   */
   private sweepIdle(now: number): void {
     for (const st of this.states.values()) {
-      if (st.session.status === 'working' && !st.open.size && now - st.session.lastAt >= this.idleMs) {
+      const quiet = now - st.session.lastAt;
+      if (st.session.status === 'working' && quiet >= this.idleMs && (!st.open.size || quiet >= STALE_TOOL_MS)) {
+        st.open.clear();
         st.session.status = 'idle';
         this.fireSession(st);
       }

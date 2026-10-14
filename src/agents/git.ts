@@ -54,6 +54,7 @@ export class GitWatcher extends EventEmitter {
 
   async start(): Promise<boolean> {
     if (this.pollTimer) return true;
+    this.stopped = false;
     try {
       if ((await this.run(this.root, ['rev-parse', '--is-inside-work-tree'])).trim() !== 'true') return false;
     } catch {
@@ -66,7 +67,7 @@ export class GitWatcher extends EventEmitter {
       return false;
     }
     if (this.pollTimer) return true;
-    this.stopped = false;
+    if (this.stopped) return false; // stop() ran while we were checking the repo
     this.pollTimer = setInterval(() => void this.poll(), this.pollMs);
     this.pollTimer.unref?.();
     if (this.pullSec && this.pullSec > 0) {

@@ -237,3 +237,18 @@ describe('GitWatcher', () => {
     expect(got).toHaveLength(1);
   });
 });
+
+describe('review fixes: start/stop race', () => {
+  it('stop() during start() leaves no timers running', async () => {
+    const d = initRepo();
+    commit(d, 'first');
+    const { w } = watch(d, { pullSec: 5 });
+    const started = w.start();
+    w.stop();
+    await started;
+    const t = w as unknown as { pollTimer?: unknown; pullTimer?: unknown };
+    expect(t.pollTimer).toBeUndefined();
+    expect(t.pullTimer).toBeUndefined();
+  });
+});
+

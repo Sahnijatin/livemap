@@ -103,3 +103,12 @@ describe('M4: relative paths resolve against cwd', () => {
     expect(toolPaths('Edit', { file_path: 'src/a.ts' }, '/p')).toEqual(['src/a.ts']);
   });
 });
+
+describe('review fixes: absolute paths with ..', () => {
+  it('normalizes them before mapping to the root, and rejects ones that leave it', () => {
+    expect(toolPaths('Edit', { file_path: '/p/src/../lib/a.ts' }, '/p')).toEqual(['lib/a.ts']);
+    expect(toolPaths('Edit', { file_path: '/p/../other/x.ts' }, '/p')).toEqual([]);
+    expect(toolPaths('Edit', { file_path: '/p/./src//a.ts' }, '/p')).toEqual(['src/a.ts']);
+  });
+});
+
