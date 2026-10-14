@@ -256,11 +256,16 @@ export class ProjectModel {
     return this.eachAhead(files, rel => (known.has(rel) ? Promise.resolve(known.get(rel)!) : readForModel(this.root, rel)), each);
   }
 
-  /** True when the path no longer exists or is no longer a regular file; transient errors are not gone. */
+  /** True when the path no longer exists or is no longer a regular file inside the root; transient errors are not gone. */
   private async isGone(rel: string): Promise<boolean> {
     try {
-      const st = await fs.lstat(path.join(this.root, ...rel.split('/')));
-      return !st.isFile();
+      const abs = path.join(this.root, ...rel.split('/'));
+      const st = await fs.lstat(abs);
+      if (!st.isFile()) return true;
+      // Reached through a symlinked directory that leads outside the root: gone, as readForModel
+      // will never read it again.
+      const real = path.relative(await fs.realpath(this.root), await fs.realpath(abs));
+      return real.startsWith('..') || path.isAbsolute(real);
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
       return code === 'ENOENT' || code === 'ENOTDIR';

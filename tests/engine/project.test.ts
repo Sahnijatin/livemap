@@ -493,4 +493,20 @@ describe('ProjectModel fix round 1', () => {
     expect(m.get('zz/z.ts')).toBeDefined();
     expect(m.truncated).toBe(false);
   });
+
+  it('a directory replaced by a symlink to outside the project counts as gone', async () => {
+    put('lib/a.ts', 'export const a = 1;\n');
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-outside-'));
+    try {
+      fs.writeFileSync(path.join(outside, 'a.ts'), 'export const leaked = 1;\n');
+      const m = await scanned();
+      fs.rmSync(path.join(root, 'lib'), { recursive: true });
+      fs.symlinkSync(outside, path.join(root, 'lib'));
+      expect((await m.removeDir('lib')).map(r => r.path)).toEqual(['lib/a.ts']);
+      expect(m.get('lib/a.ts')).toBeUndefined();
+      expect(m.content('lib/a.ts')).toBeNull();
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
 });
