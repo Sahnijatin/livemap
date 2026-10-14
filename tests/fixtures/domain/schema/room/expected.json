@@ -1,0 +1,22 @@
+{
+  "data/Order.kt": [
+    { "name": "Order", "table": "orders", "orm": "room", "file": "data/Order.kt", "line": 15, "fields": [
+      { "name": "id", "type": "Long", "line": 16, "pk": true, "required": true },
+      { "name": "user_id", "type": "Long", "line": 17, "required": true, "fk": { "table": "User", "field": "id" } },
+      { "name": "code", "type": "String", "line": 18, "required": true, "unique": true },
+      { "name": "note", "type": "String", "line": 19 },
+      { "name": "total", "type": "Double", "line": 22, "required": true }
+    ] },
+    { "name": "User", "table": "User", "orm": "room", "file": "data/Order.kt", "line": 27, "fields": [
+      { "name": "id", "type": "Long", "line": 28, "pk": true, "required": true },
+      { "name": "email", "type": "String", "line": 29, "required": true }
+    ] }
+  ],
+  "data/Tag.java": [
+    { "name": "Tag", "table": "tags", "orm": "room", "file": "data/Tag.java", "line": 9, "fields": [
+      { "name": "id", "type": "long", "line": 10, "pk": true, "required": true },
+      { "name": "label", "type": "String", "line": 14, "required": true },
+      { "name": "color", "type": "String", "line": 16 }
+    ] }
+  ]
+}

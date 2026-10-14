@@ -1,0 +1,26 @@
+{
+  "schema.prisma": [
+    { "name": "User", "table": "users", "orm": "prisma", "file": "schema.prisma", "line": 16, "fields": [
+      { "name": "id", "type": "String", "line": 17, "pk": true, "required": true },
+      { "name": "email", "type": "String", "line": 18, "unique": true, "required": true },
+      { "name": "name", "type": "String", "line": 19 },
+      { "name": "orders", "type": "Order[]", "line": 20, "relation": { "model": "Order", "many": true } }
+    ] },
+    { "name": "Order", "table": "Order", "orm": "prisma", "file": "schema.prisma", "line": 26, "fields": [
+      { "name": "id", "type": "String", "line": 27, "pk": true, "required": true },
+      { "name": "customer", "type": "String", "line": 28, "required": true },
+      { "name": "total", "type": "Float", "line": 29, "required": true },
+      { "name": "status", "type": "Status", "line": 30, "required": true },
+      { "name": "userId", "type": "String", "line": 31, "required": true, "fk": { "table": "users", "field": "id" } },
+      { "name": "user", "type": "User", "line": 32, "relation": { "model": "User", "many": false } },
+      { "name": "items", "type": "OrderItem[]", "line": 33, "relation": { "model": "OrderItem", "many": true } },
+      { "name": "tags", "type": "String[]", "line": 34 }
+    ] },
+    { "name": "OrderItem", "table": "order_items", "orm": "prisma", "file": "schema.prisma", "line": 38, "fields": [
+      { "name": "orderId", "type": "String", "line": 39, "required": true, "pk": true, "fk": { "table": "Order", "field": "id" } },
+      { "name": "sku", "type": "String", "line": 40, "required": true, "pk": true },
+      { "name": "qty", "type": "Int", "line": 41, "required": true },
+      { "name": "order", "type": "Order", "line": 42, "relation": { "model": "Order", "many": false } }
+    ] }
+  ]
+}

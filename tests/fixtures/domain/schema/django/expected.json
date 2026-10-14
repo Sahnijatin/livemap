@@ -1,0 +1,25 @@
+{
+  "shop/models.py": [
+    { "name": "Customer", "table": "shop_customer", "orm": "django", "file": "shop/models.py", "line": 12, "fields": [
+      { "name": "id", "type": "AutoField", "line": 12, "pk": true, "required": true },
+      { "name": "email", "type": "EmailField", "line": 13, "unique": true, "required": true },
+      { "name": "name", "type": "CharField", "line": 14, "required": true },
+      { "name": "user", "type": "OneToOneField", "line": 15, "required": true, "unique": true, "relation": { "model": "User", "many": false }, "fk": { "table": "auth_user", "field": "id" } }
+    ] },
+    { "name": "Order", "table": "orders", "orm": "django", "file": "shop/models.py", "line": 19, "fields": [
+      { "name": "created_at", "type": "DateTimeField", "line": 6, "required": true },
+      { "name": "code", "type": "CharField", "line": 20, "pk": true, "required": true },
+      { "name": "customer", "type": "ForeignKey", "line": 21, "required": true, "relation": { "model": "Customer", "many": false }, "fk": { "table": "shop_customer", "field": "id" } },
+      { "name": "note", "type": "TextField", "line": 22 },
+      { "name": "tags", "type": "ManyToManyField", "line": 23, "relation": { "model": "Tag", "many": true } },
+      { "name": "parent", "type": "ForeignKey", "line": 24, "relation": { "model": "Order", "many": false }, "fk": { "table": "orders", "field": "code" } }
+    ] }
+  ],
+  "blog/models/post.py": [
+    { "name": "Post", "table": "blog_post", "orm": "django", "file": "blog/models/post.py", "line": 4, "fields": [
+      { "name": "id", "type": "AutoField", "line": 4, "pk": true, "required": true },
+      { "name": "title", "type": "CharField", "line": 5, "required": true },
+      { "name": "author", "type": "ForeignKey", "line": 6, "required": true, "relation": { "model": "Author", "many": false }, "fk": { "table": "accounts_author", "field": "id" } }
+    ] }
+  ]
+}

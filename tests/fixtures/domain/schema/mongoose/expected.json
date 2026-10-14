@@ -1,0 +1,23 @@
+{
+  "models/order.js": [
+    { "name": "Order", "table": "orders", "orm": "mongoose", "file": "models/order.js", "line": 4, "fields": [
+      { "name": "customer", "type": "String", "line": 5 },
+      { "name": "total", "type": "Number", "line": 6, "required": true },
+      { "name": "code", "type": "String", "line": 7, "unique": true, "required": true },
+      { "name": "user", "type": "ObjectId", "line": 8, "relation": { "model": "User", "many": false } },
+      { "name": "items", "type": "ObjectId[]", "line": 9, "relation": { "model": "Item", "many": true } },
+      { "name": "tags", "type": "String[]", "line": 10 },
+      { "name": "address", "type": "Object", "line": 11 },
+      { "name": "created_at", "type": "Date", "line": 12 }
+    ] }
+  ],
+  "models/category.ts": [
+    { "name": "Category", "table": "categories", "orm": "mongoose", "file": "models/category.ts", "line": 4, "fields": [
+      { "name": "name", "type": "String", "line": 4, "required": true }
+    ] },
+    { "name": "Person", "table": "people_custom", "orm": "mongoose", "file": "models/category.ts", "line": 5, "fields": [
+      { "name": "name", "type": "String", "line": 5 }
+    ] },
+    { "name": "Tag", "table": "tags", "orm": "mongoose", "file": "models/category.ts", "line": 6, "fields": [] }
+  ]
+}
