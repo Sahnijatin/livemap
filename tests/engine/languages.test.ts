@@ -40,7 +40,10 @@ describe('languages', () => {
     for (const p of ['config/prod.env.local', 'staging.env.bak', 'Prod.ENV.Local', 'app.env-old', '.envrc.local']) {
       expect(isSecretEnvPath(p), p).toBe(true);
     }
-    for (const p of ['example.env', 'sample.env', 'app.template.env', 'prod.env.example', 'config.env.ts', 'app.env.js', 'vite.env.d.ts', 'prod.env.json']) {
+    for (const p of ['prod.env.json', 'secrets.env.yaml', 'staging.env.sh', 'prod.env.txt', 'app.env.toml']) {
+      expect(isSecretEnvPath(p), p).toBe(true);
+    }
+    for (const p of ['example.env', 'sample.env', 'app.template.env', 'prod.env.example', 'config.env.ts', 'app.env.js', 'vite.env.d.ts', 'settings.env.py']) {
       expect(isSecretEnvPath(p), p).toBe(false);
     }
   });

@@ -45,6 +45,13 @@ const SECRET_NAMES = new Set(['.env', '.envrc', '.npmrc', '.netrc', '.pypirc']);
 
 const EXAMPLE = /(^|[._-])(example|sample|template)$/;
 
+/** Program source (parsed for symbols), as opposed to data formats an env file could be written in. */
+function isCodeExt(ext: string): boolean {
+  if (!Object.hasOwn(EXT, ext)) return false;
+  const lang = EXT[ext];
+  return lang in GRAMMAR || lang === 'vue' || lang === 'svelte';
+}
+
 /**
  * Secret files: `.env`, `.env.*`, `.envrc(.*)`, `*.env`, `*.env.*` and credential rc files.
  * Examples (`.env.example`, `example.env`, `prod.env.sample`) are not secret, nor are code
@@ -60,7 +67,7 @@ export function isSecretEnvPath(path: string): boolean {
   const [, stem, suffix] = m;
   if (EXAMPLE.test(stem)) return false;
   if (suffix === undefined) return true;
-  return !EXAMPLE.test(suffix) && !Object.hasOwn(EXT, suffix.slice(suffix.lastIndexOf('.') + 1));
+  return !EXAMPLE.test(suffix) && !isCodeExt(suffix.slice(suffix.lastIndexOf('.') + 1));
 }
 
 export function isBinaryPath(path: string): boolean {
