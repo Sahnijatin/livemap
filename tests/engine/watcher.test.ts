@@ -232,4 +232,13 @@ describe('Watcher', () => {
     const gaps = relinkAt.slice(1).map((t, i) => t - relinkAt[i]);
     expect(Math.max(...gaps)).toBeLessThan(400);
   });
+
+  it('reloads rules when a self-ignoring nested .gitignore is edited', async () => {
+    put('tools/.gitignore', '*\n');
+    await startWatcher();
+    put('tools/.gitignore', '*.tmp\n');
+    await waitFor(() => changes.some(c => c.change.path === 'tools/.gitignore'));
+    put('tools/run.ts', 'export const run = 1;\n');
+    await waitFor(() => model.get('tools/run.ts') !== undefined);
+  });
 });
