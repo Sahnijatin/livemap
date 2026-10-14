@@ -43,31 +43,28 @@ function extOf(path: string): string {
 /** Files whose values are never stored or sent; only variable names are read from them. */
 const SECRET_NAMES = new Set(['.env', '.envrc', '.npmrc', '.netrc', '.pypirc']);
 
-const EXAMPLE = /(^|[._-])(example|sample|template)$/;
-
-/** Program source (parsed for symbols), as opposed to data formats an env file could be written in. */
-function isCodeExt(ext: string): boolean {
-  if (!Object.hasOwn(EXT, ext)) return false;
-  const lang = EXT[ext];
-  return lang in GRAMMAR || lang === 'vue' || lang === 'svelte';
-}
+/** An example/sample/template marker in any dot-, dash- or underscore-separated segment. */
+const EXAMPLE = /(^|[._-])(example|sample|template)([._-]|$)/;
+/** JS/TS source that merely has `.env` in its name (`config.env.ts`, `vite.env.d.ts`). */
+const JS_CODE = new Set(['ts', 'tsx', 'mts', 'cts', 'js', 'jsx', 'mjs', 'cjs']);
+const isJsCode = (name: string): boolean => name.includes('.') && JS_CODE.has(name.slice(name.lastIndexOf('.') + 1));
 
 /**
  * Secret files: `.env`, `.env.*`, `.envrc(.*)`, `*.env`, `*.env.*` and credential rc files.
- * Examples (`.env.example`, `example.env`, `prod.env.sample`) are not secret, nor are code
- * files that merely have `.env` in their name (`config.env.ts`, `vite.env.d.ts`).
+ * Examples (`.env.example`, `example.env`, `app.env.example.json`) are not secret, nor is JS/TS
+ * source with `.env` in its name. Env files in any other format (`.env.json`, `settings.env.py`)
+ * are secret.
  */
 export function isSecretEnvPath(path: string): boolean {
   // Editor backups (`.env~`) and autosaves (`#.env#`) hold the same values as the file itself.
   const b = baseName(path).toLowerCase().replace(/^#(.*)#$/, '$1').replace(/~+$/, '');
   if (SECRET_NAMES.has(b)) return true;
-  if (/^\.env(rc)?[._-]/.test(b)) return !EXAMPLE.test(b);
+  if (/^\.env(rc)?[._-]/.test(b)) return !EXAMPLE.test(b) && !isJsCode(b);
   const m = /^(.+)\.env(?:[._-](.+))?$/.exec(b);
   if (!m) return false;
   const [, stem, suffix] = m;
   if (EXAMPLE.test(stem)) return false;
-  if (suffix === undefined) return true;
-  return !EXAMPLE.test(suffix) && !isCodeExt(suffix.slice(suffix.lastIndexOf('.') + 1));
+  return suffix === undefined || (!EXAMPLE.test(suffix) && !isJsCode(`.${suffix}`));
 }
 
 export function isBinaryPath(path: string): boolean {
