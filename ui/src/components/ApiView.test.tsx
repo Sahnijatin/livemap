@@ -298,3 +298,49 @@ describe('Inspector domain sections', () => {
     expect(section('Routes in this file')).toBeUndefined();
   });
 });
+
+describe('ApiView palette trace (routeTrace)', () => {
+  const scrolled: Element[] = [];
+  beforeEach(() => {
+    scrolled.length = 0;
+    Element.prototype.scrollIntoView = function scrollIntoView(this: Element) { scrolled.push(this); };
+  });
+
+  it('traces the route and scrolls it into view', () => {
+    mount();
+    act(() => useStore.getState().traceRoute(`GET /api/users ${USR}:9`));
+    const users = routeCard('GET', '/api/users');
+    expect(users.classList.contains('on')).toBe(true);
+    expect(card('handler', 'listUsers').classList.contains('on')).toBe(true);
+    expect(routeCard('GET', '/api/orders').classList.contains('dim')).toBe(true);
+    expect(scrolled).toContain(users);
+    // Hovering something else takes over the trace.
+    enter(routeCard('GET', '/api/orders'));
+    expect(users.classList.contains('dim')).toBe(true);
+  });
+
+  it('clears a filter that hides the route, and turns on "Show all" for one beyond the cap', () => {
+    const many = Array.from({ length: CAP + 1 }, (_, i) => api('GET', `/api/r${String(i).padStart(4, '0')}`, 'getOrders', 18));
+    const d = domain();
+    d.routes = many;
+    mount(d);
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="Filter routes"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'r0001');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const last = many[CAP];
+    act(() => useStore.getState().traceRoute(last.id));
+    expect(input.value).toBe('');
+    const el = routeCard('GET', last.fullPath);
+    expect(el).toBeTruthy();
+    expect(el.classList.contains('on')).toBe(true);
+    expect(scrolled).toContain(el);
+  });
+
+  it('a page scrolls its row into view', () => {
+    mount();
+    act(() => useStore.getState().traceRoute('PAGE /about app/about/page.tsx:1'));
+    expect(scrolled.some(e => e.classList.contains('pg-row') && e.textContent!.includes('/about'))).toBe(true);
+  });
+});
