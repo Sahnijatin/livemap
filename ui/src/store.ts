@@ -133,6 +133,14 @@ const initial = {
 
 const freshDomain = () => ({ domain: emptyDomainIndex(), domainBase: baseOf(emptyDomainIndex()) });
 
+/** Files after upserting and removing; clears the selection if its file is gone. */
+function upsertFiles(st: StoreState, upserts: FileModel[], removed: string[]): Pick<StoreState, 'files' | 'selected'> {
+  const files = { ...st.files };
+  for (const p of removed) delete files[p];
+  for (const f of upserts) files[f.path] = f;
+  return { files, selected: st.selected && files[st.selected] ? st.selected : null };
+}
+
 function recordRecent(recent: StoreState['recent'], c: ChangeSummary): void {
   if (c.kind === 'deleted') delete recent[c.path];
   else recent[c.path] = { kind: c.kind, at: c.at };
@@ -180,14 +188,9 @@ export const useStore = create<StoreState>()((set, get) => ({
         });
         return;
       }
-      case 'files': {
-        const files = { ...get().files };
-        for (const p of msg.removed) delete files[p];
-        for (const f of msg.files) files[f.path] = f;
-        const { selected } = get();
-        set({ files, selected: selected && files[selected] ? selected : null });
+      case 'files':
+        set(upsertFiles(get(), msg.files, msg.removed));
         return;
-      }
       case 'change': {
         const c = msg.change;
         const prev = get().changes;
@@ -195,7 +198,8 @@ export const useStore = create<StoreState>()((set, get) => ({
         const recent = { ...get().recent };
         recordRecent(recent, c);
         const expanded = c.kind === 'deleted' ? get().expanded : { ...get().expanded, [c.path]: true };
-        set({ changes, recent, expanded });
+        // One update for the change and its files, so views re-render (and refetch code) once.
+        set({ changes, recent, expanded, ...upsertFiles(get(), msg.files, msg.removed) });
         return;
       }
       case 'usedBy':

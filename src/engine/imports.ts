@@ -1,11 +1,21 @@
 import { posix } from 'node:path';
 import type { Lang } from '../shared/types.js';
+import { parentDir } from './files.js';
 
 export interface ImportCtx {
   has(path: string): boolean;
-  files: string[];
+  /** Sorted project paths; may be omitted when `index` is given. */
+  files?: string[];
   aliases: [string, string[]][];
   goModule: string | null;
+  /**
+   * JS/TS specifiers per file for its latest text, owned by the caller (ProjectModel). Relinking
+   * re-resolves every file whenever the file set changes while almost every text is unchanged,
+   * so with a cache only resolution (cheap) is redone.
+   */
+  specCache?: Map<string, { text: string; specs: string[] }>;
+  /** A prebuilt index of the project's paths, kept current by the caller; built from `files` when absent. */
+  index?: FileIndex;
 }
 
 type Result = { local: string[]; external: string[] };
@@ -21,24 +31,60 @@ const norm = (p: string): string => {
 };
 const join = (...parts: string[]): string => norm(parts.filter(Boolean).join('/'));
 
-interface FileIndex { byDir: Map<string, string[]>; byBase: Map<string, string[]> }
+export interface FileIndex { byDir: Map<string, string[]>; byBase: Map<string, string[]> }
 const INDEXES = new WeakMap<string[], FileIndex>();
-export const indexStats = { builds: 0 };
+export const indexStats = { builds: 0, jsParses: 0 };
 
-/** Built once per ctx.files array: dir to files, and basename to files. */
-function indexOf(files: string[]): FileIndex {
-  let idx = INDEXES.get(files);
-  if (idx) return idx;
+const splitPath = (f: string): [dir: string, base: string] => [parentDir(f), f.slice(f.lastIndexOf('/') + 1)];
+
+/** Dir to files and basename to files, each list sorted; `files` must be sorted. */
+export function buildIndex(files: string[]): FileIndex {
   indexStats.builds++;
-  idx = { byDir: new Map(), byBase: new Map() };
+  const idx: FileIndex = { byDir: new Map(), byBase: new Map() };
   for (const f of files) {
-    const slash = f.lastIndexOf('/');
-    const dir = slash === -1 ? '' : f.slice(0, slash);
-    const base = slash === -1 ? f : f.slice(slash + 1);
+    const [dir, base] = splitPath(f);
     const d = idx.byDir.get(dir); if (d) d.push(f); else idx.byDir.set(dir, [f]);
     const b = idx.byBase.get(base); if (b) b.push(f); else idx.byBase.set(base, [f]);
   }
-  INDEXES.set(files, idx);
+  return idx;
+}
+
+/** Where f is, or would be inserted, in a sorted list. */
+function lowerBound(list: string[], f: string): number {
+  let lo = 0, hi = list.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (list[mid] < f) lo = mid + 1; else hi = mid; }
+  return lo;
+}
+
+/** Adds (or removes) one file, keeping the lists sorted as buildIndex makes them. */
+export function indexUpdate(idx: FileIndex, f: string, present: boolean): void {
+  const [dir, base] = splitPath(f);
+  for (const [map, key] of [[idx.byDir, dir], [idx.byBase, base]] as const) {
+    const list = map.get(key);
+    if (!list) {
+      if (present) map.set(key, [f]);
+      continue;
+    }
+    const i = lowerBound(list, f);
+    if (present && list[i] !== f) list.splice(i, 0, f);
+    else if (!present && list[i] === f) {
+      list.splice(i, 1);
+      if (!list.length) map.delete(key);
+    }
+  }
+}
+
+const NO_FILES: string[] = [];
+
+/** The ctx's own index, or one built once per ctx.files array. */
+function indexOf(ctx: ImportCtx): FileIndex {
+  if (ctx.index) return ctx.index;
+  const files = ctx.files ?? NO_FILES;
+  let idx = INDEXES.get(files);
+  if (!idx) {
+    idx = buildIndex(files);
+    INDEXES.set(files, idx);
+  }
   return idx;
 }
 
@@ -77,7 +123,16 @@ function resolveJsPath(base: string, ctx: ImportCtx): string | null {
   return null;
 }
 
-function jsSpecs(src: string): string[] {
+function jsSpecs(path: string, src: string, cache: ImportCtx['specCache']): string[] {
+  const hit = cache?.get(path);
+  if (hit && hit.text === src) return hit.specs;
+  const specs = parseJsSpecs(src);
+  cache?.set(path, { text: src, specs });
+  return specs;
+}
+
+function parseJsSpecs(src: string): string[] {
+  indexStats.jsParses++;
   const out: string[] = [];
   const patterns = [
     /\b(?:import|export)\s+(?:type\s+)?(?:[^'";]*?\s+from\s+)?['"]([^'"\n]+)['"]/g,
@@ -95,6 +150,18 @@ function packageName(spec: string): string {
   return spec.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
 }
 
+const SORTED_ALIASES = new WeakMap<ImportCtx['aliases'], ImportCtx['aliases']>();
+
+/** Aliases with the longest prefix first, sorted once per aliases array. */
+function longestFirst(aliases: ImportCtx['aliases']): ImportCtx['aliases'] {
+  let sorted = SORTED_ALIASES.get(aliases);
+  if (!sorted) {
+    sorted = [...aliases].sort((a, b) => b[0].length - a[0].length);
+    SORTED_ALIASES.set(aliases, sorted);
+  }
+  return sorted;
+}
+
 type JsTarget = { local: string | null } | { external: string };
 
 /** One JS/TS specifier: a project file (null when it does not resolve or is a URL) or a package name. */
@@ -102,8 +169,7 @@ function resolveJs(dir: string, spec: string, ctx: ImportCtx): JsTarget {
   if (spec.startsWith('./') || spec.startsWith('../') || spec === '.' || spec === '..') {
     return { local: resolveJsPath(join(dir, spec), ctx) };
   }
-  const sortedAliases = [...ctx.aliases].sort((a, b) => b[0].length - a[0].length);
-  for (const [prefix, targets] of sortedAliases) {
+  for (const [prefix, targets] of longestFirst(ctx.aliases)) {
     if (spec !== prefix && !spec.startsWith(prefix + '/')) continue;
     const rest = spec.slice(prefix.length).replace(/^\//, '');
     for (const t of targets) {
@@ -125,8 +191,8 @@ function resolveJs(dir: string, spec: string, ctx: ImportCtx): JsTarget {
 }
 
 function jsImports(path: string, src: string, ctx: ImportCtx, local: Set<string>, external: Set<string>): void {
-  const dir = posix.dirname(path) === '.' ? '' : posix.dirname(path);
-  for (const spec of jsSpecs(src)) {
+  const dir = parentDir(path);
+  for (const spec of jsSpecs(path, src, ctx.specCache)) {
     const t = resolveJs(dir, spec, ctx);
     if ('external' in t) external.add(t.external);
     else if (t.local) local.add(t.local);
@@ -152,7 +218,7 @@ function pyTarget(base: string, mod: string, ctx: ImportCtx): string | null {
 }
 
 function pythonImports(path: string, src: string, ctx: ImportCtx, local: Set<string>, external: Set<string>): void {
-  const dir = posix.dirname(path) === '.' ? '' : posix.dirname(path);
+  const dir = parentDir(path);
   const add = (mod: string, names: string[], rel: number): boolean => {
     let found = false;
     for (const b of pyBases(dir, mod, rel)) {
@@ -190,7 +256,7 @@ function goImports(path: string, src: string, ctx: ImportCtx, local: Set<string>
     const mod = ctx.goModule;
     if (mod && (spec === mod || spec.startsWith(mod + '/'))) {
       const dir = spec.slice(mod.length).replace(/^\//, '');
-      for (const f of indexOf(ctx.files).byDir.get(dir) ?? []) {
+      for (const f of indexOf(ctx).byDir.get(dir) ?? []) {
         if (f.endsWith('.go') && !f.endsWith('_test.go')) local.add(f);
       }
     } else {
@@ -201,7 +267,7 @@ function goImports(path: string, src: string, ctx: ImportCtx, local: Set<string>
 }
 
 function rustImports(path: string, src: string, ctx: ImportCtx, local: Set<string>, external: Set<string>): void {
-  const dir = posix.dirname(path) === '.' ? '' : posix.dirname(path);
+  const dir = parentDir(path);
   const stem = posix.basename(path, '.rs');
   const modDir = ['lib', 'main', 'mod'].includes(stem) ? dir : join(dir, stem);
   const tryMod = (base: string, name: string): string | null => {
@@ -226,7 +292,7 @@ function rustImports(path: string, src: string, ctx: ImportCtx, local: Set<strin
     let base: string, rest: string[];
     if (first === 'crate') { base = crateRoot; rest = head.slice(1); }
     else if (first === 'self') { base = modDir; rest = head.slice(1); }
-    else if (first === 'super') { base = posix.dirname(modDir) === '.' ? '' : posix.dirname(modDir); rest = head.slice(1); }
+    else if (first === 'super') { base = parentDir(modDir); rest = head.slice(1); }
     else if (tryMod(modDir, first)) { base = modDir; rest = head; }
     else { external.add(first); continue; }
     const attempt = (segments: string[]): void => {
@@ -243,18 +309,23 @@ function rustImports(path: string, src: string, ctx: ImportCtx, local: Set<strin
 }
 
 function jvmImports(src: string, ctx: ImportCtx, ext: string, local: Set<string>, external: Set<string>): void {
-  for (const m of src.matchAll(/^[ \t]*import[ \t]+(?:static[ \t]+)?([\w.]+)(\.\*)?[ \t]*;?/gm)) {
+  for (const m of src.matchAll(/^[ \t]*import[ \t]+(?:static[ \t]+)?(\w+(?:\.\w+)*)(\.\*)?[ \t]*;?/gm)) {
     const parts = m[1].split('.');
     let found = false;
-    const idx = indexOf(ctx.files);
+    const idx = indexOf(ctx);
     if (m[2]) {
       const relDir = parts.join('/');
       for (const [dir, files] of idx.byDir) {
         if (dir !== relDir && !dir.endsWith('/' + relDir)) continue;
         for (const f of files) if (f.endsWith(ext)) { local.add(f); found = true; }
       }
-    } else {
+    }
+    // Not a local package: a wildcard may name a class (`import static a.B.*`) or a nested one
+    // (`a.B.Inner.*`), whose file is the nearest class-like (capitalized) segment's, so a lowercase
+    // package segment never matches a stray file. A plain import tries every prefix (`a.B.Inner`).
+    if (!found) {
       for (let n = parts.length; n >= 1 && !found; n--) {
+        if (m[2] && !/^[A-Z]/.test(parts[n - 1])) continue;
         const rel = parts.slice(0, n).join('/') + ext;
         const hit = (idx.byBase.get(parts[n - 1] + ext) ?? []).find(f => f === rel || f.endsWith('/' + rel));
         if (hit) { local.add(hit); found = true; }
@@ -265,7 +336,7 @@ function jvmImports(src: string, ctx: ImportCtx, ext: string, local: Set<string>
 }
 
 function rubyImports(path: string, src: string, ctx: ImportCtx, local: Set<string>, external: Set<string>): void {
-  const dir = posix.dirname(path) === '.' ? '' : posix.dirname(path);
+  const dir = parentDir(path);
   const withExt = (p: string) => (p.endsWith('.rb') ? p : p + '.rb');
   for (const m of src.matchAll(/^[ \t]*require_relative[ \t(]+['"]([^'"\n]+)['"]/gm)) {
     const p = join(dir, withExt(m[1]));
@@ -278,7 +349,7 @@ function rubyImports(path: string, src: string, ctx: ImportCtx, local: Set<strin
 }
 
 function cImports(path: string, src: string, ctx: ImportCtx, local: Set<string>, external: Set<string>): void {
-  const dir = posix.dirname(path) === '.' ? '' : posix.dirname(path);
+  const dir = parentDir(path);
   for (const m of src.matchAll(/^[ \t]*#[ \t]*include[ \t]*(?:"([^"\n]+)"|<([^>\n]+)>)/gm)) {
     if (m[1]) {
       const hit = [join(dir, m[1]), join('', m[1]), join('include', m[1]), join('src', m[1])].find(p => !p.startsWith('..') && ctx.has(p));
