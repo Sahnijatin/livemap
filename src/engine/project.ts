@@ -232,7 +232,7 @@ export class ProjectModel {
     return (async () => {
       const after = await this.build(rel, r);
       // Commit text and model together only after a successful build.
-      if (r.kind === 'text') this.texts.set(rel, r.text); else this.texts.delete(rel);
+      if (r.kind === 'text') this.texts.set(rel, r.text); else { this.texts.delete(rel); this.specCache.delete(rel); }
       this.files.set(rel, after);
       const afterText = r.kind === 'text' ? r.text : null;
       return {
@@ -318,7 +318,6 @@ export class ProjectModel {
     const model = this;
     return {
       has: p => files.has(p),
-      get files() { return [...files.keys()].sort(cmp); },
       get index() { return (model.liveIndex ??= buildIndex([...files.keys()].sort(cmp))); },
       aliases,
       goModule,

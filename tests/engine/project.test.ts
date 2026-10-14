@@ -376,4 +376,14 @@ describe('ProjectModel fix round 1', () => {
     expect((await m.update('cmd0/main.go', 'change', { deferRelink: true }))!.after!.imports.local).toEqual([]);
     expect(indexStats.builds - before).toBe(1);
   });
+
+  it('drops a file\'s cached specifiers when it stops being text', async () => {
+    const m = await scanned();
+    const cache = (m as unknown as { specCache: Map<string, unknown> }).specCache;
+    expect(cache.has('src/a.ts')).toBe(true);
+    put('src/a.ts', 'x'.repeat(1_048_577));
+    await m.update('src/a.ts', 'change');
+    expect(m.get('src/a.ts')!.flags.tooLarge).toBe(true);
+    expect(cache.has('src/a.ts')).toBe(false);
+  });
 });

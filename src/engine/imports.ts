@@ -3,7 +3,8 @@ import type { Lang } from '../shared/types.js';
 
 export interface ImportCtx {
   has(path: string): boolean;
-  files: string[];
+  /** Sorted project paths; may be omitted when `index` is given. */
+  files?: string[];
   aliases: [string, string[]][];
   goModule: string | null;
   /**
@@ -12,7 +13,7 @@ export interface ImportCtx {
    * so with a cache only resolution (cheap) is redone.
    */
   specCache?: Map<string, { text: string; specs: string[] }>;
-  /** A prebuilt index of `files`, kept current by the caller; built from `files` when absent. */
+  /** A prebuilt index of the project's paths, kept current by the caller; built from `files` when absent. */
   index?: FileIndex;
 }
 
@@ -74,10 +75,11 @@ export function indexUpdate(idx: FileIndex, f: string, present: boolean): void {
 /** The ctx's own index, or one built once per ctx.files array. */
 function indexOf(ctx: ImportCtx): FileIndex {
   if (ctx.index) return ctx.index;
-  let idx = INDEXES.get(ctx.files);
+  const files = ctx.files ?? [];
+  let idx = INDEXES.get(files);
   if (!idx) {
-    idx = buildIndex(ctx.files);
-    INDEXES.set(ctx.files, idx);
+    idx = buildIndex(files);
+    INDEXES.set(files, idx);
   }
   return idx;
 }
