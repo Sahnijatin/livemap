@@ -277,4 +277,17 @@ describe('ProjectModel fix round 1', () => {
     const a = await m.update('lib/a.ts', 'add', { deferRelink: true });
     expect(a!.after!.imports.local).toEqual(['lib/b.ts']);
   });
+
+  it('picks up .gitignore files created or edited while running', async () => {
+    const m = await scanned();
+    put('pkg/keep.ts', 'export const k = 1;\n');
+    expect(m.ignored('pkg/generated/x.ts')).toBe(false); // seen before pkg has a .gitignore
+    put('pkg/.gitignore', 'generated/\n');
+    await m.update('pkg/.gitignore', 'add');
+    expect(m.ignored('pkg/generated/x.ts')).toBe(true);
+    expect(m.ignored('scratch.txt')).toBe(false);
+    put('.gitignore', 'scratch.txt\n');
+    await m.update('.gitignore', 'add');
+    expect(m.ignored('scratch.txt')).toBe(true);
+  });
 });

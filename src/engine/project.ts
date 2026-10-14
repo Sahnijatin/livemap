@@ -107,6 +107,8 @@ export class ProjectModel {
    */
   update(rel: string, _event: 'add' | 'change' | 'unlink', opts: { deferRelink?: boolean } = {}): Promise<UpdateResult | null> {
     return this.serial(async () => {
+      // The matcher caches every .gitignore it has read (or found missing); start it afresh.
+      if (rel === '.gitignore' || rel.endsWith('/.gitignore')) this.isIgnored = createIgnore(this.root);
       if (this.ignored(rel)) return null;
       const r = await readForModel(this.root, rel);
       // readForModel returns null for any failure; a known file is deleted only if it is really gone.
