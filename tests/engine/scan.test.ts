@@ -120,4 +120,18 @@ describe('ProjectModel.scan', () => {
     expect(m.all()).toHaveLength(5);
     expect(m.truncated).toBe(true);
   });
+
+  it('candidates that fail to read do not leave the model marked truncated when the rest fit', async () => {
+    put('a/.gitignore', '*.gen.ts\n');
+    for (let i = 0; i < 4; i++) put(`a/l${i}.gen.ts`, `export const l${i} = ${i};\n`);
+    put('b.ts', 'export const b = 1;\n');
+    const m = new ProjectModel(root, { limit: 5 });
+    await m.scan();
+    hooks.fail.add('a/l0.gen.ts');
+    hooks.fail.add('a/l1.gen.ts');
+    put('a/.gitignore', '# keep generated\n');
+    await m.reloadIgnores(['a/.gitignore']);
+    expect(m.all().map(f => f.path)).toEqual(['a/.gitignore', 'a/l2.gen.ts', 'a/l3.gen.ts', 'b.ts']);
+    expect(m.truncated).toBe(false);
+  });
 });

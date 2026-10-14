@@ -198,17 +198,16 @@ export class ProjectModel {
       let full = false; // some file did not fit under the limit
       const included: string[] = [];
       const unreached: string[] = [];
-      // Read no more than there is room for (a full, truncated model may have thousands unread).
-      const candidates = walked.files.filter(rel => !this.files.has(rel) && (old(rel, false) || wasTruncated));
-      const room = Math.max(0, this.limit - this.files.size);
-      if (candidates.length > room) full = true;
-      const fresh = candidates.slice(0, room);
-      await this.readEach(fresh, new Map(), async (rel, r) => {
+      // Stop reading once the model is full (a truncated model may have thousands unread); files
+      // that fail to read leave their room to later candidates.
+      const fresh = walked.files.filter(rel => !this.files.has(rel) && (old(rel, false) || wasTruncated));
+      const isFull = (): boolean => this.files.size >= this.limit;
+      const done = await this.readEach(fresh, new Map(), async (rel, r) => {
         if (!r) return;
-        if (this.files.size >= this.limit) { full = true; return; }
         const res = this.apply(rel, r);
         if (res) { await res; (old(rel, false) ? included : unreached).push(rel); }
-      });
+      }, isFull);
+      if (done < fresh.length) full = true;
       if (whole) this.truncated = walked.truncated || full;
       else if (full) this.truncated = true;
       if (!removed.length && !included.length && !unreached.length) return { files: [], removed, created: [] };
@@ -240,24 +239,32 @@ export class ProjectModel {
 
   /**
    * Starts `start` for up to READ_AHEAD items at a time (a sliding window) and hands each result
-   * to `each` in order, one at a time.
+   * to `each` in order, one at a time, until `stop` says so. Returns how many were handed over.
    */
-  private async eachAhead<T>(items: string[], start: (rel: string) => Promise<T>, each: (rel: string, v: T) => void | Promise<void>): Promise<void> {
+  private async eachAhead<T>(
+    items: string[],
+    start: (rel: string) => Promise<T>,
+    each: (rel: string, v: T) => void | Promise<void>,
+    stop?: () => boolean,
+  ): Promise<number> {
     const pending: (Promise<T> | undefined)[] = new Array(items.length);
     let next = 0;
-    const more = (): void => { if (next < items.length) { pending[next] = start(items[next]); next++; } };
+    const more = (): void => { if (next < items.length && !stop?.()) { pending[next] = start(items[next]); next++; } };
     for (let k = 0; k < READ_AHEAD; k++) more();
-    for (let i = 0; i < items.length; i++) {
+    let i = 0;
+    for (; i < items.length && !stop?.(); i++) {
       const v = await pending[i]!;
       pending[i] = undefined;
       more();
       await each(items[i], v);
     }
+    await Promise.allSettled(pending.filter(Boolean)); // reads already started when stopping
+    return i;
   }
 
   /** Reads `files` with eachAhead; results already in `known` are reused instead of read again. */
-  private readEach(files: string[], known: Map<string, ReadResult>, each: (rel: string, r: ReadResult) => Promise<void>): Promise<void> {
-    return this.eachAhead(files, rel => (known.has(rel) ? Promise.resolve(known.get(rel)!) : readForModel(this.root, rel)), each);
+  private readEach(files: string[], known: Map<string, ReadResult>, each: (rel: string, r: ReadResult) => Promise<void>, stop?: () => boolean): Promise<number> {
+    return this.eachAhead(files, rel => (known.has(rel) ? Promise.resolve(known.get(rel)!) : readForModel(this.root, rel)), each, stop);
   }
 
   /** True when the path no longer exists or is no longer a regular file inside the root; transient errors are not gone. */
