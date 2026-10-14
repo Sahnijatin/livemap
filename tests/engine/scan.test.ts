@@ -9,6 +9,7 @@ const hooks = vi.hoisted(() => ({
   maxInFlight: 0,
   readsDone: 0,
   fail: new Set<string>(),
+  reads: new Map<string, number>(),
 }));
 vi.mock('../../src/engine/files.js', async orig => {
   const real = await orig<typeof import('../../src/engine/files.js')>();
@@ -16,6 +17,7 @@ vi.mock('../../src/engine/files.js', async orig => {
     ...real,
     readForModel: async (root: string, rel: string) => {
       hooks.inFlight++;
+      hooks.reads.set(rel, (hooks.reads.get(rel) ?? 0) + 1);
       hooks.maxInFlight = Math.max(hooks.maxInFlight, hooks.inFlight);
       try {
         await new Promise(r => setTimeout(r, 1));
@@ -38,7 +40,7 @@ function put(rel: string, data: string): void {
 }
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-scan-'));
-  Object.assign(hooks, { inFlight: 0, maxInFlight: 0, readsDone: 0, fail: new Set<string>() });
+  Object.assign(hooks, { inFlight: 0, maxInFlight: 0, readsDone: 0, fail: new Set<string>(), reads: new Map<string, number>() });
 });
 afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
@@ -77,5 +79,6 @@ describe('ProjectModel.scan', () => {
     const m = new ProjectModel(root);
     await m.scan();
     expect(m.get('a.ts')!.imports.local).toEqual(['lib/x.ts']);
+    expect(hooks.reads.get('tsconfig.json')).toBe(1);
   });
 });

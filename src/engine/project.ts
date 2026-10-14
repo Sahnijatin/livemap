@@ -67,9 +67,12 @@ export class ProjectModel {
       this.truncated = truncated;
       // Config first so aliases and the Go module apply to every file; then the whole walked tree
       // is registered before parsing so imports see it.
-      for (const rel of files) {
-        if (!CONFIG_FILES.has(rel)) continue;
+      const walked = new Set(files);
+      const configs = new Map<string, ReadResult>();
+      for (const rel of CONFIG_FILES) {
+        if (!walked.has(rel)) continue;
         const r = await readForModel(this.root, rel);
+        configs.set(rel, r);
         if (r?.kind === 'text') this.texts.set(rel, r.text);
       }
       this.ctx = this.makeCtx(files);
@@ -77,7 +80,11 @@ export class ProjectModel {
       const reads: (Promise<ReadResult> | undefined)[] = new Array(files.length);
       let next = 0;
       const readMore = (): void => {
-        if (next < files.length) { reads[next] = readForModel(this.root, files[next]); next++; }
+        if (next >= files.length) return;
+        const rel = files[next];
+        // Config files were read above; reuse that read so ctx and texts agree.
+        reads[next] = configs.has(rel) ? Promise.resolve(configs.get(rel)!) : readForModel(this.root, rel);
+        next++;
       };
       for (let k = 0; k < READ_AHEAD; k++) readMore();
       let unreadable = false;
