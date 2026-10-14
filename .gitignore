@@ -1,0 +1,7 @@
+.superpowers/
+node_modules
+dist
+ui/node_modules
+.livemap
+test-results
+playwright-report
