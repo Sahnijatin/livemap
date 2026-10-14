@@ -25,6 +25,8 @@ describe('languages', () => {
     expect(isSecretEnvPath('.env.sample')).toBe(false);
     expect(isSecretEnvPath('.env.template')).toBe(false);
     expect(isSecretEnvPath('.ENV')).toBe(true);
+    expect(isSecretEnvPath('.envrc')).toBe(true);
+    expect(isSecretEnvPath('app/.ENVRC')).toBe(true);
     expect(isSecretEnvPath('cfg/.Env.Local')).toBe(true);
     expect(isSecretEnvPath('.ENV.EXAMPLE')).toBe(false);
     expect(langOf('.ENV')).toBe('secret');
@@ -35,6 +37,14 @@ describe('languages', () => {
       expect(langOf(p), p).toBe('secret');
     }
     for (const p of ['.env-example', '.env_sample', '.environment.ts', 'env-prod']) expect(isSecretEnvPath(p), p).toBe(false);
+  });
+  it('C1: Windows backslash paths are classified by their base name', () => {
+    for (const p of ['C:\\p\\.env', '..\\.env', '.\\.env.local', 'cfg\\.envrc']) expect(isSecretEnvPath(p), p).toBe(true);
+    expect(isSecretEnvPath('C:\\p\\.env.example')).toBe(false);
+  });
+  it('C1: .envrc variants are secret, their examples are not', () => {
+    for (const p of ['.envrc.local', 'cfg/.envrc-prod', '.ENVRC_dev']) expect(isSecretEnvPath(p), p).toBe(true);
+    for (const p of ['.envrc.example', '.envrc-sample', '.envrcx']) expect(isSecretEnvPath(p), p).toBe(false);
   });
   it('treats suffixed *.env variants as secret, but not examples or code files', () => {
     for (const p of ['config/prod.env.local', 'staging.env.bak', 'Prod.ENV.Local', 'app.env-old', '.envrc.local']) {

@@ -58,3 +58,36 @@ export function countSymbols(symbols: CodeSymbol[]): number {
   for (const s of symbols) n += 1 + countSymbols(s.children);
   return n;
 }
+
+export type FactTone = 'add' | 'chg' | 'del' | 'rt' | 'db' | 'dep' | 'env';
+export interface Fact { tone: FactTone; label: string; code: string; note?: string }
+
+const ADD_LABEL: Partial<Record<CodeSymbol['kind'], string>> = { component: 'Component', hook: 'Hook', class: 'Class' };
+const short = (sig: string, name: string) => (sig && sig.length <= 72 ? sig : name);
+const fileName = (p: string) => p.slice(p.lastIndexOf('/') + 1);
+const list = (xs: string[], n = 3) => xs.slice(0, n).join(', ') + (xs.length > n ? ` +${xs.length - n}` : '');
+
+/** Plain-language facts for a change card, in reading order: code, routes, tables, imports, packages, env. */
+export function changeFacts(c: ChangeSummary): Fact[] {
+  const out: Fact[] = [];
+  for (const s of c.symbols.added) out.push({ tone: 'add', label: ADD_LABEL[s.kind] ?? 'Added', code: short(s.signature, s.name) });
+  for (const s of c.symbols.modified) out.push({ tone: 'chg', label: 'Changed', code: s.signatureChanged ? short(s.signature, s.name) : s.name, note: s.signatureChanged ? 'new signature' : undefined });
+  for (const s of c.symbols.removed) out.push({ tone: 'del', label: 'Removed', code: s.name });
+  for (const r of c.routes.added) out.push({ tone: 'rt', label: 'Route', code: `${r.method} ${r.path}`, note: r.handler ? `to ${r.handler}` : undefined });
+  for (const r of c.routes.removed) out.push({ tone: 'del', label: 'Route gone', code: `${r.method} ${r.path}` });
+  for (const e of c.entities.added) out.push({ tone: 'db', label: 'Table', code: e.name, note: `${e.fields} ${e.fields === 1 ? 'field' : 'fields'}` });
+  for (const e of c.entities.changed) {
+    const parts = [e.addedFields.length && `+${list(e.addedFields)}`, e.removedFields.length && `−${list(e.removedFields)}`, e.changedFields.length && `changed ${list(e.changedFields)}`].filter(Boolean);
+    out.push({ tone: 'db', label: 'Table', code: e.name, note: parts.join(' · ') || undefined });
+  }
+  for (const e of c.entities.removed) out.push({ tone: 'del', label: 'Table gone', code: e.name });
+  if (c.imports.added.length) out.push({ tone: 'add', label: 'Now uses', code: list(c.imports.added.map(fileName)) });
+  if (c.imports.removed.length) out.push({ tone: 'del', label: 'Stopped using', code: list(c.imports.removed.map(fileName)) });
+  if (c.imports.externalAdded.length) out.push({ tone: 'dep', label: 'Package', code: list(c.imports.externalAdded) });
+  for (const d of c.deps?.added ?? []) out.push({ tone: 'dep', label: 'Dependency', code: `${d.name} ${d.version}` });
+  for (const d of c.deps?.changed ?? []) out.push({ tone: 'dep', label: 'Dependency', code: d.name, note: `${d.from} to ${d.version}` });
+  for (const d of c.deps?.removed ?? []) out.push({ tone: 'del', label: 'Dependency gone', code: d.name });
+  if (c.env.added.length) out.push({ tone: 'env', label: 'Env', code: list(c.env.added) });
+  if (c.env.removed.length) out.push({ tone: 'del', label: 'Env gone', code: list(c.env.removed) });
+  return out;
+}

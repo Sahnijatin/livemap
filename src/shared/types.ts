@@ -22,4 +22,17 @@ export interface ChangeSummary {
   deps?: { added: Dep[]; removed: Dep[]; changed: (Dep & { from: string })[] };
   env: { added: string[]; removed: string[] };
   lines: { added: number; removed: number }; hunks: Hunk[]; truncated: boolean;
+  attribution?: Attribution;
 }
+
+export type AgentKind = 'claude-code' | 'codex' | 'cursor' | 'git' | 'other';
+export type AgentEventType = 'prompt' | 'message' | 'thinking' | 'tool_start' | 'tool_end' | 'commit' | 'status';
+export interface AgentTool { id?: string; name: string; label: string; input?: unknown; output?: string; ok?: boolean; paths: string[] }
+/** `paths` and `seenAt` are set on git commit events: the root-relative files the commit changed and when LiveMap saw it. */
+export interface AgentEvent { id: number; agent: AgentKind; sessionId: string; at: number; type: AgentEventType; text?: string; tool?: AgentTool; status?: 'working' | 'idle'; subagent?: boolean; paths?: string[]; seenAt?: number }
+/** An event as emitted by a normalizer; the hub assigns `id`. */
+export type RawAgentEvent = Omit<AgentEvent, 'id'>;
+export interface AgentSession { id: string; agent: AgentKind; title: string; cwd: string; startedAt: number; lastAt: number; status: 'working' | 'idle'; transcriptPath?: string; hooks: boolean }
+export interface Attribution { agent: AgentKind; sessionId: string; eventId?: number; confidence: 'exact' | 'likely'; intent?: string }
+export interface Flag { id: number; target: string | null; note: string; createdAt: number; deliveredAt?: number; deliveredTo?: { agent: AgentKind; sessionId: string } }
+export interface ControlState { paused: boolean; flags: Flag[] }

@@ -1,0 +1,6 @@
+{
+  "session_id": "cc-1",
+  "transcript_path": "/home/u/.claude/projects/p/cc-1.jsonl",
+  "cwd": "/p",
+  "hook_event_name": "SessionStart"
+}

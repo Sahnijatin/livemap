@@ -1,0 +1,13 @@
+{
+  "session_id": "cc-1",
+  "transcript_path": "/home/u/.claude/projects/p/cc-1.jsonl",
+  "cwd": "/p",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/p/src/a.ts",
+    "old_string": "a",
+    "new_string": "b"
+  },
+  "tool_use_id": "toolu_1"
+}

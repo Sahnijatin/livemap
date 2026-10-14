@@ -1,0 +1,160 @@
+// @vitest-environment jsdom
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import type { AgentEvent } from '@shared/types.js';
+import { useStore } from '../store';
+import { change, event, session } from '../fixtures';
+import { Activity } from './Activity';
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+let host: HTMLDivElement;
+let root: Root;
+
+const T = Date.now() - 30_000;
+const s1 = session({ id: 's1', title: 'Add an orders page', status: 'working', startedAt: T - 1000 });
+const events: AgentEvent[] = [
+  event({ id: 1, at: T, type: 'prompt', text: 'Add an orders page with filters' }),
+  event({ id: 2, at: T + 1000, type: 'message', text: 'I will add an order service first.' }),
+  event({ id: 3, at: T + 2000, type: 'tool_start', tool: { id: 't1', name: 'Read', label: 'Read src/db.ts', paths: ['src/db.ts'] } }),
+  event({ id: 4, at: T + 2500, type: 'tool_end', tool: { id: 't1', name: 'Read', label: 'Read src/db.ts', ok: true, output: 'export const db = {}', paths: ['src/db.ts'] } }),
+  event({ id: 5, at: T + 9000, type: 'tool_start', tool: { id: 't2', name: 'Bash', label: 'Run npm test', paths: [] } }),
+];
+const created = change('src/orders.ts', 'created', {
+  at: T + 5000,
+  symbols: { added: [{ name: 'createOrder', qname: 'createOrder', kind: 'function', signature: 'createOrder()', line: 1 }], removed: [], modified: [] },
+  lines: { added: 12, removed: 0 },
+  hunks: [{ oldStart: 0, newStart: 1, lines: ['+export function createOrder() {}'] }],
+  attribution: { agent: 'claude-code', sessionId: 's1', confidence: 'exact', eventId: 3, intent: 'Add an order service' },
+});
+
+function mount() {
+  useStore.getState().apply({
+    type: 'hello', root: '/p/shop', name: 'shop', files: [], changes: [created], usedBy: [], indexing: false,
+    events, sessions: [s1], control: { paused: false, flags: [] },
+  });
+  act(() => root.render(<Activity />));
+}
+
+beforeEach(() => {
+  useStore.getState().reset();
+  host = document.createElement('div');
+  document.body.appendChild(host);
+  root = createRoot(host);
+});
+
+afterEach(() => {
+  act(() => root.unmount());
+  host.remove();
+});
+
+describe('Activity', () => {
+  it('shows the prompt bubble and a turn header with the session title', () => {
+    mount();
+    expect(host.querySelector('.f-prompt')?.textContent).toContain('Add an orders page with filters');
+    const header = host.querySelector('.turn-h');
+    expect(header?.textContent).toContain('Add an orders page');
+    expect(header?.textContent).toContain('Claude Code');
+  });
+
+  it('shows a spinner for a running tool and an ok icon for a finished one', () => {
+    mount();
+    const tools = [...host.querySelectorAll('.f-tool')];
+    const running = tools.find(t => t.textContent?.includes('Run npm test'))!;
+    expect(running.querySelector('[role="status"]')).not.toBeNull();
+    const done = tools.find(t => t.textContent?.includes('Read src/db.ts'))!;
+    expect(done.querySelector('.ok')).not.toBeNull();
+    expect(done.querySelector('[role="status"]')).toBeNull();
+    // tool_start and tool_end pair into one row
+    expect(tools.filter(t => t.textContent?.includes('Read src/db.ts'))).toHaveLength(1);
+  });
+
+  it('renders a change card from its facts with an exact badge; clicking selects the file', () => {
+    mount();
+    const card = host.querySelector('.f-chg')!;
+    expect(card.textContent).toContain('Added createOrder');
+    expect(card.querySelector('.ag-badge')?.textContent).toMatch(/exact/i);
+    act(() => (card.querySelector('.ch') as HTMLElement).click());
+    expect(useStore.getState().selected).toBe('src/orders.ts');
+  });
+
+  it('orders the feed by time, merging events and changes', () => {
+    mount();
+    const order = [...host.querySelectorAll('.f-prompt, .f-msg, .f-tool, .f-chg')].map(n => n.className.split(' ').find(c => c.startsWith('f-')));
+    expect(order).toEqual(['f-prompt', 'f-msg', 'f-tool', 'f-chg', 'f-tool']);
+  });
+
+  it('types only messages that arrive live, never replayed ones', () => {
+    mount();
+    expect(host.querySelector('.f-msg')).not.toBeNull();
+    expect(host.querySelector('.typing')).toBeNull();
+    act(() => useStore.getState().apply({ type: 'agentEvent', event: event({ id: 6, at: Date.now(), type: 'message', text: 'Done. The orders page is live.' }) }));
+    expect(host.querySelectorAll('.f-msg')).toHaveLength(2);
+    expect(host.querySelectorAll('.typing')).toHaveLength(1);
+  });
+
+  it('computes hero counters from change facts', () => {
+    mount();
+    const stats = [...host.querySelectorAll('.hero .stat')].map(s => s.textContent);
+    expect(stats).toEqual(['1new files', '1functions', '0routes', '0tables']);
+    expect(host.querySelector('.hero h3')?.textContent).toBe('Run npm test');
+    // A message while the tool still runs does not hide it.
+    act(() => useStore.getState().apply({ type: 'agentEvent', event: event({ id: 7, at: Date.now(), type: 'message', text: 'Running the tests.' }) }));
+    expect(host.querySelector('.hero h3')?.textContent).toBe('Run npm test');
+  });
+
+  it('keeps the first group and its expanded rows when new events shift a feed past 500 items', () => {
+    const many: AgentEvent[] = [];
+    for (let i = 1; i <= 600; i++) many.push(event({ id: 1000 + i, at: T + i, type: 'message', text: `step ${i}` }));
+    many.push(event({ id: 1601, at: T + 601, type: 'thinking', text: 'Considering the schema' }));
+    useStore.getState().apply({
+      type: 'hello', root: '/p/shop', name: 'shop', files: [], changes: [], usedBy: [], indexing: false,
+      events: many, sessions: [s1], control: { paused: false, flags: [] },
+    });
+    act(() => root.render(<Activity />));
+    expect(host.querySelectorAll('.f-msg')).toHaveLength(499);
+    const turn = host.querySelector('.turn');
+    act(() => (host.querySelector('.f-think button') as HTMLElement).click());
+    expect(host.querySelector('.f-think.open')).not.toBeNull();
+    act(() => useStore.getState().apply({ type: 'agentEvent', event: event({ id: 1602, at: T + 602, type: 'message', text: 'next' }) }));
+    expect(host.querySelector('.turn')).toBe(turn);
+    expect(host.querySelector('.f-think.open')).not.toBeNull();
+    expect(host.querySelector('.earlier')?.textContent).toContain('102 more');
+  });
+
+  const mountWith = (extra: AgentEvent[], sessions = [s1], paused = false) => {
+    useStore.getState().apply({
+      type: 'hello', root: '/p/shop', name: 'shop', files: [], changes: [], usedBy: [], indexing: false,
+      events: extra, sessions, control: { paused, flags: [] },
+    });
+    act(() => root.render(<Activity />));
+  };
+
+  it('I1: a blocked tool shows a cross, not a spinner', () => {
+    mountWith([
+      event({ id: 3001, at: T, type: 'tool_start', agent: 'codex', tool: { id: 'b1', name: 'apply_patch', label: 'Patch src/a.ts', paths: ['src/a.ts'] } }),
+      event({ id: 3002, at: T, type: 'tool_end', agent: 'codex', tool: { id: 'b1', name: 'apply_patch', label: 'Patch src/a.ts', ok: false, output: 'Blocked by LiveMap', paths: ['src/a.ts'] } }),
+    ]);
+    const row = host.querySelector('.f-tool')!;
+    expect(row.querySelector('.bad')).not.toBeNull();
+    expect(row.querySelector('[role="status"]')).toBeNull();
+  });
+
+  it('M8: a finished tool with unknown ok shows a neutral icon, not a green check', () => {
+    mountWith([
+      event({ id: 3011, at: T, type: 'tool_start', agent: 'cursor', tool: { id: 'c1', name: 'Read', label: 'Read a.ts', paths: [] } }),
+      event({ id: 3012, at: T + 10, type: 'tool_end', agent: 'cursor', tool: { id: 'c1', name: 'Read', label: 'Read a.ts', paths: [] } }),
+    ]);
+    const row = host.querySelector('.f-tool')!;
+    expect(row.querySelector('.ok')).toBeNull();
+    expect(row.querySelector('.bad')).toBeNull();
+    expect(row.querySelector('.fin')?.getAttribute('aria-label')).toBe('Finished');
+  });
+
+  it('I3: an unhooked session is never shown paused', () => {
+    mountWith([], [session({ id: 'u', hooks: false, status: 'working' })], true);
+    expect(host.querySelector('.hero')?.className).not.toContain('paused');
+    expect(host.querySelector('.hero .lbl')?.textContent).not.toContain('Paused');
+  });
+});

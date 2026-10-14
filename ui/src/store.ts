@@ -1,8 +1,9 @@
 import { create } from 'zustand';
 import type { ServerMessage, UsedByEntry } from '@shared/protocol.js';
-import type { ChangeSummary, FileModel } from '@shared/types.js';
+import type { AgentEvent, AgentSession, ChangeSummary, ControlState, FileModel } from '@shared/types.js';
 
 export const MAX_CHANGES = 2000;
+export const MAX_EVENTS = 2000;
 
 export type RecentKind = 'created' | 'modified';
 export type ConnectionState = 'connecting' | 'open' | 'closed' | 'unauthorized';
@@ -29,6 +30,14 @@ export interface StoreState {
   reveal: { path: string; line: number; seq: number } | null;
   /** Narrow layouts: which slide-over panel is open. */
   panel: 'files' | 'inspector' | null;
+  /** Agent activity: the last 2,000 events, sessions by id, and pause and flag state. */
+  events: AgentEvent[];
+  sessions: Record<string, AgentSession>;
+  control: ControlState;
+  /** The newest event id replayed by the last hello; later ids arrived live. */
+  liveAfterId: number;
+  /** A short message shown at the top of the window (seq makes repeats fire). */
+  toast: { text: string; tone: 'info' | 'error'; seq: number } | null;
 
   apply(msg: ServerMessage): void;
   select(path: string | null): void;
@@ -38,6 +47,7 @@ export interface StoreState {
   revealLine(path: string, line: number): void;
   clearReveal(): void;
   setPanel(panel: StoreState['panel']): void;
+  showToast(text: string, tone?: 'info' | 'error'): void;
   reset(): void;
 }
 
@@ -58,6 +68,11 @@ const initial = {
   filter: '',
   reveal: null,
   panel: null,
+  events: [],
+  sessions: {},
+  control: { paused: false, flags: [] } as ControlState,
+  liveAfterId: 0,
+  toast: null,
 };
 
 /** Files after upserting and removing; clears the selection if its file is gone. */
@@ -87,7 +102,15 @@ export const useStore = create<StoreState>()((set, get) => ({
         const recent: StoreState['recent'] = {};
         for (const c of changes) recordRecent(recent, c);
         const { selected } = get();
+        // Tolerate a hello without agent fields (agent activity unavailable).
+        const events = (msg.events ?? []).slice(-MAX_EVENTS);
+        const sessions: Record<string, AgentSession> = {};
+        for (const x of msg.sessions ?? []) sessions[x.id] = x;
         set({
+          events,
+          sessions,
+          control: msg.control ?? { paused: false, flags: [] },
+          liveAfterId: events.reduce((m, e) => Math.max(m, e.id), 0),
           loaded: true,
           helloAt: Date.now(),
           root: msg.root,
@@ -121,6 +144,28 @@ export const useStore = create<StoreState>()((set, get) => ({
       case 'indexing':
         set({ indexing: { done: msg.done, total: msg.total } });
         return;
+      case 'agentEvent': {
+        const prev = get().events;
+        set({ events: prev.length >= MAX_EVENTS ? [...prev.slice(prev.length - MAX_EVENTS + 1), msg.event] : [...prev, msg.event] });
+        return;
+      }
+      case 'session':
+        set({ sessions: { ...get().sessions, [msg.session.id]: msg.session } });
+        return;
+      case 'control':
+        set({ control: msg.control });
+        return;
+      case 'attribution': {
+        const prev = get().changes;
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i].id !== msg.changeId) continue;
+          const changes = prev.slice();
+          changes[i] = { ...prev[i], attribution: msg.attribution };
+          set({ changes });
+          return;
+        }
+        return;
+      }
     }
   },
 
@@ -154,7 +199,11 @@ export const useStore = create<StoreState>()((set, get) => ({
     set({ panel });
   },
 
+  showToast(text, tone = 'info') {
+    set({ toast: { text, tone, seq: (get().toast?.seq ?? 0) + 1 } });
+  },
+
   reset() {
-    set({ ...initial, files: {}, changes: [], usedBy: [], recent: {}, expanded: {} });
+    set({ ...initial, files: {}, changes: [], usedBy: [], recent: {}, expanded: {}, events: [], sessions: {}, control: { paused: false, flags: [] } });
   },
 }));

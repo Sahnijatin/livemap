@@ -70,7 +70,8 @@ function isCode(suffix: string): boolean {
  */
 export function isSecretEnvPath(path: string): boolean {
   // Editor backups (`.env~`) and autosaves (`#.env#`) hold the same values as the file itself.
-  const b = baseName(path).toLowerCase().replace(/^#(.*)#$/, '$1').replace(/~+$/, '');
+  // Agents on Windows send backslash paths: take the name after either separator.
+  const b = baseName(path.replace(/\\/g, '/')).toLowerCase().replace(/^#(.*)#$/, '$1').replace(/~+$/, '');
   if (SECRET_NAMES.has(b)) return true;
   const prefixed = /^\.(?:envrc|env|npmrc|netrc|pypirc)([._-].*)$/.exec(b);
   if (prefixed) return !endsAsExample(prefixed[1]) && b !== '.env.d.ts';

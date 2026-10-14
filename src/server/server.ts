@@ -4,10 +4,13 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { ProjectModel } from '../engine/project.js';
 import type { Watcher } from '../engine/watcher.js';
+import type { AgentHub } from '../agents/hub.js';
+import type { Attributor } from '../agents/attribution.js';
 import { buildUsedBy, type TokenCache } from '../engine/usedby.js';
 import type { ServerMessage, UsedByEntry } from '../shared/protocol.js';
-import type { ChangeSummary, FileModel } from '../shared/types.js';
+import type { AgentEvent, AgentSession, Attribution, ChangeSummary, ControlState, FileModel } from '../shared/types.js';
 import { authenticate, hostAllowed, newToken, originAllowed } from './auth.js';
+import { handleControlApi, handleHook } from './agent-routes.js';
 import { serveStatic } from './static.js';
 
 export interface ServerOptions {
@@ -17,6 +20,10 @@ export interface ServerOptions {
   port?: number;
   uiDir: string;
   token?: string;
+  /** Agent activity. Without it the agent routes answer 503 and hello carries empty agent fields. */
+  hub?: AgentHub;
+  /** Links file changes to agent actions; changes go out unattributed without it. */
+  attributor?: Attributor;
   /** Security warnings for the person running LiveMap (the CLI prints them to stderr). */
   warn?: (message: string) => void;
 }
@@ -47,6 +54,7 @@ export const DEFAULT_PORT = 4317;
 export const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
 const PORT_TRIES = 20;
 const MAX_CHANGES = 500;
+const HELLO_EVENTS = 500;
 const USED_BY_INTERVAL_MS = 1000;
 const INDEXING_INTERVAL_MS = 100;
 const WS_UNAUTHORIZED = 4401;
@@ -136,7 +144,7 @@ function reject(socket: Duplex, status: number, text: string): void {
 }
 
 export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
-  const { model, watcher, uiDir } = opts;
+  const { model, watcher, uiDir, hub, attributor } = opts;
   const token = opts.token ?? newToken();
   const name = path.basename(model.root);
 
@@ -168,6 +176,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   };
   const hello = (): ServerMessage => ({
     type: 'hello', root: model.root, name, files: model.all(), changes: [...changes], usedBy, indexing: false,
+    events: hub ? hub.events(HELLO_EVENTS) : [], sessions: hub ? hub.sessions() : [], control: hub ? hub.control.state() : { paused: false, flags: [] },
   });
   const computeUsedBy = (): void => {
     usedByAt = Date.now();
@@ -184,6 +193,12 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   };
 
   const onChange = (change: ChangeSummary, touched: FileModel[]): void => {
+    if (attributor) {
+      try {
+        const attribution = attributor.attribute(change);
+        if (attribution) change = { ...change, attribution };
+      } catch { /* attribution is best effort */ }
+    }
     changes.push(change);
     if (changes.length > MAX_CHANGES) changes.splice(0, changes.length - MAX_CHANGES);
     if (!isReady) return; // hello will carry the state
@@ -206,6 +221,20 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   };
   watcher.on('reset', onReset);
 
+  // Before ready(), hello carries the agent state, so live agent messages wait for it.
+  const onEvent = (event: AgentEvent): void => { if (isReady) broadcast({ type: 'agentEvent', event }); };
+  const onSession = (session: AgentSession): void => { if (isReady) broadcast({ type: 'session', session }); };
+  const onControl = (control: ControlState): void => { if (isReady) broadcast({ type: 'control', control }); };
+  const onLate = (changeId: number, attribution: Attribution): void => {
+    const i = changes.findIndex(c => c.id === changeId);
+    if (i !== -1) changes[i] = { ...changes[i], attribution };
+    if (isReady) broadcast({ type: 'attribution', changeId, attribution });
+  };
+  hub?.on('event', onEvent);
+  hub?.on('session', onSession);
+  hub?.control.on('change', onControl);
+  attributor?.on('late', onLate);
+
   const handle = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
     if (!hostAllowed(req)) return json(res, 403, { error: 'forbidden host' });
     let url: URL;
@@ -214,9 +243,12 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     } catch {
       return json(res, 400, { error: 'bad request' });
     }
+    const reply = (status: number, body: unknown, extra?: Record<string, string>) => json(res, status, body, extra);
+    if (url.pathname === '/hook') return handleHook(req, res, reply, token, hub);
     // The UI shell is static and holds no project data, so it loads without a token (a reload has
     // none in its URL); the page then sends the token it kept in sessionStorage with every request.
     if (isApiPath(url.pathname) && !authenticate(req, url, token)) return json(res, 401, { error: 'unauthorized' });
+    if (await handleControlApi(req, res, reply, url.pathname, hub, originAllowed(req))) return;
     if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method not allowed' }, { allow: 'GET, HEAD' });
 
     // Only a real navigation spends a launch code: a HEAD, link check or browser prefetch/prerender
@@ -315,6 +347,10 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     },
     async close(): Promise<void> {
       watcher.off('change', onChange);
+      hub?.off('event', onEvent);
+      hub?.off('session', onSession);
+      hub?.control.off('change', onControl);
+      attributor?.off('late', onLate);
       watcher.off('touched', onTouched);
       watcher.off('reset', onReset);
       if (usedByTimer) clearTimeout(usedByTimer);

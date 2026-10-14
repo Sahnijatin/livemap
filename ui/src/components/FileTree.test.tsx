@@ -15,7 +15,7 @@ let root: Root;
 let renders: string[];
 
 const hello = (files: ReturnType<typeof file>[]) => ({
-  type: 'hello' as const, root: '/p/shop', name: 'shop', files, changes: [], usedBy: [], indexing: false,
+  type: 'hello' as const, root: '/p/shop', name: 'shop', files, changes: [], usedBy: [], indexing: false, events: [], sessions: [], control: { paused: false, flags: [] },
 });
 const rows = () => host.querySelectorAll('.frow').length;
 

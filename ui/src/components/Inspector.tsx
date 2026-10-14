@@ -1,11 +1,15 @@
 import { useMemo } from 'react';
 import clsx from 'clsx';
-import type { FileModel } from '@shared/types.js';
+import type { ChangeSummary, FileModel } from '@shared/types.js';
 import { useStore } from '../store';
 import { LAYERS, layerOf } from '../layers';
-import { countSymbols, flattenSymbols, latestChange, symbolTags } from '../changes';
-import { baseName, isRecent, useNow } from '../recent';
+import { flattenSymbols, latestChange, symbolTags } from '../changes';
+import { agentName, clock } from '../agents';
+import { baseName } from '../recent';
 import { CodeView } from './CodeView';
+import { FlagBox } from './FlagBox';
+import { LiveSession } from './LiveSession';
+import { Avatar } from './Avatar';
 import { KindBadge, LayerTile, layerVars } from './icons';
 
 function FileChip({ path, note }: { path: string; note?: string }) {
@@ -19,48 +23,38 @@ function FileChip({ path, note }: { path: string; note?: string }) {
   );
 }
 
-function Overview() {
-  const files = useStore(s => s.files);
-  const recent = useStore(s => s.recent);
+const MAX_WHY = 12;
+
+/** This file's changes, newest first, each with the intent of the agent step that made it. */
+function WhyItChanged({ path }: { path: string }) {
   const changes = useStore(s => s.changes);
-  const connected = useStore(s => s.connected);
-  const select = useStore(s => s.select);
-  const now = useNow();
-  const list = Object.values(files);
-  const symbols = useMemo(() => list.reduce((n, f) => n + countSymbols(f.symbols), 0), [files]);
-  const recentPaths = Object.entries(recent)
-    .filter(([p]) => files[p])
-    .sort((a, b) => b[1].at - a[1].at)
-    .slice(0, 8);
-  const stats: [number, string][] = [
-    [list.length, 'Files'],
-    [symbols, 'Symbols'],
-    [changes.length, 'Changes seen'],
-    [list.filter(f => f.flags.parseError).length, 'Parse errors'],
-  ];
+  const list = useMemo(() => {
+    const out: ChangeSummary[] = [];
+    for (let i = changes.length - 1; i >= 0 && out.length < MAX_WHY; i--) if (changes[i].path === path) out.push(changes[i]);
+    return out;
+  }, [changes, path]);
   return (
-    <>
-      <div className="live-h"><h3>Overview</h3>{connected && <span className="livetag"><i />Live</span>}</div>
-      <div className="mstats">
-        {stats.map(([v, l]) => <div className="mstat" key={l}><b>{v.toLocaleString()}</b><span>{l}</span></div>)}
-      </div>
-      <div className="sec">
-        <h4>Recently changed</h4>
-        <div className="recent">
-          {recentPaths.length ? recentPaths.map(([p, r]) => {
-            const f = files[p];
+    <div className="sec">
+      <h4>Why it changed</h4>
+      {list.length ? (
+        <div className="why">
+          {list.map(c => {
+            const a = c.attribution;
+            const verb = c.kind === 'created' ? 'Created' : c.kind === 'deleted' ? 'Deleted' : 'Edited';
             return (
-              <button type="button" className="rrow fi" key={p} onClick={() => select(p)} title={p}>
-                <LayerTile layer={layerOf(p, f)} />
-                <code>{baseName(p)}</code>
-                {isRecent(r, now) && <span className={clsx('badge', r.kind === 'created' ? 'b-new' : 'b-edit')}>{r.kind === 'created' ? 'New' : 'Edited'}</span>}
-              </button>
+              <div className="hrow fi" key={c.id}>
+                <span className="t">{clock(c.at)}</span>
+                {a ? <Avatar agent={a.agent} /> : <span className="av av-none" aria-hidden="true" />}
+                <span className="hx">
+                  {a ? <><b>{verb}</b> by {agentName(a.agent)}{a.confidence === 'likely' ? ' (likely)' : ''}</> : <><b>{verb}</b>. Changed outside an agent</>}
+                  {a?.intent && <q>{a.intent}</q>}
+                </span>
+              </div>
             );
-          }) : <div className="muted">Nothing yet. Edits show up here as they happen.</div>}
+          })}
         </div>
-      </div>
-      <div className="muted" style={{ fontSize: 12 }}>Select any file to see what is inside it, what it connects to, and the code that changed.</div>
-    </>
+      ) : <div className="muted">No changes since LiveMap started.</div>}
+    </div>
   );
 }
 
@@ -94,7 +88,7 @@ function FileDetail({ file }: { file: FileModel }) {
 
   return (
     <>
-      <button type="button" className="backbtn" onClick={() => select(null)}>‹ Overview</button>
+      <button type="button" className="backbtn" onClick={() => select(null)}>‹ Live session</button>
       <div className="sh-head">
         <LayerTile layer={layer} className="ic" />
         <div style={{ minWidth: 0 }}>
@@ -166,6 +160,9 @@ function FileDetail({ file }: { file: FileModel }) {
         <h4>Code{change && change.kind !== 'deleted' ? ` · +${change.lines.added} −${change.lines.removed} in the last change` : ''}</h4>
         <CodeView file={file} change={change} />
       </div>
+
+      <WhyItChanged path={file.path} />
+      <FlagBox key={file.path} target={file.path} />
     </>
   );
 }
@@ -177,7 +174,7 @@ export function Inspector() {
   return (
     <aside className={clsx('insp glass', panel === 'inspector' && 'open')} aria-label="Inspector">
       <div className="ins-scroll ins-swap" key={selected ?? '__overview'}>
-        {file ? <FileDetail file={file} /> : <Overview />}
+        {file ? <FileDetail file={file} /> : <LiveSession />}
       </div>
     </aside>
   );

@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
-import { execSync, spawn, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildOnce } from './build.js';
 import WebSocket from 'ws';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -40,9 +41,7 @@ function getStatus(url: string): Promise<number> {
   });
 }
 
-beforeAll(() => {
-  execSync('npm run build', { cwd: repo, stdio: 'ignore' });
-}, 120_000);
+beforeAll(buildOnce, 120_000);
 
 beforeEach(() => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-cli-')));

@@ -1,0 +1,8 @@
+{"type":"user","uuid":"u1","timestamp":"__NOW__","sessionId":"s1","cwd":"__ROOT__","isSidechain":false,"message":{"role":"user","content":"Add a status filter\n<system-reminder>x</system-reminder>"}}
+{"type":"user","uuid":"u2","timestamp":"__NOW__","sessionId":"s1","isSidechain":false,"isMeta":true,"message":{"role":"user","content":"meta caveat"}}
+{"type":"assistant","uuid":"a1","timestamp":"__NOW__","sessionId":"s1","isSidechain":false,"message":{"role":"assistant","content":[{"type":"thinking","thinking":"Need a filter"},{"type":"text","text":"I'll add a status filter"}]}}
+{"type":"assistant","uuid":"a2","timestamp":"__NOW__","sessionId":"s1","isSidechain":false,"message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Edit","input":{"file_path":"__ROOT__/src/a.ts","old_string":"a","new_string":"b"}}]}}
+{"type":"user","uuid":"u3","timestamp":"__NOW__","sessionId":"s1","isSidechain":false,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":[{"type":"text","text":"edited"},{"type":"text","text":"ok"}],"is_error":false}]}}
+{"type":"attachment","uuid":"t1","timestamp":"__NOW__","sessionId":"s1","attachment":{"type":"x"}}
+{"type":"assistant","uuid":"a3","timestamp":"__NOW__","sessionId":"s1","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"sub work"}]}}
+{"type":
