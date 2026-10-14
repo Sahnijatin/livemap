@@ -136,8 +136,11 @@ test('agent flow: transcript, attribution, flags, pause, cursor and git', async 
   const msg = feed(page).locator('.f-msg');
   await expect(msg).toBeVisible({ timeout: 2000 });
   expect(Date.now() - t0).toBeLessThanOrEqual(2000);
-  // A live message types itself out over about 1.2 s.
-  await expect(msg).toContainText(MESSAGE, { timeout: 2000 });
+  // A live message types itself out over about 1.2 s; compare the paragraph (not the avatar) once typing ends.
+  const prose = msg.locator('.prose');
+  await expect(prose).toHaveClass(/\btyping\b/);
+  await expect(prose).not.toHaveClass(/\btyping\b/, { timeout: 5000 });
+  await expect(prose.locator('p')).toHaveText(MESSAGE);
   await expect(chip(page, 'Claude Code')).toBeVisible();
   await page.screenshot({ path: 'test-results/agents-dark-1-claude-feed.png' });
 
