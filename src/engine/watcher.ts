@@ -104,6 +104,7 @@ export class Watcher extends EventEmitter {
       this.schedule('ignores', async () => {
         const paths = [...this.gitignores].sort();
         this.gitignores.clear();
+        if (paths.length === 0) return []; // an earlier queued job already took this batch
         const { files, removed, dirs } = await this.model.reloadIgnores(paths);
         // Directories that were ignored when chokidar crawled were never watched.
         if (dirs.length) this.fsw?.add(dirs.map(d => path.join(this.model.root, ...d.split('/'))));
@@ -125,7 +126,7 @@ export class Watcher extends EventEmitter {
   private onDir(p: string): void {
     const rel = this.rel(p);
     if (!rel || this.model.ignored(rel, true)) return;
-    this.schedule(`d:${rel}`, () => this.model.removeDir(rel));
+    this.schedule(`d:${rel}`, deferRelink => this.model.removeDir(rel, { deferRelink }));
   }
 
   private schedule(key: string, job: (deferRelink: boolean) => Promise<UpdateResult[]>): void {

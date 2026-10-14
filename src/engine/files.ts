@@ -125,13 +125,15 @@ function readGitignore(dir: string): string {
 }
 
 /**
- * Every non-ignored regular file (sorted) and every directory visited below the root. Passing a
- * matcher from createIgnore lets the walk tell it which directories have no .gitignore.
+ * Every non-ignored regular file (sorted) and every directory visited, under the root or only
+ * under the `from` directories. Passing a matcher from createIgnore lets the walk tell it which
+ * directories have no .gitignore.
  */
 export async function walk(
   root: string,
   ignored: ((rel: string, isDir: boolean) => boolean) & { prime?: IgnoreFn['prime'] },
   limit = 25000,
+  from: string[] = [''],
 ): Promise<{ files: string[]; dirs: string[]; truncated: boolean }> {
   const files: string[] = [];
   const dirs: string[] = [];
@@ -161,7 +163,10 @@ export async function walk(
     }
   }
 
-  await visit('');
+  for (const dir of from) {
+    if (dir === '') await visit('');
+    else if (!ignored(dir, true)) { dirs.push(dir); await visit(dir); }
+  }
   files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   return { files, dirs, truncated };
 }

@@ -293,4 +293,24 @@ describe('Watcher', () => {
     await sleep(100);
     expect(relink.mock.calls.length).toBeLessThanOrEqual(2);
   });
+
+  it('a .gitignore batch already taken by a running reload does not trigger a full reload', async () => {
+    put('a/.gitignore', 'x/\n');
+    put('b/.gitignore', 'x/\n');
+    await startWatcher();
+    const update = model.update.bind(model);
+    vi.spyOn(model, 'update').mockImplementation(async (...args) => {
+      if (args[0] === 'slow.ts') await sleep(400);
+      return update(...args);
+    });
+    const reload = vi.spyOn(model, 'reloadIgnores');
+    put('slow.ts', 'export const s = 1;\n'); // keeps the queue busy
+    await sleep(250);
+    put('a/.gitignore', 'y/\n');
+    await sleep(180); // the ignores job is queued behind slow.ts
+    put('b/.gitignore', 'y/\n');
+    await waitFor(() => changes.filter(c => c.change.path.endsWith('.gitignore')).length >= 2, 5000);
+    await sleep(400);
+    for (const call of reload.mock.calls) expect(call[0]).not.toEqual([]);
+  });
 });

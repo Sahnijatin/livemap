@@ -49,10 +49,11 @@ export function buildIndex(files: string[]): FileIndex {
   return idx;
 }
 
-function insertSorted(list: string[], f: string): void {
+/** Where f is, or would be inserted, in a sorted list. */
+function lowerBound(list: string[], f: string): number {
   let lo = 0, hi = list.length;
   while (lo < hi) { const mid = (lo + hi) >> 1; if (list[mid] < f) lo = mid + 1; else hi = mid; }
-  if (list[lo] !== f) list.splice(lo, 0, f);
+  return lo;
 }
 
 /** Adds (or removes) one file, keeping the lists sorted as buildIndex makes them. */
@@ -60,11 +61,14 @@ export function indexUpdate(idx: FileIndex, f: string, present: boolean): void {
   const [dir, base] = splitPath(f);
   for (const [map, key] of [[idx.byDir, dir], [idx.byBase, base]] as const) {
     const list = map.get(key);
-    if (present) {
-      if (list) insertSorted(list, f); else map.set(key, [f]);
-    } else if (list) {
-      const i = list.indexOf(f);
-      if (i >= 0) list.splice(i, 1);
+    if (!list) {
+      if (present) map.set(key, [f]);
+      continue;
+    }
+    const i = lowerBound(list, f);
+    if (present && list[i] !== f) list.splice(i, 0, f);
+    else if (!present && list[i] === f) {
+      list.splice(i, 1);
       if (!list.length) map.delete(key);
     }
   }

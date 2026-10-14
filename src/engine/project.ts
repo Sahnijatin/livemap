@@ -117,8 +117,7 @@ export class ProjectModel {
       if (setChanged || CONFIG_FILES.has(rel)) {
         // Config (aliases, Go module) changes resolution for every file, so it relinks at once.
         if (opts.deferRelink && !CONFIG_FILES.has(rel)) {
-          if (!this.relinkPending) this.ctx = this.liveCtx(); // first deferral of a burst
-          this.relinkPending = true;
+          this.deferRelink();
         } else {
           result.touched = this.relink([rel]);
           result.after = this.files.get(rel) ?? null;
@@ -132,7 +131,7 @@ export class ProjectModel {
    * One `deleted` result per known file under relDir that is gone from disk. Imports are re-resolved once for the whole
    * directory, so the combined `touched` list is on the LAST result; consumers merge across the array.
    */
-  removeDir(relDir: string): Promise<UpdateResult[]> {
+  removeDir(relDir: string, opts: { deferRelink?: boolean } = {}): Promise<UpdateResult[]> {
     return this.serial(async () => {
       const prefix = relDir.replace(/\/+$/, '') + '/';
       const under = [...this.files.keys()].filter(p => p.startsWith(prefix)).sort(cmp);
@@ -146,8 +145,10 @@ export class ProjectModel {
       }
       const results: UpdateResult[] = [];
       for (const rel of gone) results.push((await this.apply(rel, null))!.result);
-      // One import re-resolution for the whole directory; touched goes on the last result.
-      if (results.length) results[results.length - 1].touched = this.relink(gone);
+      // One import re-resolution for the whole directory (or, deferred, for the whole burst);
+      // touched goes on the last result.
+      if (results.length && opts.deferRelink) this.deferRelink();
+      else if (results.length) results[results.length - 1].touched = this.relink(gone);
       return results;
     });
   }
@@ -165,13 +166,18 @@ export class ProjectModel {
       const old = this.isIgnored;
       const changedDirs = changed.map(parentDir);
       this.isIgnored = changed.length ? createIgnore(this.root, { previous: old, changed: changedDirs }) : createIgnore(this.root);
+      // A nested .gitignore only affects its own subtree; the root one affects everything.
+      const roots = !changed.length || changedDirs.includes('')
+        ? ['']
+        : [...new Set(changedDirs)].filter((d, _, all) => !all.some(o => o !== d && d.startsWith(`${o}/`)));
+      const within = (rel: string): boolean => roots.some(d => d === '' || rel.startsWith(`${d}/`));
       const removed: string[] = [];
       for (const rel of [...this.files.keys()].sort(cmp)) {
-        if (!this.isIgnored(rel, false)) continue;
+        if (!within(rel) || !this.isIgnored(rel, false)) continue;
         this.apply(rel, null);
         removed.push(rel);
       }
-      const walked = await walk(this.root, this.isIgnored, this.limit);
+      const walked = await walk(this.root, this.isIgnored, this.limit, roots);
       const included = new Set(walked.dirs.filter(d => old(d, true)));
       const dirs = [...included].filter(d => {
         for (let p = parentDir(d); p; p = parentDir(p)) if (included.has(p)) return false;
@@ -192,6 +198,12 @@ export class ProjectModel {
       for (const f of touched) byPath.set(f.path, f);
       return { files: [...byPath.values()].sort((x, y) => cmp(x.path, y.path)), removed, dirs };
     });
+  }
+
+  /** Marks the file set changed; the rest of the burst resolves against the live set. */
+  private deferRelink(): void {
+    if (!this.relinkPending) this.ctx = this.liveCtx(); // first deferral of a burst
+    this.relinkPending = true;
   }
 
   /** Runs a deferred re-resolution, if any; returns the files whose local imports changed. */

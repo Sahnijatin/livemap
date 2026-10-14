@@ -419,4 +419,35 @@ describe('ProjectModel fix round 1', () => {
     expect(m.ignored('sub/a.txt')).toBe(true);
     expect(m.get('sub/a.txt')).toBeUndefined();
   });
+
+  it('a nested .gitignore change walks only its own subtree', async () => {
+    put('pkg/.gitignore', 'gen/\n');
+    put('pkg/gen/x.ts', 'export const x = 1;\n');
+    put('other/deep/y.ts', 'export const y = 1;\n');
+    const m = await scanned();
+    put('pkg/.gitignore', '# nothing\n');
+    const readdir = vi.spyOn(fsp, 'readdir');
+    try {
+      const r = await m.reloadIgnores(['pkg/.gitignore']);
+      expect(r.files.map(f => f.path)).toEqual(['pkg/gen/x.ts']);
+      const visited = readdir.mock.calls.map(c => path.relative(root, String(c[0])).split(path.sep).join('/'));
+      expect(visited.some(d => d.startsWith('other'))).toBe(false);
+      expect(visited).toContain('pkg');
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+
+  it('removeDir can defer its relink to flushRelink', async () => {
+    put('lib/x.ts', 'export const x = 1;\n');
+    put('app.ts', "import { x } from './lib/x';\n");
+    const m = await scanned();
+    fs.rmSync(path.join(root, 'lib'), { recursive: true });
+    const rs = await m.removeDir('lib', { deferRelink: true });
+    expect(rs.map(r => r.path)).toEqual(['lib/x.ts']);
+    expect(rs[0].touched).toEqual([]);
+    expect(m.get('app.ts')!.imports.local).toEqual(['lib/x.ts']);
+    expect((await m.flushRelink()).map(f => f.path)).toEqual(['app.ts']);
+    expect(m.get('app.ts')!.imports.local).toEqual([]);
+  });
 });
