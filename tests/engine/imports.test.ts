@@ -30,6 +30,8 @@ describe('extractImports', () => {
   });
   it('java', () => {
     expect(imp('src/main/java/com/shop/App.java','java','import com.shop.Order;\nimport java.util.List;')).toEqual({ local: ['src/main/java/com/shop/Order.java'], external: ['java.util'] });
+    expect(imp('src/main/java/com/App.java','java','import com.shop.*;\nimport java.util.*;')).toEqual({ local: ['src/main/java/com/shop/Order.java'], external: ['java.util'] });
+    expect(imp('src/main/java/com/App.java','java','import static com.shop.Order.*;').local).toEqual(['src/main/java/com/shop/Order.java']);
   });
   it('ruby', () => {
     expect(imp('app.rb','ruby',"require_relative 'lib/util'\nrequire 'json'")).toEqual({ local: ['lib/util.rb'], external: ['json'] });

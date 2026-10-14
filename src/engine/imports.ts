@@ -231,7 +231,7 @@ function rustImports(path: string, src: string, ctx: ImportCtx, local: Set<strin
 }
 
 function jvmImports(src: string, ctx: ImportCtx, ext: string, local: Set<string>, external: Set<string>): void {
-  for (const m of src.matchAll(/^[ \t]*import[ \t]+(?:static[ \t]+)?([\w.]+)(\.\*)?[ \t]*;?/gm)) {
+  for (const m of src.matchAll(/^[ \t]*import[ \t]+(?:static[ \t]+)?(\w+(?:\.\w+)*)(\.\*)?[ \t]*;?/gm)) {
     const parts = m[1].split('.');
     let found = false;
     const idx = indexOf(ctx.files);
@@ -241,7 +241,9 @@ function jvmImports(src: string, ctx: ImportCtx, ext: string, local: Set<string>
         if (dir !== relDir && !dir.endsWith('/' + relDir)) continue;
         for (const f of files) if (f.endsWith(ext)) { local.add(f); found = true; }
       }
-    } else {
+    }
+    // A static wildcard (`import static a.B.*`) names a class, so fall back to class lookup.
+    if (!found) {
       for (let n = parts.length; n >= 1 && !found; n--) {
         const rel = parts.slice(0, n).join('/') + ext;
         const hit = (idx.byBase.get(parts[n - 1] + ext) ?? []).find(f => f === rel || f.endsWith('/' + rel));
