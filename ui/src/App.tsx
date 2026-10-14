@@ -4,7 +4,9 @@ import { useStore } from './store';
 import { Toolbar } from './components/Toolbar';
 import { FileTree } from './components/FileTree';
 import { Inspector } from './components/Inspector';
-import { CenterPlaceholder, Gate } from './components/Empty';
+import { Gate } from './components/Empty';
+import { Activity } from './components/Activity';
+import { Toast } from './components/Toast';
 
 export function App() {
   const panel = useStore(s => s.panel);
@@ -29,11 +31,12 @@ export function App() {
       <div className="app" {...(gated ? { inert: '', 'aria-hidden': true } : {})}>
         <Toolbar />
         <FileTree />
-        <CenterPlaceholder />
+        <Activity />
         <Inspector />
         {/* Inside .app: a fixed .app is its own stacking context, so the slide-over panels sit above this. */}
         <div className={clsx('scrim only-narrow-scrim', panel && 'open')} onClick={() => setPanel(null)} aria-hidden="true" />
       </div>
+      <Toast />
       <Gate />
     </>
   );

@@ -1,4 +1,4 @@
-import type { ChangeSummary, CodeSymbol, FileModel } from '@shared/types.js';
+import type { AgentEvent, AgentSession, ChangeSummary, CodeSymbol, FileModel } from '@shared/types.js';
 
 /** Test helpers: minimal valid models. */
 export function file(path: string, symbols: CodeSymbol[] = [], extra: Partial<FileModel> = {}): FileModel {
@@ -25,4 +25,14 @@ export function change(path: string, kind: ChangeSummary['kind'] = 'modified', e
     lines: { added: 0, removed: 0 }, hunks: [], truncated: false,
     ...extra,
   };
+}
+
+let nextEventId = 1;
+export function event(extra: Partial<AgentEvent> = {}): AgentEvent {
+  return { id: nextEventId++, agent: 'claude-code', sessionId: 's1', at: Date.now(), type: 'message', text: 'Hello', ...extra };
+}
+
+export function session(extra: Partial<AgentSession> = {}): AgentSession {
+  const now = Date.now();
+  return { id: 's1', agent: 'claude-code', title: 'Add orders', cwd: '/p/shop', startedAt: now - 60_000, lastAt: now, status: 'working', hooks: true, ...extra };
 }
