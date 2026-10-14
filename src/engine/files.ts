@@ -37,7 +37,8 @@ export type IgnoreFn = ((rel: string, isDir: boolean) => boolean) & {
  * Built-in ignores plus every `.gitignore` in the tree, each scoped to its own directory as git
  * does: a deeper file's rules win, and nothing under an ignored directory can be re-included.
  * Nested files are read on first use (or skipped when `prime` said there is none) and cached for
- * the life of the matcher. `reuse` keeps a previous matcher's rules except for `changed` dirs.
+ * the life of the matcher. `reuse` keeps a previous matcher's rules, except for `changed` dirs and
+ * dirs it ignored (whose .gitignore edits went unseen).
  */
 export function createIgnore(root: string, reuse?: { previous: IgnoreFn; changed: string[] }): IgnoreFn {
   const top = ignore().add(DEFAULT_IGNORES);
@@ -49,7 +50,10 @@ export function createIgnore(root: string, reuse?: { previous: IgnoreFn; changed
   const levels = new Map<string, Ignore | null>();
   if (reuse) {
     const changed = new Set(reuse.changed);
-    for (const [dir, ig] of reuse.previous.levels) if (dir !== '' && !changed.has(dir)) levels.set(dir, ig);
+    // An ignored directory's .gitignore is not watched, so its cached rules may be stale.
+    for (const [dir, ig] of reuse.previous.levels) {
+      if (dir !== '' && !changed.has(dir) && !reuse.previous(dir, true)) levels.set(dir, ig);
+    }
   }
   levels.set('', top);
   const level = (dir: string): Ignore | null => {

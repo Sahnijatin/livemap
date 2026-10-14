@@ -406,4 +406,17 @@ describe('ProjectModel fix round 1', () => {
     const r = await m.reloadIgnores(['.gitignore']);
     expect(r.dirs).toEqual(['gen', 'logs']);
   });
+
+  it('a directory un-ignored by a reload uses its current .gitignore, not rules cached while it was ignored', async () => {
+    put('sub/.gitignore', '*.log\n');
+    put('sub/a.txt', 'a\n');
+    const m = await scanned();
+    put('.gitignore', 'sub/\n');
+    await m.reloadIgnores(['.gitignore']);
+    put('sub/.gitignore', '*.txt\n'); // no event: sub is ignored
+    put('.gitignore', '# nothing\n');
+    await m.reloadIgnores(['.gitignore']);
+    expect(m.ignored('sub/a.txt')).toBe(true);
+    expect(m.get('sub/a.txt')).toBeUndefined();
+  });
 });
