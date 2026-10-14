@@ -1,3 +1,4 @@
+import type { ApiRoute } from '@shared/domain.js';
 import type { ChangeSummary, CodeSymbol, FileModel } from '@shared/types.js';
 
 export type SymbolTag = 'new' | 'changed';
@@ -67,13 +68,20 @@ const short = (sig: string, name: string) => (sig && sig.length <= 72 ? sig : na
 const fileName = (p: string) => p.slice(p.lastIndexOf('/') + 1);
 const list = (xs: string[], n = 3) => xs.slice(0, n).join(', ') + (xs.length > n ? ` +${xs.length - n}` : '');
 
-/** Plain-language facts for a change card, in reading order: code, routes, tables, imports, packages, env. */
-export function changeFacts(c: ChangeSummary): Fact[] {
+/**
+ * Plain-language facts for a change card, in reading order: code, routes, tables, imports, packages, env.
+ * `routes` (the domain index's routes of this file) gives an added route its full mounted path(s); a route
+ * with no match keeps the file-level path.
+ */
+export function changeFacts(c: ChangeSummary, routes: ApiRoute[] = []): Fact[] {
   const out: Fact[] = [];
   for (const s of c.symbols.added) out.push({ tone: 'add', label: ADD_LABEL[s.kind] ?? 'Added', code: short(s.signature, s.name) });
   for (const s of c.symbols.modified) out.push({ tone: 'chg', label: 'Changed', code: s.signatureChanged ? short(s.signature, s.name) : s.name, note: s.signatureChanged ? 'new signature' : undefined });
   for (const s of c.symbols.removed) out.push({ tone: 'del', label: 'Removed', code: s.name });
-  for (const r of c.routes.added) out.push({ tone: 'rt', label: 'Route', code: `${r.method} ${r.path}`, note: r.handler ? `to ${r.handler}` : undefined });
+  for (const r of c.routes.added) {
+    const full = [...new Set(routes.filter(x => x.file === c.path && x.method === r.method && x.path === r.path).map(x => x.fullPath))];
+    for (const p of full.length ? full : [r.path]) out.push({ tone: 'rt', label: 'Route', code: `${r.method} ${p}`, note: r.handler ? `to ${r.handler}` : undefined });
+  }
   for (const r of c.routes.removed) out.push({ tone: 'del', label: 'Route gone', code: `${r.method} ${r.path}` });
   for (const e of c.entities.added) out.push({ tone: 'db', label: 'Table', code: e.name, note: `${e.fields} ${e.fields === 1 ? 'field' : 'fields'}` });
   for (const e of c.entities.changed) {

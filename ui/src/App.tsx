@@ -5,7 +5,7 @@ import { Toolbar } from './components/Toolbar';
 import { FileTree } from './components/FileTree';
 import { Inspector } from './components/Inspector';
 import { Gate } from './components/Empty';
-import { Activity } from './components/Activity';
+import { CenterTabs } from './components/CenterTabs';
 import { Toast } from './components/Toast';
 
 export function App() {
@@ -31,7 +31,7 @@ export function App() {
       <div className="app" {...(gated ? { inert: '', 'aria-hidden': true } : {})}>
         <Toolbar />
         <FileTree />
-        <Activity />
+        <CenterTabs />
         <Inspector />
         {/* Inside .app: a fixed .app is its own stacking context, so the slide-over panels sit above this. */}
         <div className={clsx('scrim only-narrow-scrim', panel && 'open')} onClick={() => setPanel(null)} aria-hidden="true" />
