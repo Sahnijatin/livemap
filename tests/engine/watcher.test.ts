@@ -347,4 +347,14 @@ describe('Watcher', () => {
     await waitFor(() => reload.mock.calls.length >= 1, 4000);
     expect(reload.mock.calls[0][0]).toEqual(['b/.gitignore']);
   });
+
+  it('a throwing touched listener does not lose the .gitignore change itself', async () => {
+    put('.gitignore', 'gen/\n');
+    put('gen/x.ts', 'export const x = 1;\n');
+    const w = await startWatcher();
+    w.on('touched', () => { throw new Error('listener failed'); });
+    put('.gitignore', '# nothing\n');
+    await waitFor(() => changes.some(c => c.change.path === '.gitignore'), 4000);
+    expect(errors.map(e => e.message)).toContain('listener failed');
+  });
 });

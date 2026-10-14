@@ -119,7 +119,10 @@ export class Watcher extends EventEmitter {
           // before the reload reads them (files appearing meanwhile come back in `created`).
           onIncluded: dirs => this.watchIncluded(dirs),
         });
-        if (!this.stopped && (files.length || removed.length)) this.emit('touched', files, removed);
+        // A throwing listener must not lose the .gitignore files' own changes below.
+        if (!this.stopped && (files.length || removed.length)) {
+          try { this.emit('touched', files, removed); } catch (e) { this.fail(e); }
+        }
         const own: UpdateResult[] = [...created];
         for (const p of paths) {
           // Deferred: run() relinks once after the job, not once per created/deleted .gitignore.

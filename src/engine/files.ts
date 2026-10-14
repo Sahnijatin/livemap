@@ -13,6 +13,12 @@ export const DEFAULT_IGNORES: string[] = [
 
 export const MAX_PARSE_BYTES = 1_048_576;
 
+/** True when absolute path `p` is `root` or below it (a child named `..x` counts as inside). */
+export function insideRoot(root: string, p: string): boolean {
+  const rel = path.relative(root, p);
+  return rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+}
+
 /** Parent directory of a project-relative POSIX path; '' for a path at the root. */
 export function parentDir(rel: string): string {
   const slash = rel.lastIndexOf('/');
@@ -249,16 +255,13 @@ async function readCapped(abs: string, sizeHint: number): Promise<Buffer | null>
 
 export async function readForModel(root: string, rel: string): Promise<ReadResult> {
   const abs = path.resolve(root, ...rel.split('/'));
-  const outside = path.relative(path.resolve(root), abs);
-  if (!outside || outside === '..' || outside.startsWith(`..${path.sep}`) || path.isAbsolute(outside)) return null;
+  if (abs === path.resolve(root) || !insideRoot(path.resolve(root), abs)) return null;
   let size: number;
   try {
     const st = await fs.lstat(abs);
     if (st.isSymbolicLink() || !st.isFile()) return null;
     // Also reject paths that pass through a symlinked directory leading outside root.
-    const realRoot = await fs.realpath(root);
-    const realRel = path.relative(realRoot, await fs.realpath(abs));
-    if (realRel.startsWith('..') || path.isAbsolute(realRel)) return null;
+    if (!insideRoot(await fs.realpath(root), await fs.realpath(abs))) return null;
     size = st.size;
   } catch {
     return null;

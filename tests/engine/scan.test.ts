@@ -107,4 +107,17 @@ describe('ProjectModel.scan', () => {
     await m.reloadIgnores(['pkg/.gitignore']);
     expect([...hooks.reads.values()].reduce((a, b) => a + b, 0)).toBe(0);
   });
+
+  it('a nested reload that runs out of room marks the model truncated', async () => {
+    put('a/.gitignore', '*.gen.ts\n');
+    for (let i = 0; i < 10; i++) put(`a/l${i}.gen.ts`, `export const l${i} = ${i};\n`);
+    put('b.ts', 'export const b = 1;\n');
+    const m = new ProjectModel(root, { limit: 5 });
+    await m.scan();
+    expect(m.truncated).toBe(false);
+    put('a/.gitignore', '# keep generated\n');
+    await m.reloadIgnores(['a/.gitignore']);
+    expect(m.all()).toHaveLength(5);
+    expect(m.truncated).toBe(true);
+  });
 });

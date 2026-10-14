@@ -43,6 +43,8 @@ function extOf(path: string): string {
 /** Files whose values are never stored or sent; only variable names are read from them. */
 const SECRET_NAMES = new Set(['.env', '.envrc', '.npmrc', '.netrc', '.pypirc']);
 
+/** Formats an env file is written in (`prod.env.json`, `.env.sh`); other known formats are not env files. */
+const ENV_FORMATS = new Set<Lang>(['json', 'yaml', 'toml', 'shell', 'text']);
 /** Data formats an env file or its example may be written in; stripped before example checks. */
 const DATA_EXT = /\.(json|ya?ml|toml|txt)$/;
 /** Ends in an example/sample/template segment (`.env.example`, `.env-sample`, `x.env.template.json`). */
@@ -53,14 +55,10 @@ const endsAsExample = (s: string): boolean => /(^|[._-])(example|sample|template
  * (LiveMap serves `settings.py` whatever it holds); env-style formats (`.env.json`, `.env.sh`) and
  * unknown suffixes (`.env.local`, `.env.bak`) are not.
  */
-function isCode(name: string): boolean {
-  const ext = name.slice(name.lastIndexOf('.') + 1);
-  if (!name.includes('.') || !Object.hasOwn(EXT, ext)) return false;
-  return !ENV_FORMATS.has(EXT[ext]);
+function isCode(suffix: string): boolean {
+  const ext = suffix.slice(suffix.lastIndexOf('.') + 1);
+  return Object.hasOwn(EXT, ext) && !ENV_FORMATS.has(EXT[ext]);
 }
-
-/** Formats an env file is written in (`prod.env.json`, `.env.sh`); other known formats are not env files. */
-const ENV_FORMATS = new Set<Lang>(['json', 'yaml', 'toml', 'shell', 'text']);
 
 /**
  * Secret files: `.env`, `.env.*`, `.envrc(.*)`, `*.env`, `*.env.*` and credential rc files
@@ -81,7 +79,7 @@ export function isSecretEnvPath(path: string): boolean {
   const [, stem, suffix] = m;
   // `example.env` / `example.env.json` are examples; `example.env.local` is a real override.
   if (/(^|\.)(example|sample|template)$/.test(stem) && (suffix === undefined || DATA_EXT.test(`.${suffix}`))) return false;
-  return suffix === undefined || (!endsAsExample(suffix) && !isCode(`.${suffix}`));
+  return suffix === undefined || (!endsAsExample(suffix) && !isCode(suffix));
 }
 
 export function isBinaryPath(path: string): boolean {

@@ -141,6 +141,10 @@ describe('readForModel', () => {
       lstat.mockRestore(); unsafe.mockRestore();
     }
   });
+  it('a top-level name starting with two dots is inside the root', async () => {
+    put('..cache/x.ts', 'export const x = 1;\n');
+    expect((await readForModel(root, '..cache/x.ts'))?.kind).toBe('text');
+  });
   it('a file of exactly 1 MB is text; one byte more is tooLarge', async () => {
     put('max.ts', 'x'.repeat(1_048_576));
     put('over.ts', 'x'.repeat(1_048_577));

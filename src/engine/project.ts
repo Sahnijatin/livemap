@@ -5,7 +5,7 @@ import { langOf } from './languages.js';
 import { fileSymbols } from './symbols/index.js';
 import { scriptBlock } from './symbols/markup.js';
 import { buildIndex, extractImports, indexUpdate, readTsconfigAliases, type FileIndex, type ImportCtx } from './imports.js';
-import { createIgnore, parentDir, walk, readForModel, type IgnoreFn, type ReadResult } from './files.js';
+import { createIgnore, insideRoot, parentDir, walk, readForModel, type IgnoreFn, type ReadResult } from './files.js';
 
 export interface UpdateResult {
   path: string;
@@ -195,12 +195,14 @@ export class ProjectModel {
       // unindexed files may fill freed room; they may be brand new (with an add event queued that
       // will now find nothing to do), so they are reported as created changes.
       const wasTruncated = this.truncated;
-      let full = false;
+      let full = false; // some file did not fit under the limit
       const included: string[] = [];
       const unreached: string[] = [];
       // Read no more than there is room for (a full, truncated model may have thousands unread).
-      const fresh = walked.files.filter(rel => !this.files.has(rel) && (old(rel, false) || wasTruncated))
-        .slice(0, Math.max(0, this.limit - this.files.size));
+      const candidates = walked.files.filter(rel => !this.files.has(rel) && (old(rel, false) || wasTruncated));
+      const room = Math.max(0, this.limit - this.files.size);
+      if (candidates.length > room) full = true;
+      const fresh = candidates.slice(0, room);
       await this.readEach(fresh, new Map(), async (rel, r) => {
         if (!r) return;
         if (this.files.size >= this.limit) { full = true; return; }
@@ -266,12 +268,17 @@ export class ProjectModel {
       if (!st.isFile()) return true;
       // Reached through a symlinked directory that leads outside the root: gone, as readForModel
       // will never read it again.
-      const real = path.relative(await fs.realpath(this.root), await fs.realpath(abs));
-      return real.startsWith('..') || path.isAbsolute(real);
+      return !insideRoot(await this.realRoot(), await fs.realpath(abs));
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
       return code === 'ENOENT' || code === 'ENOTDIR';
     }
+  }
+
+  private realRootP: Promise<string> | null = null;
+  /** The root's realpath, resolved once. */
+  private realRoot(): Promise<string> {
+    return (this.realRootP ??= fs.realpath(this.root));
   }
 
   private serial<T>(fn: () => Promise<T>): Promise<T> {
