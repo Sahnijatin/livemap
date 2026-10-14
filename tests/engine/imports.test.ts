@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { Lang } from '../../src/shared/types.js';
 import { extractImports, readTsconfigAliases, indexStats, type ImportCtx } from '../../src/engine/imports.js';
 
-const FILES = ['src/a.ts','src/lib/b.ts','src/lib/index.ts','src/ui/c.tsx','pkg/__init__.py','pkg/mod.py','pkg/sub/x.py','app/main.py','internal/db/db.go','internal/db/conn.go','src/lib.rs','src/api.rs','src/api/routes.rs','src/main/java/com/shop/Order.java','lib/util.rb','include/geo.h'];
+const FILES = ['src/main/java/com/shop.java','src/a.ts','src/lib/b.ts','src/lib/index.ts','src/ui/c.tsx','pkg/__init__.py','pkg/mod.py','pkg/sub/x.py','app/main.py','internal/db/db.go','internal/db/conn.go','src/lib.rs','src/api.rs','src/api/routes.rs','src/main/java/com/shop/Order.java','lib/util.rb','include/geo.h'];
 const set = new Set(FILES);
 const imp = (path: string, lang: Lang, src: string, ctx: Partial<ImportCtx> = {}) =>
   extractImports(path, lang, src, { has: p => set.has(p), files: FILES, aliases: [], goModule: null, ...ctx });
@@ -34,7 +34,10 @@ describe('extractImports', () => {
     expect(imp('src/main/java/com/App.java','java','import static com.shop.Order.*;').local).toEqual(['src/main/java/com/shop/Order.java']);
     // A wildcard resolves only to the class it names (its nested classes), never to a shorter prefix.
     expect(imp('src/main/java/com/App.java','java','import com.shop.Order.*;').local).toEqual(['src/main/java/com/shop/Order.java']);
-    expect(imp('src/main/java/com/App.java','java','import com.shop.Order.missing.*;')).toEqual({ local: [], external: ['com.shop.Order.missing'] });
+    expect(imp('src/main/java/com/App.java','java','import static com.shop.Order.Inner.*;').local).toEqual(['src/main/java/com/shop/Order.java']);
+    // Only class-like (capitalized) segments count, so a lowercase package never matches a stray file.
+    expect(imp('src/main/java/com/App.java','java','import shop.Order.lib.*;').local).toEqual(['src/main/java/com/shop/Order.java']);
+    expect(imp('src/main/java/com/App.java','java','import com.shop.util.*;')).toEqual({ local: [], external: ['com.shop.util'] });
   });
   it('ruby', () => {
     expect(imp('app.rb','ruby',"require_relative 'lib/util'\nrequire 'json'")).toEqual({ local: ['lib/util.rb'], external: ['json'] });
