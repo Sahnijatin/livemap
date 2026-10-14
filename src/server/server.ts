@@ -158,6 +158,12 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     scheduleUsedBy();
   };
   watcher.on('change', onChange);
+  const onTouched = (files: FileModel[]): void => {
+    if (!isReady) return; // hello will carry the state
+    broadcast({ type: 'files', files, removed: [] });
+    scheduleUsedBy();
+  };
+  watcher.on('touched', onTouched);
 
   const handle = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
     if (!hostAllowed(req)) return json(res, 403, { error: 'forbidden host' });
@@ -239,6 +245,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     },
     async close(): Promise<void> {
       watcher.off('change', onChange);
+      watcher.off('touched', onTouched);
       if (usedByTimer) clearTimeout(usedByTimer);
       usedByTimer = null;
       for (const ws of wss.clients) ws.terminate();

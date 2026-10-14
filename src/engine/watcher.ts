@@ -13,7 +13,11 @@ export interface WatcherOptions { debounceMs?: number }
 /**
  * Turns filesystem events into ChangeSummaries. Events are debounced per path,
  * then processed one at a time; the model decides what happened from disk.
- * Emits 'change' (change: ChangeSummary, touched: FileModel[]) and 'error' (err: Error).
+ * Emits 'change' (change: ChangeSummary, touched: FileModel[]), 'touched' (files: FileModel[]) for
+ * import changes found after a burst, and 'error' (err: Error).
+ *
+ * While more jobs are queued, file-set changes defer the model's import re-resolution (O(files)),
+ * so a burst (a checkout adding hundreds of files) re-resolves once when the queue drains.
  */
 export class Watcher extends EventEmitter {
   private readonly model: ProjectModel;
@@ -21,6 +25,8 @@ export class Watcher extends EventEmitter {
   private fsw: FSWatcher | null = null;
   private timers = new Map<string, NodeJS.Timeout>();
   private queue: Promise<void> = Promise.resolve();
+  /** Jobs whose debounce fired but that have not started running. */
+  private waiting = 0;
   private nextId = 1;
   private stopped = false;
 
@@ -69,7 +75,7 @@ export class Watcher extends EventEmitter {
   private onFile(p: string, ev: FileEvent): void {
     const rel = this.rel(p);
     if (!rel || isTempName(rel) || this.model.ignored(rel)) return;
-    this.schedule(`f:${rel}`, () => this.model.update(rel, ev).then(r => (r ? [r] : [])));
+    this.schedule(`f:${rel}`, deferRelink => this.model.update(rel, ev, { deferRelink }).then(r => (r ? [r] : [])));
   }
 
   private onDir(p: string): void {
@@ -78,26 +84,37 @@ export class Watcher extends EventEmitter {
     this.schedule(`d:${rel}`, () => this.model.removeDir(rel));
   }
 
-  private schedule(key: string, job: () => Promise<UpdateResult[]>): void {
+  private schedule(key: string, job: (deferRelink: boolean) => Promise<UpdateResult[]>): void {
     if (this.stopped) return;
     const prev = this.timers.get(key);
     if (prev) clearTimeout(prev);
     this.timers.set(key, setTimeout(() => {
       this.timers.delete(key);
+      this.waiting++;
       // catch: a throwing 'error'/'change' listener must not poison the queue for later jobs.
       this.queue = this.queue.then(() => this.run(job)).catch(() => {});
     }, this.debounceMs));
   }
 
-  private async run(job: () => Promise<UpdateResult[]>): Promise<void> {
+  private async run(job: (deferRelink: boolean) => Promise<UpdateResult[]>): Promise<void> {
+    this.waiting--;
     if (this.stopped) return;
-    let results: UpdateResult[];
+    const more = this.waiting > 0;
     try {
-      results = await job();
+      this.report(await job(more));
     } catch (e) {
       this.fail(e);
-      return;
     }
+    if (more || this.stopped) return;
+    try {
+      const touched = await this.model.flushRelink();
+      if (!this.stopped && touched.length) this.emit('touched', touched);
+    } catch (e) {
+      this.fail(e);
+    }
+  }
+
+  private report(results: UpdateResult[]): void {
     if (this.stopped || results.length === 0) return;
     const touched = mergeTouched(results);
     results.forEach((u, i) => {

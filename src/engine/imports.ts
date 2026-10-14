@@ -23,7 +23,7 @@ const join = (...parts: string[]): string => norm(parts.filter(Boolean).join('/'
 
 interface FileIndex { byDir: Map<string, string[]>; byBase: Map<string, string[]> }
 const INDEXES = new WeakMap<string[], FileIndex>();
-export const indexStats = { builds: 0 };
+export const indexStats = { builds: 0, jsParses: 0 };
 
 /** Built once per ctx.files array: dir to files, and basename to files. */
 function indexOf(files: string[]): FileIndex {
@@ -77,7 +77,27 @@ function resolveJsPath(base: string, ctx: ImportCtx): string | null {
   return null;
 }
 
+/**
+ * Specifiers by source text. Relinking re-resolves every file whenever the file set changes, and
+ * the text is unchanged for almost all of them, so only resolution (cheap) is redone. Bounded by
+ * total text size; cleared wholesale when full.
+ */
+const JS_SPECS = new Map<string, string[]>();
+const JS_SPECS_MAX_CHARS = 64 * 1024 * 1024;
+let jsSpecsChars = 0;
+
 function jsSpecs(src: string): string[] {
+  const hit = JS_SPECS.get(src);
+  if (hit) return hit;
+  const out = parseJsSpecs(src);
+  if (jsSpecsChars + src.length > JS_SPECS_MAX_CHARS) { JS_SPECS.clear(); jsSpecsChars = 0; }
+  JS_SPECS.set(src, out);
+  jsSpecsChars += src.length;
+  return out;
+}
+
+function parseJsSpecs(src: string): string[] {
+  indexStats.jsParses++;
   const out: string[] = [];
   const patterns = [
     /\b(?:import|export)\s+(?:type\s+)?(?:[^'";]*?\s+from\s+)?['"]([^'"\n]+)['"]/g,
@@ -95,6 +115,18 @@ function packageName(spec: string): string {
   return spec.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
 }
 
+const SORTED_ALIASES = new WeakMap<ImportCtx['aliases'], ImportCtx['aliases']>();
+
+/** Aliases with the longest prefix first, sorted once per aliases array. */
+function longestFirst(aliases: ImportCtx['aliases']): ImportCtx['aliases'] {
+  let sorted = SORTED_ALIASES.get(aliases);
+  if (!sorted) {
+    sorted = [...aliases].sort((a, b) => b[0].length - a[0].length);
+    SORTED_ALIASES.set(aliases, sorted);
+  }
+  return sorted;
+}
+
 function jsImports(path: string, src: string, ctx: ImportCtx, local: Set<string>, external: Set<string>): void {
   const dir = posix.dirname(path) === '.' ? '' : posix.dirname(path);
   for (const spec of jsSpecs(src)) {
@@ -104,8 +136,7 @@ function jsImports(path: string, src: string, ctx: ImportCtx, local: Set<string>
       continue;
     }
     let aliased = false;
-    const sortedAliases = [...ctx.aliases].sort((a, b) => b[0].length - a[0].length);
-    for (const [prefix, targets] of sortedAliases) {
+    for (const [prefix, targets] of longestFirst(ctx.aliases)) {
       if (spec !== prefix && !spec.startsWith(prefix + '/')) continue;
       aliased = true;
       const rest = spec.slice(prefix.length).replace(/^\//, '');

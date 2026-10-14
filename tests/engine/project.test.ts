@@ -250,4 +250,19 @@ describe('ProjectModel fix round 1', () => {
     expect(m.get('app.ts')!.imports.local).toEqual([]);
     expect(await m.update('lib/x.ts', 'unlink')).toBeNull();
   });
+
+  it('a deferred update skips the import re-resolution until flushRelink', async () => {
+    put('app.ts', "import { x } from './lib/x';\n");
+    const m = await scanned();
+    expect(m.get('app.ts')!.imports.local).toEqual([]);
+    put('lib/x.ts', 'export const x = 1;\n');
+    const r = await m.update('lib/x.ts', 'add', { deferRelink: true });
+    expect(r!.kind).toBe('created');
+    expect(r!.touched).toEqual([]);
+    expect(m.get('app.ts')!.imports.local).toEqual([]);
+    const touched = await m.flushRelink();
+    expect(touched.map(f => [f.path, f.imports.local])).toEqual([['app.ts', ['lib/x.ts']]]);
+    expect(m.get('app.ts')!.imports.local).toEqual(['lib/x.ts']);
+    expect(await m.flushRelink()).toEqual([]);
+  });
 });

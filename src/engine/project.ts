@@ -40,6 +40,8 @@ export class ProjectModel {
   private isIgnored: (rel: string, isDir: boolean) => boolean;
   private ctx: ImportCtx;
   private queue: Promise<unknown> = Promise.resolve();
+  /** A deferred update changed the file set; imports need re-resolving (see update). */
+  private relinkPending = false;
 
   constructor(root: string, opts: { limit?: number } = {}) {
     this.root = root;
@@ -58,6 +60,7 @@ export class ProjectModel {
   scan(onProgress?: (done: number, total: number) => void): Promise<void> {
     return this.serial(async () => {
       this.files.clear(); this.texts.clear(); this.lastGood.clear();
+      this.relinkPending = false;
       const { files, truncated } = await walk(this.root, this.isIgnored, this.limit);
       this.truncated = truncated;
       const reads: [string, ReadResult][] = [];
@@ -73,8 +76,12 @@ export class ProjectModel {
     });
   }
 
-  /** The event is advisory: the file is re-read and its on-disk state decides the result kind. */
-  update(rel: string, _event: 'add' | 'change' | 'unlink'): Promise<UpdateResult | null> {
+  /**
+   * The event is advisory: the file is re-read and its on-disk state decides the result kind.
+   * With `deferRelink`, a created/deleted file does not re-resolve every file's imports now; the
+   * next non-deferred update, removeDir or flushRelink does it once for the whole burst.
+   */
+  update(rel: string, _event: 'add' | 'change' | 'unlink', opts: { deferRelink?: boolean } = {}): Promise<UpdateResult | null> {
     return this.serial(async () => {
       if (this.ignored(rel)) return null;
       const r = await readForModel(this.root, rel);
@@ -85,8 +92,12 @@ export class ProjectModel {
       if (!res) return null;
       const { result, setChanged } = await res;
       if (setChanged || CONFIG_FILES.has(rel)) {
-        result.touched = this.relink([rel]);
-        result.after = this.files.get(rel) ?? null;
+        if (opts.deferRelink) {
+          this.relinkPending = true;
+        } else {
+          result.touched = this.relink([rel]);
+          result.after = this.files.get(rel) ?? null;
+        }
       }
       return result;
     });
@@ -110,6 +121,11 @@ export class ProjectModel {
       if (results.length) results[results.length - 1].touched = this.relink(gone);
       return results;
     });
+  }
+
+  /** Runs a deferred re-resolution, if any; returns the files whose local imports changed. */
+  flushRelink(): Promise<FileModel[]> {
+    return this.serial(async () => (this.relinkPending ? this.relink([]) : []));
   }
 
   /** True when the path no longer exists or is no longer a regular file; transient errors are not gone. */
@@ -202,6 +218,7 @@ export class ProjectModel {
 
   /** Re-resolves every text file's imports; returns the files (other than `skip`) whose local imports changed. */
   private relink(skip: string[]): FileModel[] {
+    this.relinkPending = false;
     this.ctx = this.makeCtx([...this.files.keys()]);
     const touched: FileModel[] = [];
     for (const [rel, text] of this.texts) {

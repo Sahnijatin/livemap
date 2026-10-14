@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
@@ -194,5 +194,20 @@ describe('Watcher', () => {
     await watcher!.stop();
     await sleep(400);
     expect(changes).toHaveLength(0);
+  });
+
+  it('re-resolves imports once per burst, not once per file, and reports the result', async () => {
+    const N = 40;
+    put('src/app.ts', Array.from({ length: N }, (_, i) => `import { n${i} } from './n${i}';`).join('\n') + '\n');
+    const w = await startWatcher();
+    const touched: FileModel[] = [];
+    w.on('touched', (files: FileModel[]) => touched.push(...files));
+    const relink = vi.spyOn(model as unknown as { relink: (skip: string[]) => FileModel[] }, 'relink');
+    for (let i = 0; i < N; i++) put(`src/n${i}.ts`, `export const n${i} = ${i};\n`);
+    await waitFor(() => changes.length >= N, 5000);
+    await waitFor(() => model.get('src/app.ts')!.imports.local.length === N, 5000);
+    expect(relink.mock.calls.length).toBeLessThan(N / 4);
+    const reported = [...changes.flatMap(c => c.touched), ...touched].filter(f => f.path === 'src/app.ts');
+    expect(reported.at(-1)!.imports.local).toHaveLength(N);
   });
 });

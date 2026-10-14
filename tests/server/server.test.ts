@@ -324,6 +324,15 @@ describe('startServer: WebSocket', () => {
     await waitFor(() => ofType(c, 'usedBy').some(m => m.usedBy.some(e => e.file === 'src/b.ts' && e.usedIn.includes('src/c.ts'))), 3000);
   });
 
+  it('broadcasts files re-resolved after a burst (watcher "touched")', async () => {
+    const s = await boot();
+    const c = connect(s.port, `?t=${s.token}`);
+    await waitFor(() => c.msgs.length >= 1);
+    watcher.emit('touched', [model.get('src/a.ts')!]);
+    await waitFor(() => ofType(c, 'files').length >= 1);
+    expect(ofType(c, 'files')[0]).toMatchObject({ files: [{ path: 'src/a.ts' }], removed: [] });
+  });
+
   it('reports deletions as removed paths and keeps changes for later hellos', async () => {
     const s = await boot();
     const c = connect(s.port, `?t=${s.token}`);

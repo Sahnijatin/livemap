@@ -78,6 +78,16 @@ describe('indexing and fixes', () => {
     expect(imp('src/a.ts','typescript',`// import x from './lib/b'\n/* require('lodash') */\nimport u from 'http://x'; import y from './lib'`))
       .toEqual({ local: ['src/lib/index.ts'], external: [] });
   });
+  it('re-resolving unchanged JS text reuses its parsed specifiers but sees the new file set', () => {
+    const src = `import b from './lib/b'; import n from './lib/new'; // ${Math.random()}`;
+    const before = indexStats.jsParses;
+    expect(imp('src/a.ts', 'typescript', src).local).toEqual(['src/lib/b.ts']);
+    const files = [...FILES, 'src/lib/new.ts'];
+    const more = new Set(files);
+    expect(extractImports('src/a.ts', 'typescript', src, { has: p => more.has(p), files, aliases: [], goModule: null }).local)
+      .toEqual(['src/lib/b.ts', 'src/lib/new.ts']);
+    expect(indexStats.jsParses - before).toBe(1);
+  });
   it('prefers the longest alias prefix', () => {
     expect(imp('src/a.ts','typescript',`import b from '@a/lib/b'`, { aliases: [['@a',['nowhere']],['@a/lib',['src/lib']]] }).local).toEqual(['src/lib/b.ts']);
   });
