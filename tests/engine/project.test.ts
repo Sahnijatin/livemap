@@ -290,4 +290,19 @@ describe('ProjectModel fix round 1', () => {
     await m.update('.gitignore', 'add');
     expect(m.ignored('scratch.txt')).toBe(true);
   });
+
+  it('deferred Go and JVM imports see directories the burst already created', async () => {
+    put('go.mod', 'module shop\n');
+    const m = await scanned();
+    put('src/com/acme/util/Strings.java', 'package com.acme.util;\npublic class Strings {}\n');
+    await m.update('src/com/acme/util/Strings.java', 'add', { deferRelink: true });
+    put('src/com/acme/App.java', 'package com.acme;\nimport com.acme.util.*;\npublic class App {}\n');
+    const app = await m.update('src/com/acme/App.java', 'add', { deferRelink: true });
+    expect(app!.after!.imports).toEqual({ local: ['src/com/acme/util/Strings.java'], external: [] });
+    put('internal/db/db.go', 'package db\n');
+    await m.update('internal/db/db.go', 'add', { deferRelink: true });
+    put('cmd/main.go', 'package main\nimport "shop/internal/db"\n');
+    const main = await m.update('cmd/main.go', 'add', { deferRelink: true });
+    expect(main!.after!.imports.local).toEqual(['internal/db/db.go']);
+  });
 });

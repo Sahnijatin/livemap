@@ -127,9 +127,7 @@ export class ProjectModel {
       if (setChanged || CONFIG_FILES.has(rel)) {
         if (opts.deferRelink) {
           this.relinkPending = true;
-          // Later files in the burst resolve against the live file set; ctx.files (the Go and JVM
-          // directory index) stays as of the last relink until the deferred relink runs.
-          this.ctx = { ...this.ctx, has: p => this.files.has(p) };
+          this.ctx = this.liveCtx();
         } else {
           result.touched = this.relink([rel]);
           result.after = this.files.get(rel) ?? null;
@@ -269,6 +267,22 @@ export class ProjectModel {
       }
     }
     return touched.sort((a, b) => cmp(a.path, b.path));
+  }
+
+  /**
+   * Ctx over the live file set, for later files in a deferred burst. The sorted file list (used
+   * only by Go and JVM directory lookups) is built on first use, so JS-only bursts never pay for it.
+   */
+  private liveCtx(): ImportCtx {
+    const files = this.files;
+    let sorted: string[] | null = null;
+    const { aliases, goModule } = this.ctx;
+    return {
+      has: p => files.has(p),
+      get files() { return (sorted ??= [...files.keys()].sort(cmp)); },
+      aliases,
+      goModule,
+    };
   }
 
   /** Fresh ctx (and fresh files array) for a file set; config read from stored contents. */
