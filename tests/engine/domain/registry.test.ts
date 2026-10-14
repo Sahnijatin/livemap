@@ -252,7 +252,7 @@ describe('ProjectModel domain wiring', () => {
     put('src/routes/orders.ts', 'export default {};\n');
     const r = await m.update('src/routes/orders.ts', 'add');
     expect(m.get('src/index.ts')!.imports.local).toEqual([]);
-    expect(r!.touched.map(f => f.path)).toEqual(['src/routes/orders.ts', 'src/index.ts'].slice(1));
+    expect(r!.touched.map(f => f.path)).toEqual(['src/index.ts']);
     expect(r!.touched[0].mounts![0].target).toBe('src/routes/orders.ts');
   });
 });
