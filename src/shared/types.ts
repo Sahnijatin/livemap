@@ -1,14 +1,17 @@
 export type Lang = 'typescript'|'tsx'|'javascript'|'python'|'go'|'rust'|'java'|'kotlin'|'csharp'|'php'|'ruby'|'swift'|'c'|'cpp'|'dart'|'vue'|'svelte'|'sql'|'prisma'|'markdown'|'json'|'yaml'|'toml'|'css'|'html'|'shell'|'text'|'secret'|'other';
 export type SymbolKind = 'function'|'method'|'class'|'component'|'hook'|'interface'|'type'|'enum'|'struct'|'trait'|'impl'|'module'|'namespace'|'variable'|'heading';
 export interface CodeSymbol { name: string; qname: string; kind: SymbolKind; signature: string; line: number; endLine: number; exported: boolean; hash: string; children: CodeSymbol[] }
-export interface Route { method: string; path: string; handler?: string; line: number }
-export interface Field { name: string; type: string; pk?: true; required?: true; unique?: true; fk?: { table: string; field: string }; relation?: { model: string; many: boolean } }
-export interface Entity { name: string; table: string; orm: string; file: string; line: number; fields: Field[] }
-export interface Dep { name: string; version: string; eco: string; dev?: boolean }
+export interface Route { method: string; path: string; handler?: string; line: number; kind: 'api' | 'page' | 'screen'; framework: string }
+/** A router mounted under a prefix; `target` is the resolved root-relative file, null when unresolved. */
+export interface Mount { prefix: string; spec: string; target: string | null; line: number; framework: string }
+export interface Field { name: string; type: string; line?: number; pk?: true; required?: true; unique?: true; fk?: { table: string; field: string }; relation?: { model: string; many: boolean } }
+/** `partial` marks an ALTER fragment that adds to a table defined elsewhere. */
+export interface Entity { name: string; table: string; orm: string; file: string; line: number; fields: Field[]; partial?: true }
+export interface Dep { name: string; version: string; eco: string; dev?: boolean; line?: number }
 export interface FileModel {
   path: string; lang: Lang; size: number; lines: number;
   symbols: CodeSymbol[]; imports: { local: string[]; external: string[] };
-  routes: Route[]; entities: Entity[]; env: string[]; deps?: { deps: Dep[] };
+  routes: Route[]; entities: Entity[]; env: string[]; mounts?: Mount[]; deps?: { deps: Dep[]; scripts?: Record<string, string> };
   flags: { binary?: true; tooLarge?: true; secret?: true; parseError?: true };
 }
 export interface SymRef { name: string; qname: string; kind: SymbolKind; signature: string; line: number }

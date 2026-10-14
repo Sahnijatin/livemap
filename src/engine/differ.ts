@@ -52,7 +52,12 @@ function diffEntities(before: Entity[], after: Entity[]): ChangeSummary['entitie
   const out: ChangeSummary['entities'] = { added: [], removed: [], changed: [] };
   for (const [name, e] of a) {
     const old = b.get(name);
-    if (!old) { out.added.push({ name, fields: e.fields.length, orm: e.orm }); continue; }
+    if (!old) {
+      // An ALTER fragment adds columns to a table defined elsewhere: report a table change, not a new table.
+      if (!e.partial) out.added.push({ name, fields: e.fields.length, orm: e.orm });
+      else if (e.fields.length) out.changed.push({ name, addedFields: [...keyed(e.fields, f => f.name).keys()], removedFields: [], changedFields: [] });
+      continue;
+    }
     const of = keyed(old.fields, f => f.name);
     const nf = keyed(e.fields, f => f.name);
     const addedFields = [...nf.keys()].filter(n => !of.has(n));
@@ -60,7 +65,11 @@ function diffEntities(before: Entity[], after: Entity[]): ChangeSummary['entitie
     const changedFields = [...nf.keys()].filter(n => of.has(n) && JSON.stringify(of.get(n)) !== JSON.stringify(nf.get(n)));
     if (addedFields.length || removedFields.length || changedFields.length) out.changed.push({ name, addedFields, removedFields, changedFields });
   }
-  for (const name of b.keys()) if (!a.has(name)) out.removed.push({ name });
+  for (const [name, e] of b) {
+    if (a.has(name)) continue;
+    if (!e.partial) out.removed.push({ name });
+    else if (e.fields.length) out.changed.push({ name, addedFields: [], removedFields: [...keyed(e.fields, f => f.name).keys()], changedFields: [] });
+  }
   return out;
 }
 
