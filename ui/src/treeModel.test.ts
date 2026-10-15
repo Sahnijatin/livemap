@@ -13,7 +13,7 @@ const byPath = (list: FileModel[]): Record<string, FileModel> => Object.fromEntr
 const tree = (paths: string[], q = '') => buildTree(byPath(paths.map(p => file(p))), q);
 const names = (n: DirNode) => [...n.dirs.map(d => `${d.name}/`), ...n.rows.map(r => r.file.path.slice(r.file.path.lastIndexOf('/') + 1))];
 const allOpen = () => true;
-const items = (root: DirNode, open: (paths: string[], level: number) => boolean = allOpen) =>
+const items = (root: DirNode, open: (paths: string[]) => boolean = allOpen) =>
   visibleItems(root, open, () => false, new Map()).items;
 const label = (i: Item): string => (i.kind === 'dir' ? `${'  '.repeat(i.level - 1)}${i.label}/` : i.kind === 'file' ? `${'  '.repeat(i.level - 1)}${i.row.file.path}` : `more:${i.dir}`);
 
@@ -127,9 +127,9 @@ describe('visibleItems', () => {
     const { root } = tree(paths);
     const all = visibleItems(root, allOpen, () => false, new Map());
     expect(all.items.filter(i => i.kind === 'dir')).toHaveLength(7);
-    expect(all.items.filter(i => i.kind === 'file')).toHaveLength(ROW_BUDGET);
+    expect(all.items.filter(i => i.kind === 'file')).toHaveLength(ROW_BUDGET - 7); // folder rows count too
     const more = all.items.filter(i => i.kind === 'more') as Extract<Item, { kind: 'more' }>[];
-    expect(more.map(m => [m.dir, m.shown, m.hidden])).toEqual([['d0', 200, 100], ['d1', 200, 100], ['d2', 200, 100], ['d3', 200, 100], ['d4', 200, 100], ['d5', 0, 300], ['d6', 0, 300]]);
+    expect(more.map(m => [m.dir, m.shown, m.hidden])).toEqual([['d0', 200, 100], ['d1', 200, 100], ['d2', 200, 100], ['d3', 200, 100], ['d4', 193, 107], ['d5', 0, 300], ['d6', 0, 300]]);
     const closed = visibleItems(root, () => false, () => false, new Map());
     expect(closed.items.map(label)).toEqual(['d0/', 'd1/', 'd2/', 'd3/', 'd4/', 'd5/', 'd6/']);
     const limited = visibleItems(root, allOpen, () => false, new Map([['d6', DIR_BATCH * 2]]));
@@ -195,6 +195,15 @@ describe('splitName', () => {
     expect(splitName('a/averyveryverylongfoldername', 'dir')).toEqual(['a/averyveryverylong', 'foldername']);
   });
 
+  it('never cuts inside a character', () => {
+    const name = '\u{1F600}'.repeat(20) + '\u{1F680}.ts';
+    const [head, tail] = splitName(name);
+    expect(head + tail).toBe(name);
+    expect(Array.from(tail)).toHaveLength(10);
+    expect(/[\uD800-\uDBFF]$/.test(head)).toBe(false);
+    expect(/^[\uDC00-\uDFFF]/.test(tail)).toBe(false);
+  });
+
   it('never returns an empty start with a non-empty end', () => {
     for (const n of ['x'.repeat(15), 'a/' + 'y'.repeat(30), '-'.repeat(20), 'ab-cd-ef-gh-ij-kl-mn']) {
       for (const kind of ['file', 'dir'] as const) {
@@ -242,18 +251,34 @@ describe('stored folder state', () => {
 });
 
 describe('tree performance', () => {
+  /** The median of three timed runs, so one slow tick on a busy runner does not fail the budget. */
+  const median = (run: () => void): number => {
+    const t: number[] = [];
+    for (let i = 0; i < 3; i++) { const t0 = performance.now(); run(); t.push(performance.now() - t0); }
+    return t.sort((a, b) => a - b)[1];
+  };
+
   it('builds and lists 5,000 files quickly', () => {
     const paths: string[] = [];
     for (let i = 0; i < 5000; i++) paths.push(`src/m${i % 40}/sub${i % 7}/deep${i % 3}/file-${i}.ts`);
     const files = byPath(paths.map(p => file(p)));
     buildTree(files, ''); // warm the per-file caches, as the first render does
-    const t0 = performance.now();
-    const { root } = buildTree(files, '');
-    visibleItems(root, allOpen, () => false, new Map());
-    const ms = performance.now() - t0;
-    console.log(`[tree perf] 5,000 files: ${ms.toFixed(1)} ms`);
-    expect(root.count).toBe(5000);
-    expect(ms).toBeLessThan(60 * TIME_SCALE);
+    let count = 0;
+    const ms = median(() => { const { root } = buildTree(files, ''); visibleItems(root, allOpen, () => false, new Map()); count = root.count; });
+    console.log(`[tree perf] 5,000 files: ${ms.toFixed(1)} ms (median of 3)`);
+    expect(count).toBe(5000);
+    expect(ms).toBeLessThan(120 * TIME_SCALE);
+  });
+
+  it('lists 100,000 files in 10,000 folders under a one-letter filter in bounded rows', () => {
+    const paths: string[] = [];
+    for (let i = 0; i < 100_000; i++) paths.push(`a${i % 100}/s${Math.floor(i / 100) % 100}/file${i}.ts`);
+    const { root } = buildTree(byPath(paths.map(p => file(p))), 's');
+    let list: Item[] = [];
+    const ms = median(() => { list = visibleItems(root, allOpen, () => false, new Map()).items; });
+    console.log(`[tree perf] 100,000 files filtered: ${ms.toFixed(1)} ms (median of 3), ${list.length} items`);
+    expect(list.filter(i => i.kind !== 'more').length).toBeLessThanOrEqual(ROW_BUDGET);
+    expect(ms).toBeLessThan(50 * TIME_SCALE);
   });
 });
 
@@ -277,7 +302,23 @@ describe('row budget', () => {
     const shown = list.filter(i => i.kind === 'file').map(i => (i as Extract<Item, { kind: 'file' }>).row.file.path);
     expect(shown).toContain('README.md');
     expect(shown).toContain('package.json');
-    expect(shown).toHaveLength(ROW_BUDGET);
+    expect(shown.length + list.filter(i => i.kind === 'dir').length).toBe(ROW_BUDGET);
     expect(list.filter(i => i.kind === 'more' && i.dir === '')).toHaveLength(0);
+  });
+
+  it('counts folder rows against the budget, so a broad filter stays bounded', () => {
+    const paths: string[] = [];
+    for (let i = 0; i < 300; i++) for (let j = 0; j < 5; j++) paths.push(`p${i}/q${j}/f.ts`);
+    const { root } = tree(paths);
+    const list = items(root);
+    expect(list.filter(i => i.kind !== 'more').length).toBeLessThanOrEqual(ROW_BUDGET);
+    expect(list.some(i => i.kind === 'more')).toBe(true);
+  });
+
+  it('asks only whether a folder row is open, given the folders it stands for', () => {
+    const { root } = tree(['a/b/x.ts', 'c.ts']);
+    const calls: unknown[][] = [];
+    visibleItems(root, (...args: unknown[]) => { calls.push(args); return true; }, () => false, new Map());
+    expect(calls).toEqual([[['a', 'a/b']]]);
   });
 });

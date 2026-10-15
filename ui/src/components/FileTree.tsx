@@ -24,13 +24,18 @@ const FOLD_MS = 360;
 const USER_SCROLL_HOLD_MS = 5000;
 /** Scroll events this soon after our own scrollIntoView are the animation, not the user. */
 const SELF_SCROLL_MS = 900;
-/** Typed letters within this long of each other search as one prefix. */
-const TYPEAHEAD_MS = 700;
 /** Folder choices are saved this long after the last change (and right away when the page is hidden). */
 const SAVE_MS = 300;
 const EMPTY_TAGS = new Map<string, SymbolTag>();
 const NO_LIMITS: ReadonlyMap<string, number> = new Map();
-const NO_CLOSED: ReadonlySet<string> = new Set();
+const NO_DIRS: ReadonlySet<string> = new Set();
+/** `set` with `add` added and `del` removed, as a new set. */
+const edit = (set: ReadonlySet<string>, add: readonly string[], del: readonly string[] = []): ReadonlySet<string> => {
+  const next = new Set(set);
+  for (const a of add) next.add(a);
+  for (const d of del) next.delete(d);
+  return next;
+};
 /** Folder state read from storage, which needs no write back. */
 const fromStorage = new WeakSet<object>();
 /** Own keys only: a file named `constructor` is not a stored entry. */
@@ -40,11 +45,19 @@ const loadDirs = (root: string): DirState => {
   fromStorage.add(open);
   return open;
 };
-const ACTIVITY: Record<Activity, { label: string; title: string }> = {
-  now: { label: 'agent is writing here', title: 'The agent is writing a file in this folder' },
-  edited: { label: 'changed', title: 'A file in this folder changed' },
-  new: { label: 'changed', title: 'A file in this folder is new' },
-};
+/** A closed folder's activity dot: its label, and the title as "A file in this folder <title>". */
+const ACTIVITY: Record<Activity, [string, string]> = { now: ['being written', 'is being written'], edited: ['edited', 'was edited'], new: ['new', 'is new'] };
+/**
+ * This session's folder overrides, never saved: `picked` folders opened to show a file the user selected,
+ * `closed` folders the user closed (the agent's reveals leave them shut), and `agentAt` the agent file being shown.
+ */
+type Session = { root: string; picked: ReadonlySet<string>; closed: ReadonlySet<string>; agentAt: string | null };
+const newSession = (root: string): Session => ({ root, picked: NO_DIRS, closed: NO_DIRS, agentAt: null });
+type Moving = { kind: 'fold' | 'unfold'; until: number; rows: Item[] };
+
+/** The tree's key handling, a chunk of its own that loads after first paint. Tests await it. */
+let keys: typeof import('./treeKeys') | null = null;
+export const loadTreeKeys = (): Promise<unknown> => import('./treeKeys').then(m => { keys = m; });
 
 /** A string as a quoted CSS attribute value; any path (newlines included) yields a valid selector. */
 const attr = (s: string): string => (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&').replace(/\n/g, '\\a '));
@@ -75,25 +88,27 @@ export function FileTree() {
   const [focused, setFocused] = useState<string | null>(null);
   // Folders the user opened or closed, by full path, remembered per project. Folders without an entry follow the defaults.
   const [dirs, setDirs] = useState(() => ({ root: projectRoot, open: loadDirs(projectRoot) }));
-  /** Folders opened to reveal a file (the agent's, or one selected elsewhere): open for this session only, never saved. */
-  const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set());
+  const [session, setSession] = useState(() => newSession(projectRoot));
   if (dirs.root !== projectRoot) {
     setDirs({ root: projectRoot, open: loadDirs(projectRoot) });
-    setRevealed(new Set());
+    setSession(newSession(projectRoot));
   }
   /** Folders closed while a filter is on; forgotten with the filter. */
-  const [filterClosed, setFilterClosed] = useState<{ q: string; dirs: ReadonlySet<string> }>({ q: '', dirs: NO_CLOSED });
+  const [filterClosed, setFilterClosed] = useState<{ q: string; dirs: ReadonlySet<string> }>({ q: '', dirs: NO_DIRS });
   const reduced = usePrefersReducedMotion();
   /** Folders mid-animation: a folding one keeps its rows (inert) until its fold ends. */
-  const [moving, setMoving] = useState<ReadonlyMap<string, { kind: 'fold' | 'unfold'; until: number }>>(() => new Map());
+  const [moving, setMoving] = useState<ReadonlyMap<string, Moving>>(() => new Map());
   const [limits, setLimits] = useState<{ q: string; byDir: ReadonlyMap<string, number> }>({ q: '', byDir: NO_LIMITS });
 
   const q = filter.trim().toLowerCase();
   const dirLimit = limits.q === q ? limits.byDir : NO_LIMITS;
-  const closedNow = filterClosed.q === q ? filterClosed.dirs : NO_CLOSED;
+  const closedNow = filterClosed.q === q ? filterClosed.dirs : NO_DIRS;
   const { root: tree, layers } = useMemo(() => buildTree(files, q), [files, q]);
   const fileCount = useMemo(() => Object.keys(files).length, [files]);
-  const big = fileCount >= BIG_PROJECT;
+  // Big or not is decided once per project, so crossing 2,000 files mid-session leaves the folders alone.
+  const [bigFor, setBigFor] = useState<{ root: string; big: boolean } | null>(null);
+  if (fileCount > 0 && bigFor?.root !== projectRoot) setBigFor({ root: projectRoot, big: fileCount >= BIG_PROJECT });
+  const big = bigFor?.root === projectRoot ? bigFor.big : fileCount >= BIG_PROJECT;
   const state = dirs.open;
 
   const pending = useRef<{ root: string; open: DirState } | null>(null);
@@ -114,23 +129,24 @@ export function FileTree() {
   }, [flush]);
   const latest = useRef({ state, big });
   latest.current = { state, big };
-  /** Shows `path`: opens the closed folders above it for this session, and any closed during the current filter. */
-  const openAbove = useCallback((path: string) => {
-    setRevealed(r => {
-      const need = closedAbove(path, latest.current.state, latest.current.big, r);
-      if (!need.length) return r;
-      const next = new Set(r);
-      for (const a of need) next.add(a);
-      return next;
+  /** Shows a file the user selected: opens the closed folders above it for this session, even ones they closed. */
+  const showPicked = useCallback((path: string) => {
+    const above = ancestors(path);
+    setSession(s => {
+      const need = closedAbove(path, latest.current.state, latest.current.big, s.picked);
+      const unclose = above.filter(a => s.closed.has(a));
+      if (!need.length && !unclose.length) return s;
+      return { ...s, picked: edit(s.picked, need), closed: edit(s.closed, [], unclose) };
     });
-    setFilterClosed(f => {
-      const above = ancestors(path).filter(a => f.dirs.has(a));
-      if (!above.length) return f;
-      const next = new Set(f.dirs);
-      for (const a of above) next.delete(a);
-      return { q: f.q, dirs: next };
-    });
+    setFilterClosed(f => (above.some(a => f.dirs.has(a)) ? { q: f.q, dirs: edit(f.dirs, [], above) } : f));
   }, []);
+  // The agent's file shows its folders until the agent moves on; folders the user closed this session stay shut.
+  const agentDirs = useMemo(() => {
+    const at = session.root === projectRoot ? session.agentAt : null;
+    if (at === null) return NO_DIRS;
+    return edit(NO_DIRS, closedAbove(at, state, big, session.picked).filter(a => !session.closed.has(a)));
+  }, [session, projectRoot, state, big]);
+  const revealed = useMemo(() => (agentDirs.size ? edit(session.picked, [...agentDirs]) : session.picked), [session.picked, agentDirs]);
 
   const activity = useMemo(() => dirActivity(live, targetPath), [live, targetPath]);
   const selectedDirs = useMemo(() => new Set(selected === null ? [] : ancestors(selected)), [selected]);
@@ -150,15 +166,15 @@ export function FileTree() {
       const t = window.setTimeout(() => setHoldEnded(n => n + 1), wait);
       return () => window.clearTimeout(t);
     }
-    openAbove(targetPath);
+    setSession(s => (s.agentAt === targetPath ? s : { ...s, agentAt: targetPath }));
     setReveal(targetPath);
-  }, [targetPath, holdEnded, openAbove]);
+  }, [targetPath, holdEnded]);
   // A file selected anywhere (Map, palette, Activity, inspector) is revealed here too.
   useEffect(() => {
     if (selected === null) return;
-    openAbove(selected);
+    showPicked(selected);
     setReveal(selected);
-  }, [selected, openAbove]);
+  }, [selected, showPicked]);
   const rowOpen = useCallback((row: Row) => row.forceOpen || (own(expanded, row.file.path) && expanded[row.file.path]), [expanded]);
   const pins = useMemo(() => {
     const out = Object.keys(live);
@@ -170,17 +186,10 @@ export function FileTree() {
     () => visibleItems(tree, dirOpen, rowOpen, dirLimit, pins),
     [tree, dirOpen, rowOpen, dirLimit, pins],
   );
-  /** Folder rows by path, and lowercase row names by nav key for typeahead. */
-  const { dirItems, labels } = useMemo(() => {
+  const dirItems = useMemo(() => {
     const byDir = new Map<string, Extract<Item, { kind: 'dir' }>>();
-    const names = new Map<string, string>();
-    for (const it of openItems) {
-      if (it.kind === 'dir') {
-        byDir.set(it.node.path, it);
-        names.set(dirKey(it.node.path), it.label.toLowerCase());
-      } else if (it.kind === 'file') names.set(it.row.file.path, it.row.name.toLowerCase());
-    }
-    return { dirItems: byDir, labels: names };
+    for (const it of openItems) if (it.kind === 'dir') byDir.set(it.node.path, it);
+    return byDir;
   }, [openItems]);
   // Rows of folding folders render until the fold ends, but are never part of keyboard navigation.
   const folding = useMemo(() => {
@@ -188,10 +197,16 @@ export function FileTree() {
     for (const [d, m] of moving) if (m.kind === 'fold' && dirItems.get(d)?.open === false) f.add(d);
     return f;
   }, [moving, dirItems]);
+  // A folding folder's rows are the ones it showed when it closed; the other folders already show their new layout.
   const items = useMemo(() => {
     if (!folding.size) return openItems;
-    return visibleItems(tree, paths => dirOpen(paths) || folding.has(paths[paths.length - 1]), rowOpen, dirLimit, pins).items;
-  }, [openItems, folding, tree, dirOpen, rowOpen, dirLimit, pins]);
+    const out: Item[] = [];
+    for (const it of openItems) {
+      out.push(it);
+      if (it.kind === 'dir' && folding.has(it.node.path)) out.push(...moving.get(it.node.path)!.rows);
+    }
+    return out;
+  }, [openItems, folding, moving]);
   useEffect(() => {
     if (!moving.size) return;
     const soonest = Math.min(...[...moving.values()].map(m => m.until));
@@ -243,9 +258,8 @@ export function FileTree() {
     const { open, chain } = item;
     if (q) {
       setFilterClosed(f => {
-        const next = new Set(f.q === q ? f.dirs : NO_CLOSED);
-        if (open) next.add(dir); else next.delete(dir);
-        return { q, dirs: next };
+        const was = f.q === q ? f.dirs : NO_DIRS;
+        return { q, dirs: open ? edit(was, [dir]) : edit(was, [], [dir]) };
       });
     } else {
       // A chain opens and closes as a whole, so each of its folders keeps the state when the chain splits.
@@ -254,55 +268,31 @@ export function FileTree() {
         for (const p of chain) { next.delete(p); next.set(p, !open); } // re-added last: the newest choices are kept longest
         return { root: d.root, open: next };
       });
-      // The user's choice replaces a reveal.
-      setRevealed(r => (chain.some(p => r.has(p)) ? new Set([...r].filter(p => !chain.includes(p))) : r));
+      // The user's choice replaces a reveal, and a close holds against the agent for the session.
+      setSession(s => ({
+        ...s,
+        picked: edit(s.picked, [], chain),
+        closed: open ? edit(s.closed, chain) : edit(s.closed, [], chain),
+      }));
     }
-    if (!reduced) setMoving(m => new Map(m).set(dir, { kind: open ? 'fold' : 'unfold', until: Date.now() + FOLD_MS }));
+    if (reduced) return;
+    // A closing folder keeps the rows it shows now until its fold ends.
+    const at = items.findIndex(it => it.kind === 'dir' && it.node.path === dir);
+    let end = at + 1;
+    while (at >= 0 && end < items.length && items[end].level > items[at].level) end++;
+    const rows = open && at >= 0 ? items.slice(at + 1, end) : [];
+    setMoving(m => new Map(m).set(dir, { kind: open ? 'fold' : 'unfold', until: Date.now() + FOLD_MS, rows }));
   };
 
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    const el = document.activeElement as HTMLElement | null;
-    const key = el?.dataset.nav;
-    const i = key ? navKeys.indexOf(key) : -1;
-    if (!el || i < 0) return;
-    const focusKey = (j: number) => {
-      const k = navKeys[Math.max(0, Math.min(navKeys.length - 1, j))];
-      treeRef.current?.querySelector<HTMLElement>(`[data-nav="${attr(k)}"]`)?.focus();
-    };
-    const expandedAttr = el.getAttribute('aria-expanded');
-    const toggleEl = () => (el.dataset.dir !== undefined ? toggleDir(el.dataset.dir) : onToggle(el.dataset.file!));
-    const up = el.dataset.parent ?? el.dataset.up;
-    switch (e.key) {
-      case 'ArrowDown': focusKey(i + 1); break;
-      case 'ArrowUp': focusKey(i - 1); break;
-      case 'Home': focusKey(0); break;
-      case 'End': focusKey(navKeys.length - 1); break;
-      case 'ArrowRight':
-        if (expandedAttr === 'false') toggleEl();
-        else if (expandedAttr === 'true') focusKey(i + 1);
-        else return;
-        break;
-      case 'ArrowLeft':
-        if (expandedAttr === 'true') toggleEl();
-        else if (up !== undefined && navSet.has(up)) focusKey(navKeys.indexOf(up));
-        else return;
-        break;
-      default: {
-        // Typeahead: letters and digits move to the next row whose name starts with what was typed.
-        if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey || !/^[\p{L}\p{N}._-]$/u.test(e.key)) return;
-        const now = Date.now();
-        const t = typed.current;
-        t.text = now - t.at < TYPEAHEAD_MS ? t.text + e.key.toLowerCase() : e.key.toLowerCase();
-        t.at = now;
-        const from = t.text.length > 1 ? i : i + 1;
-        for (let n = 0; n < navKeys.length; n++) {
-          const j = (from + n) % navKeys.length;
-          if (labels.get(navKeys[j])?.startsWith(t.text)) { focusKey(j); break; }
-        }
-      }
-    }
-    e.preventDefault();
-  };
+  useEffect(() => { void loadTreeKeys(); }, []);
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => keys?.treeKeyDown(e, {
+    navKeys,
+    navSet,
+    items: openItems,
+    focus: k => treeRef.current?.querySelector<HTMLElement>(`[data-nav="${attr(k)}"]`)?.focus(),
+    toggle: el => (el.dataset.dir !== undefined ? toggleDir(el.dataset.dir) : onToggle(el.dataset.file!)),
+    typed: typed.current,
+  });
 
   const animateFrom = helloAt + 1000;
   const now = Date.now();
@@ -342,7 +332,7 @@ export function FileTree() {
           title={`${dir} · ${node.count.toLocaleString()} ${node.count === 1 ? 'file' : 'files'}`}
         >
           <Chevron className="dchev" /><i /><MidName name={label} kind="dir" />
-          {act && <em className={clsx('dlive', act, act !== 'new' && 'pulse')} role="img" aria-label={ACTIVITY[act].label} title={ACTIVITY[act].title} />}
+          {act && <em className={clsx('dlive', act, act === 'now' && 'pulse')} role="img" aria-label={ACTIVITY[act][0]} title={`A file in this folder ${ACTIVITY[act][1]}`} />}
           {!open && !act && selectedDirs.has(dir) && <em className="dlive" role="img" aria-label="contains the selected file" title="The selected file is in this folder" />}
           <b>{node.count.toLocaleString()}</b>
         </button>,

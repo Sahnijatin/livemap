@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../store';
 import { file, sym, change, emptyDomain, event, session } from '../fixtures';
-import { FileTree } from './FileTree';
+import { FileTree, loadTreeKeys } from './FileTree';
 import { rowRenderProbe } from './FileRow';
 import { DIR_BATCH, ROW_BUDGET } from '../treeModel';
 
@@ -25,6 +25,7 @@ function mount() {
   renders.length = 0;
 }
 
+beforeAll(async () => { await loadTreeKeys(); });
 beforeEach(() => {
   vi.useFakeTimers();
   localStorage.clear();
@@ -125,7 +126,7 @@ describe('FileTree render cap', () => {
     mount();
     act(() => useStore.getState().setFilter('/f'));
     expect(ROW_BUDGET).toBe(1000);
-    expect(rows()).toBe(1000);
+    expect(rows() + 7).toBe(ROW_BUDGET); // the 7 folder rows count against the budget too
     expect(host.querySelectorAll('.dir')).toHaveLength(7);
     expect(host.querySelector('[data-nav="more:d6"]')!.textContent).toBe('Show 200 more (300 hidden)');
     act(() => host.querySelector<HTMLElement>('[data-nav="more:d6"]')!.click());
@@ -139,7 +140,7 @@ describe('FileTree render cap', () => {
     mount();
     act(() => useStore.getState().apply({ type: 'change', files: [], removed: [], change: change('d1/f699.ts', 'modified', { at: Date.now() }) }));
     expect(rows()).toBe(0);
-    expect(host.querySelector('[data-dir="d1"] .dlive')!.getAttribute('aria-label')).toBe('changed');
+    expect(host.querySelector('[data-dir="d1"] .dlive')!.getAttribute('aria-label')).toBe('edited');
     act(() => host.querySelector<HTMLElement>('[data-dir="d1"]')!.click());
     expect(rows()).toBe(DIR_BATCH + 1);
     expect(host.querySelector('[data-file="d1/f699.ts"] .b-edit')).not.toBeNull();
@@ -160,8 +161,8 @@ describe('FileTree collapsed folder indicator', () => {
     expect(host.querySelector('[data-file="a/x.ts"]')).toBeNull(); // the user's choice is kept
     const dot = header('a').querySelector('.dlive')!;
     expect(dot).not.toBeNull();
-    expect(dot.getAttribute('aria-label')).toBe('changed');
-    expect(dot.classList.contains('pulse')).toBe(true);
+    expect(dot.getAttribute('aria-label')).toBe('edited');
+    expect(dot.classList.contains('pulse')).toBe(false); // only a file being written pulses
     expect(header('b').querySelector('.dlive')).toBeNull();
     act(() => header('a').click()); // reopened: the row itself shows the badge
     expect(header('a').querySelector('.dlive')).toBeNull();
@@ -247,10 +248,9 @@ describe('FileTree live target', () => {
   });
 
   it('expands a collapsed folder and scrolls the target into view without changing selection', () => {
+    localStorage.setItem('livemap:tree:/p/shop', JSON.stringify([['lib', false]])); // closed in an earlier session
     useStore.getState().apply(hello([file('src/a.ts'), file('lib/b.ts')]));
     mount();
-    act(() => host.querySelector<HTMLElement>('[data-dir="lib"]')!.click());
-    act(() => { vi.advanceTimersByTime(400); }); // past the fold animation
     expect(host.querySelector('[data-file="lib/b.ts"]')).toBeNull();
     const before = useStore.getState().selected;
     target('lib/b.ts');
@@ -375,13 +375,45 @@ describe('FileTree folders', () => {
 
   it('shows only the top level at 2,000 files, and everything open below that', () => {
     const files = [];
+    for (let i = 0; i < 2000; i++) files.push(file(`d${i % 4}/sub/f${i}.ts`));
+    useStore.getState().apply(hello(files));
+    mount();
+    expect([...host.querySelectorAll<HTMLElement>('[role=treeitem]')].map(e => e.dataset.nav)).toEqual(['dir:d0/sub', 'dir:d1/sub', 'dir:d2/sub', 'dir:d3/sub']);
+  });
+
+  it('decides the default once per project: crossing 2,000 files mid-session keeps folders as they are', () => {
+    const files = [];
     for (let i = 0; i < 1999; i++) files.push(file(`d${i % 4}/sub/f${i}.ts`));
     useStore.getState().apply(hello(files));
     mount();
     expect(host.querySelector('[data-file="d0/sub/f0.ts"]')).not.toBeNull();
-    act(() => useStore.getState().apply({ type: 'files', files: [file('top.ts')], removed: [] }));
-    expect([...host.querySelectorAll<HTMLElement>('[role=treeitem]')].map(e => e.dataset.nav)).toEqual(['dir:d0/sub', 'dir:d1/sub', 'dir:d2/sub', 'dir:d3/sub', 'top.ts']);
-    expect(rows()).toBe(1);
+    act(() => useStore.getState().apply({ type: 'files', files: [file('top.ts'), file('d0/sub/new.ts')], removed: [] }));
+    expect(host.querySelector('[data-file="d0/sub/f0.ts"]')).not.toBeNull();
+    expect(dir('d1/sub')!.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('typeahead finds any folder in a compact row', () => {
+    useStore.getState().apply(hello([file('src/app/page.tsx'), file('lib/a.ts')]));
+    mount();
+    act(() => dir('lib')!.focus());
+    key('a');
+    key('p');
+    expect(focused()).toBe('dir:src/app');
+  });
+
+  it('keeps other folders still while a closing folder folds', () => {
+    const files = [];
+    for (let d = 0; d < 6; d++) for (let i = 0; i < 200; i++) files.push(file(`d${d}/f${String(i).padStart(3, '0')}.ts`));
+    useStore.getState().apply(hello(files));
+    mount();
+    const count = (d: string) => host.querySelectorAll(`[data-file^="${d}/"]`).length;
+    expect([0, 1, 2, 3, 4, 5].map(d => count(`d${d}`))).toEqual([200, 200, 200, 200, 194, 0]); // 6 folder rows count too
+    act(() => dir('d0')!.click());
+    expect(count('d0')).toBe(200); // still folding
+    expect([1, 2, 3, 4, 5].map(d => count(`d${d}`))).toEqual([200, 200, 200, 200, 194]);
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(count('d0')).toBe(0);
+    expect([1, 2, 3, 4, 5].map(d => count(`d${d}`))).toEqual([200, 200, 200, 200, 194]);
   });
 
   it('remembers opened and closed folders per project across remounts, ignoring folders that are gone', () => {
@@ -436,7 +468,7 @@ describe('FileTree folders', () => {
     act(() => dir('a')!.click());
     act(() => { vi.advanceTimersByTime(400); });
     act(() => useStore.getState().apply({ type: 'change', files: [], removed: [], change: change('a/b/c/x.ts', 'created', { at: Date.now() }) }));
-    expect(dir('a')!.querySelector('.dlive')!.getAttribute('aria-label')).toBe('changed');
+    expect(dir('a')!.querySelector('.dlive')!.getAttribute('aria-label')).toBe('new');
     expect(dir('a')!.querySelector('.dlive')!.classList.contains('new')).toBe(true);
   });
 
@@ -536,14 +568,15 @@ describe('FileTree folder state', () => {
   beforeEach(() => { (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView = vi.fn(); });
   afterEach(() => { delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView; });
 
-  it('folders the agent opens stay open for the session only', () => {
+  it('folders the agent opens are never saved, and close again as it moves on', () => {
     const files = [];
     for (let i = 0; i < 2100; i++) files.push(file(`d${i % 30}/sub/f${i}.ts`));
     useStore.getState().apply(hello(files));
     mount();
     for (let d = 0; d < 30; d++) target(`d${d}/sub/f${d}.ts`);
     expect(host.querySelector('[data-file="d29/sub/f29.ts"]')).not.toBeNull();
-    expect(host.querySelector('[data-file="d0/sub/f0.ts"]')).not.toBeNull();
+    expect(host.querySelector('[data-file="d0/sub/f0.ts"]')).toBeNull();
+    expect(host.querySelectorAll('[aria-expanded="true"]')).toHaveLength(1); // the d29/sub row
     act(() => { vi.advanceTimersByTime(1000); });
     expect(stored()).toBeNull();
     act(() => useStore.getState().apply({ type: 'session', session: { ...working(), status: 'idle' } }));
@@ -552,26 +585,60 @@ describe('FileTree folder state', () => {
     expect(host.querySelectorAll('[aria-expanded="true"]')).toHaveLength(0);
   });
 
-  it('a folder the user closed is shown open while revealed, and stays closed in storage', () => {
-    useStore.getState().apply(hello([file('a/x.ts'), file('a/y.ts'), file('b/z.ts')]));
+  it('a folder the user closed this session stays closed as the agent works in it; a select opens it', () => {
+    useStore.getState().apply(hello([file('a/x.ts'), file('a/y.ts'), file('a/z.ts'), file('b/z.ts')]));
     mount();
     act(() => dir('a')!.click());
     act(() => { vi.advanceTimersByTime(400); });
-    expect(host.querySelector('[data-file="a/x.ts"]')).toBeNull();
     target('a/x.ts');
-    expect(host.querySelector('[data-file="a/x.ts"]')).not.toBeNull();
-    act(() => useStore.getState().select('a/y.ts')); // a pick elsewhere is a session reveal too
+    target('a/z.ts');
+    expect(dir('a')!.getAttribute('aria-expanded')).toBe('false');
+    expect(dir('a')!.querySelector('.dlive')!.getAttribute('aria-label')).toBe('being written');
+    act(() => useStore.getState().select('a/y.ts')); // the user's own pick opens it, for the session
+    expect(dir('a')!.getAttribute('aria-expanded')).toBe('true');
     act(() => { vi.advanceTimersByTime(400); });
     expect(stored()).toEqual([['a', false]]);
     act(() => useStore.getState().apply({ type: 'session', session: { ...working(), status: 'idle' } }));
     act(() => useStore.getState().select(null));
     remount();
     expect(dir('a')!.getAttribute('aria-expanded')).toBe('false');
-    // Closing a revealed folder closes it, and that choice is saved.
-    act(() => useStore.getState().select('a/y.ts'));
+    // A folder closed in an earlier session is shown for the agent, and closing it now holds for the session.
+    target('a/x.ts');
     expect(dir('a')!.getAttribute('aria-expanded')).toBe('true');
     act(() => dir('a')!.click());
+    target('a/y.ts');
     expect(dir('a')!.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('closes folders only the agent opened once it moves on, but not ones the user picked a file in', () => {
+    const files = [];
+    for (let i = 0; i < 2100; i++) files.push(file(`d${i % 3}/s/f${i}.ts`));
+    useStore.getState().apply(hello(files));
+    mount();
+    target('d0/s/f0.ts');
+    expect(dir('d0/s')!.getAttribute('aria-expanded')).toBe('true');
+    act(() => useStore.getState().select('d2/s/f2.ts'));
+    target('d1/s/f1.ts');
+    expect(dir('d0/s')!.getAttribute('aria-expanded')).toBe('false');
+    expect(dir('d1/s')!.getAttribute('aria-expanded')).toBe('true');
+    target('d0/s/f3.ts');
+    expect(dir('d1/s')!.getAttribute('aria-expanded')).toBe('false');
+    expect(dir('d2/s')!.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('a file picked in a filtered view keeps only its own folders open after the filter clears, for the session', () => {
+    const files = [];
+    for (let i = 0; i < 2100; i++) files.push(file(`d${i % 3}/s/f${i}.ts`));
+    useStore.getState().apply(hello(files));
+    mount();
+    act(() => useStore.getState().setFilter('f1'));
+    act(() => byData('file', 'd1/s/f1.ts')!.click());
+    act(() => useStore.getState().setFilter(''));
+    expect(dir('d1/s')!.getAttribute('aria-expanded')).toBe('true');
+    expect(dir('d0/s')!.getAttribute('aria-expanded')).toBe('false');
+    expect(dir('d2/s')!.getAttribute('aria-expanded')).toBe('false');
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(stored()).toBeNull();
   });
 
   it('a file selected elsewhere under a filter is shown even if the user closed its folder in the filter', () => {

@@ -7,7 +7,7 @@ import { baseName, dirName, type LiveBadge } from './recent';
 export const BIG_PROJECT = 2000;
 /** Rows (subfolders, then files) an open folder shows at first; each "Show more" adds this many. */
 export const DIR_BATCH = 200;
-/** File rows rendered across all folders that have no explicit limit. */
+/** Rows (folders and files) rendered across all folders that have no explicit limit. */
 export const ROW_BUDGET = 1000;
 
 export type FlatSymbol = { sym: CodeSymbol; depth: number };
@@ -155,14 +155,14 @@ export type Item =
 /**
  * What the tree renders, depth first. Root's children always render. An open folder renders its subfolders (as
  * compact chains), then its files: up to its own limit (`dirLimit`, set by "Show more") or, without one, up to
- * DIR_BATCH, with files only while the shared budget of ROW_BUDGET file rows lasts. The budget goes level by level
+ * DIR_BATCH, while the shared budget of ROW_BUDGET rows (folders and files) lasts. The budget goes level by level
  * (breadth first), so a deep subtree never hides the files of a shallower folder. A folder with rows left over gets
  * a "more" item. Pinned files, and the folders that hold them, render even past the cap. `navKeys` lists the
  * focusable rows in order, including visible symbol rows.
  */
 export function visibleItems(
   root: DirNode,
-  dirOpen: (paths: string[], level: number) => boolean,
+  dirOpen: (paths: string[]) => boolean,
   rowOpen: (row: Row) => boolean,
   dirLimit: ReadonlyMap<string, number>,
   pins: Iterable<string> = [],
@@ -171,27 +171,28 @@ export function visibleItems(
   const pinnedDirs = new Set<string>();
   for (const p of pinned) for (const d of ancestors(p)) pinnedDirs.add(d);
   type Sub = { chain: DirNode[]; open: boolean; past: boolean };
-  type Plan = { dirsShown: number; filesShown: number; subs: Map<DirNode, Sub> };
+  type Plan = { dirsShown: number; filesShown: number; subs: Sub[] };
   // Pass 1, breadth first: which subfolders show and are open, and how many files each open folder shows.
   const plans = new Map<DirNode, Plan>();
   let budget = ROW_BUDGET;
-  const queue: [DirNode, number][] = [[root, 1]];
+  const queue: DirNode[] = [root];
   for (let qi = 0; qi < queue.length; qi++) {
-    const [node, level] = queue[qi];
+    const node = queue[qi];
     const explicit = dirLimit.get(node.path);
     const limit = explicit ?? DIR_BATCH;
-    const dirsShown = Math.min(node.dirs.length, limit);
+    const dirsShown = Math.min(node.dirs.length, explicit !== undefined ? limit : Math.max(0, Math.min(limit, budget)));
+    if (explicit === undefined) budget -= dirsShown;
     const cap = explicit !== undefined ? limit - dirsShown : Math.max(0, Math.min(limit - dirsShown, budget));
     const filesShown = Math.min(node.rows.length, cap);
     if (explicit === undefined) budget -= filesShown;
-    const subs = new Map<DirNode, Sub>();
+    const subs: Sub[] = [];
     for (let i = 0; i < node.dirs.length; i++) {
       const d = node.dirs[i];
       if (i >= dirsShown && !pinnedDirs.has(d.path)) continue;
       const chain = chainOf(d);
-      const open = dirOpen(chain.map(c => c.path), level);
-      subs.set(d, { chain, open, past: i >= dirsShown });
-      if (open) queue.push([chain[chain.length - 1], level + 1]);
+      const open = dirOpen(chain.map(c => c.path));
+      subs.push({ chain, open, past: i >= dirsShown });
+      if (open) queue.push(chain[chain.length - 1]);
     }
     plans.set(node, { dirsShown, filesShown, subs });
   }
@@ -202,7 +203,7 @@ export function visibleItems(
   const walk = (node: DirNode, level: number, up: string | null) => {
     const { dirsShown, filesShown, subs } = plans.get(node)!;
     let extra = 0;
-    for (const { chain, open, past } of subs.values()) {
+    for (const { chain, open, past } of subs) {
       if (past) extra++;
       const tail = chain[chain.length - 1];
       const key = dirKey(tail.path);
@@ -263,7 +264,9 @@ function splitWord(name: string): [string, string] {
     const a = name[i - 1];
     if ('-_. '.includes(a) || (LOWER.test(a) && UPPER.test(name[i]))) return [name.slice(0, i), name.slice(i)];
   }
-  return [name.slice(0, -10), name.slice(-10)];
+  // No word to keep: the last 10 characters, counted in code points so a character is never cut in two.
+  const chars = Array.from(name);
+  return [chars.slice(0, -10).join(''), chars.slice(-10).join('')];
 }
 
 /** Open and closed folders, by full path, stored per project. */
