@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { acquireLock, LOCK_GRACE_MS, lockFile, releaseLock, setLockPort } from '../src/lock.js';
+import { acquireLock, lockFile, releaseLock, setLockPort } from '../src/lock.js';
 
 let home: string;
 let root: string;
@@ -108,64 +108,65 @@ describe('project lock (#21)', () => {
       }
     });
 
-    it('is stale without a port once it is older than the start-up grace period', async () => {
+    it('is held without a port while its pid runs, however old: the holder may still be starting', async () => {
       fs.writeFileSync(lockFile(root), `${other.pid}\n`);
-      const old = (Date.now() - LOCK_GRACE_MS - 1000) / 1000;
+      const old = (Date.now() - 60 * 60_000) / 1000;
       fs.utimesSync(lockFile(root), old, old);
-      expect(await acquireLock(root)).toEqual({ ok: true });
-      expect(fs.readFileSync(lockFile(root), 'utf8').trim()).toBe(String(process.pid));
+      expect(await acquireLock(root)).toEqual({ ok: false, pid: other.pid });
     });
 
-    it('is stale when the pid belongs to another user (EPERM)', async () => {
+    it('is held when the pid belongs to another user (EPERM), such as a LiveMap started with sudo', async () => {
       fs.writeFileSync(lockFile(root), `${other.pid}\n`);
       const kill = process.kill.bind(process);
       vi.spyOn(process, 'kill').mockImplementation((pid, sig) => {
         if (pid === other.pid && sig === 0) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
         return kill(pid, sig);
       });
-      expect(await acquireLock(root)).toEqual({ ok: true });
-      expect(fs.readFileSync(lockFile(root), 'utf8').trim()).toBe(String(process.pid));
+      expect(await acquireLock(root)).toEqual({ ok: false, pid: other.pid });
     });
   });
 
-  it('keeps a fresh lock another starter took between judging the old one stale and removing it (#40)', async () => {
+  it('waits for another starter taking over the same stale lock, then sees its fresh lock (#40)', async () => {
     const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
     try {
       const file = lockFile(root);
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, `${await deadPid()}\n`);
-      // The other starter also saw the dead pid, and removes it and links its own lock right before this one
-      // acts on the lock it judged stale (whichever of rename or unlink that is).
-      let raced = false;
-      const race = (p: fs.PathLike) => {
-        if (raced || p !== file) return;
-        raced = true;
-        fs.rmSync(file);
-        fs.writeFileSync(file, `${other.pid}\n`);
-      };
-      const rename = fs.renameSync.bind(fs);
-      const unlink = fs.unlinkSync.bind(fs);
-      vi.spyOn(fs, 'renameSync').mockImplementation((a, b) => { race(a); rename(a, b); });
-      vi.spyOn(fs, 'unlinkSync').mockImplementation(p => { race(p); unlink(p); });
-      expect(await acquireLock(root)).toEqual({ ok: false, pid: other.pid });
-      expect(raced).toBe(true);
+      // The other starter holds the takeover mutex: it replaces the stale lock with its own, then lets go.
+      fs.writeFileSync(`${file}.takeover`, `${other.pid}\n`);
+      const pending = acquireLock(root);
+      await new Promise(r => setTimeout(r, 150));
+      fs.rmSync(file);
+      fs.writeFileSync(file, `${other.pid}\n`);
+      fs.rmSync(`${file}.takeover`);
+      expect(await pending).toEqual({ ok: false, pid: other.pid });
       expect(fs.readFileSync(file, 'utf8')).toBe(`${other.pid}\n`);
       expect(fs.readdirSync(path.dirname(file))).toEqual([path.basename(file)]);
     } finally {
-      vi.restoreAllMocks();
       other.kill('SIGKILL');
       await new Promise(r => other.on('exit', r));
     }
   });
 
+  it('clears a takeover mutex left by a starter that died mid-takeover', async () => {
+    const file = lockFile(root);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${await deadPid()}\n`);
+    fs.writeFileSync(`${file}.takeover`, '1\n');
+    const old = (Date.now() - 60_000) / 1000;
+    fs.utimesSync(`${file}.takeover`, old, old);
+    expect(await acquireLock(root)).toEqual({ ok: true });
+    expect(fs.readdirSync(path.dirname(file))).toEqual([path.basename(file)]);
+  });
+
   it('records the port of the holder, and only of the holder', async () => {
     expect(await acquireLock(root)).toEqual({ ok: true });
-    setLockPort(root, 4321);
+    expect(setLockPort(root, 4321)).toBe(true);
     expect(JSON.parse(fs.readFileSync(lockFile(root), 'utf8'))).toEqual({ pid: process.pid, port: 4321 });
     expect(await acquireLock(root)).toEqual({ ok: true });
     expect(fs.readdirSync(path.dirname(lockFile(root)))).toEqual([path.basename(lockFile(root))]);
     fs.writeFileSync(lockFile(root), `${process.pid + 1}\n`);
-    setLockPort(root, 5555);
+    expect(setLockPort(root, 5555)).toBe(false);
     expect(fs.readFileSync(lockFile(root), 'utf8')).toBe(`${process.pid + 1}\n`);
     fs.writeFileSync(lockFile(root), JSON.stringify({ pid: process.pid, port: 4321 }));
     releaseLock(root);

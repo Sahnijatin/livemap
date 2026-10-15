@@ -13,9 +13,11 @@ export function lockFile(root: string): string {
   return path.join(livemapHome(), 'locks', `${crypto.createHash('sha1').update(real(root)).digest('hex')}.lock`);
 }
 
-/** How long a lock without a port counts as held by its live pid: the holder is still starting up. */
-export const LOCK_GRACE_MS = 2 * 60_000;
 const PROBE_MS = 300;
+/** A takeover mutex older than this was left by a starter that died mid-takeover. */
+const MUTEX_STALE_MS = 10_000;
+const RETRY_MS = 50;
+const ATTEMPTS = 40;
 
 interface LockState { text: string; pid: number | null; port: number | null; mtimeMs: number; ino: number }
 
@@ -46,16 +48,13 @@ function readLock(file: string): LockState | null {
   }
 }
 
-/**
- * Whether `pid` is a running process of this user. EPERM (another user's process) counts as not running:
- * that cannot be a LiveMap holding a lock in this user's home, so the pid was reused after a crash or restart.
- */
-function ownPidAlive(pid: number): boolean {
+/** Whether `pid` runs. EPERM (another user's process, e.g. a LiveMap started with sudo) counts as running. */
+function pidRuns(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code !== 'ESRCH';
   }
 }
 
@@ -71,34 +70,37 @@ function listening(port: number): Promise<boolean> {
 }
 
 /**
- * Whether the lock still belongs to a running LiveMap. Its pid must be alive and ours; a pid reused by an
- * unrelated process is then told apart by the port (nothing listens there any more), or, before the holder
- * has written its port, by the lock's age.
+ * Whether the lock still belongs to a running LiveMap: its pid runs and, once the holder has recorded its
+ * port, something still listens there (a pid reused after a crash has no LiveMap on that port). A lock with
+ * no port yet counts as held while its pid runs: its holder is starting up.
  */
 async function held(s: LockState): Promise<boolean> {
-  if (s.pid === null || !ownPidAlive(s.pid)) return false;
-  if (s.port !== null) return listening(s.port);
-  return Date.now() - s.mtimeMs < LOCK_GRACE_MS;
+  if (s.pid === null || !pidRuns(s.pid)) return false;
+  return s.port === null || listening(s.port);
 }
 
 /**
- * Removes the stale lock `stale` (null: it could not be read). Checking and then unlinking
- * would race: another starter may replace the stale lock with its own in between, and that fresh lock would
- * go. So the lock is first moved aside atomically and checked there; a lock that turns out to be someone
- * else's is linked back, which succeeds only while the slot is still empty, and the caller looks again.
+ * Removes the lock if it is still exactly `stale`. Starters that found the same stale lock take turns under a
+ * mutex file, so none of them can remove a fresh lock another just linked in its place. Returns false when
+ * another starter holds the mutex (the caller waits and looks again).
  */
-function takeOver(file: string, stale: LockState | null): void {
-  const aside = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.stale`;
+function removeStale(file: string, stale: LockState | null): boolean {
+  const mutex = `${file}.takeover`;
   try {
-    fs.renameSync(file, aside);
+    fs.writeFileSync(mutex, `${process.pid}\n`, { mode: 0o600, flag: 'wx' });
   } catch {
-    return; // gone already: the caller retries the link
+    // Left by a starter that died mid-takeover: clear it so the next attempt can proceed.
+    try { if (Date.now() - fs.statSync(mutex).mtimeMs > MUTEX_STALE_MS) fs.unlinkSync(mutex); } catch { /* gone */ }
+    return false;
   }
-  const got = readLock(aside);
-  if (got?.text !== stale?.text || got?.ino !== stale?.ino) {
-    try { fs.linkSync(aside, file); } catch { /* the slot is taken again; the caller looks at that lock */ }
+  try {
+    const now = readLock(file);
+    if (now && now.text === stale?.text && now.ino === stale?.ino) fs.unlinkSync(file);
+    else if (now && !stale) fs.unlinkSync(file); // unreadable before, still there: stale
+  } catch { /* already gone */ } finally {
+    try { fs.unlinkSync(mutex); } catch { /* already gone */ }
   }
-  try { fs.unlinkSync(aside); } catch { /* already gone */ }
+  return true;
 }
 
 /**
@@ -117,12 +119,12 @@ export async function acquireLock(root: string): Promise<{ ok: true } | { ok: fa
         fs.linkSync(tmp, file);
         return { ok: true };
       } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= 5) throw e;
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= ATTEMPTS) throw e;
       }
       const s = readLock(file);
       if (s?.pid === process.pid) return { ok: true };
       if (s && await held(s)) return { ok: false, pid: s.pid as number };
-      takeOver(file, s);
+      if (!removeStale(file, s)) await new Promise(r => setTimeout(r, RETRY_MS));
     }
   } finally {
     try { fs.unlinkSync(tmp); } catch { /* already gone */ }
@@ -131,11 +133,12 @@ export async function acquireLock(root: string): Promise<{ ok: true } | { ok: fa
 
 /**
  * Records the port this process listens on in its lock (temp file, then rename), so a later starter can tell
- * this LiveMap from an unrelated process that reuses its pid. Does nothing when this process does not hold it.
+ * this LiveMap from an unrelated process that reuses its pid. Returns false, writing nothing, when this
+ * process no longer holds the lock.
  */
-export function setLockPort(root: string, port: number): void {
+export function setLockPort(root: string, port: number): boolean {
   const file = lockFile(root);
-  if (readLock(file)?.pid !== process.pid) return;
+  if (readLock(file)?.pid !== process.pid) return false;
   const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   try {
     fs.writeFileSync(tmp, `${JSON.stringify({ pid: process.pid, port })}\n`, { mode: 0o600, flag: 'wx' });
@@ -144,6 +147,7 @@ export function setLockPort(root: string, port: number): void {
     try { fs.unlinkSync(tmp); } catch { /* already gone */ }
     throw e;
   }
+  return true;
 }
 
 /** Removes the lock only when this process holds it. */

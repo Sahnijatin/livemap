@@ -233,7 +233,11 @@ async function main(): Promise<void> {
   // The port lets a later start tell this run from an unrelated process that reuses its pid after a crash.
   if (locked) {
     try {
-      setLockPort(root, server.port);
+      if (!setLockPort(root, server.port)) {
+        // Another start replaced the lock meanwhile: it owns this project, so leave its runtime entry alone.
+        locked = false;
+        process.stderr.write('livemap: warning: another LiveMap took over the project lock; agent hooks may not reach this run\n');
+      }
     } catch (e) {
       process.stderr.write(`livemap: warning: could not record the port in the project lock: ${(e as Error).message}\n`);
     }
