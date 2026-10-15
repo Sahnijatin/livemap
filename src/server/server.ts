@@ -16,6 +16,7 @@ import { RECORDED_TYPES, type HistoryStore } from '../history/store.js';
 import type { AgentEvent, AgentSession, Attribution, ChangeSummary, CodeSymbol, ControlState, FileModel } from '../shared/types.js';
 import { offStatus, type FileSummary, type SummariesState, type SummaryStatus } from '../shared/summaries.js';
 import { changeQualifies } from '../summarize/summarizer.js';
+import { LOCK_PATH } from '../lock.js';
 import { authenticate, hostAllowed, newToken, originAllowed } from './auth.js';
 import { handleControlApi, handleHook } from './agent-routes.js';
 import { handleHistoryApi, sendJsonMaybeGzip } from './history-routes.js';
@@ -40,6 +41,8 @@ export interface ServerOptions {
   history?: HistoryStore;
   /** Writes AI summaries of files and changes. Without it summaries are off and `/api/summary` answers 503. */
   summarizer?: SummaryEngine;
+  /** The project lock's id, answered at `/__livemap/lock` so a later start can tell this LiveMap is alive. */
+  lockId?: () => string | undefined;
 }
 
 /** What the server uses of a summarizer (`src/summarize/summarizer.ts`); tests inject a fake. */
@@ -501,6 +504,11 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     }
     const reply = (status: number, body: unknown, extra?: Record<string, string>) => json(res, status, body, extra);
     if (url.pathname === '/hook') return handleHook(req, res, reply, token, hub);
+    // No token: the id is random and only says that this LiveMap still holds its project's lock.
+    if (url.pathname === LOCK_PATH && req.method === 'GET') {
+      const lock = opts.lockId?.();
+      return lock ? json(res, 200, { lock }) : json(res, 404, { error: 'no lock' });
+    }
     // The UI shell is static and holds no project data, so it loads without a token (a reload has
     // none in its URL); the page then sends the token it kept in sessionStorage with every request.
     if (isApiPath(url.pathname) && !authenticate(req, url, token)) return json(res, 401, { error: 'unauthorized' });
