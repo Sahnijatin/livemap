@@ -5,6 +5,9 @@ import { emptyDomainIndex } from '../store';
 import { file, sym } from '../fixtures';
 import { INITIALS, PATH, SUBSTRING, WORD, buildIndex, query, type Entry } from './searchIndex';
 
+/** Slower CI runners scale wall-clock budgets (LIVEMAP_TIME_SCALE, set by CI on macOS and Windows). */
+const TIME_SCALE = Number(process.env.LIVEMAP_TIME_SCALE) || 1;
+
 const route = (method: string, fullPath: string, file: string, line: number, kind: ApiRoute['kind'] = 'api'): ApiRoute => ({
   id: `${method} ${fullPath} ${file}:${line}`, method, path: fullPath, fullPath, file, line, kind, framework: 'express',
 });
@@ -159,9 +162,9 @@ describe('performance (Review Focus 3)', () => {
       worst = Math.max(worst, performance.now() - s);
     }
     console.log(`[perf] buildIndex 5,000 files / 40,000 symbols: ${build.toFixed(1)} ms; after one edit: ${rebuild.toFixed(1)} ms; slowest query: ${worst.toFixed(1)} ms`);
-    expect(rebuild).toBeLessThan(60);
-    expect(build).toBeLessThan(600);
-    expect(worst).toBeLessThan(100);
+    expect(rebuild).toBeLessThan(60 * TIME_SCALE);
+    expect(build).toBeLessThan(600 * TIME_SCALE);
+    expect(worst).toBeLessThan(100 * TIME_SCALE);
   });
 });
 

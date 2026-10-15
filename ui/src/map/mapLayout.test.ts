@@ -9,6 +9,9 @@ import {
 import { LAYOUT_TIMEOUT, type ElkRun } from '../layout/elk';
 import { filePins, type Pins } from './pins';
 
+/** Slower CI runners scale wall-clock budgets (LIVEMAP_TIME_SCALE, set by CI on macOS and Windows). */
+const TIME_SCALE = Number(process.env.LIVEMAP_TIME_SCALE) || 1;
+
 const elk = new ELK();
 const run: ElkRun = g => elk.layout(g);
 const noPins = (): Pins => ({ files: {}, functions: {}, folders: {} });
@@ -458,7 +461,7 @@ describe('placeMap: scale', () => {
     const g = graph('files', spec, uniq);
     const t0 = performance.now();
     const pos = await placeMap(g, emptyPositions(), noPins(), run);
-    expect(performance.now() - t0).toBeLessThan(3000);
+    expect(performance.now() - t0).toBeLessThan(3000 * TIME_SCALE);
     expect(pos.files.size).toBe(500);
     const folders = [...pos.folders.values()];
     for (let i = 0; i < folders.length; i++) for (let j = i + 1; j < folders.length; j++) expect(overlaps(folders[i], folders[j])).toBe(false);

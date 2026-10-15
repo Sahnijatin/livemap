@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import type { ChangeSummary, CodeSymbol, FileModel, Flag, Lang } from '@shared/types.js';
 import { buildMap, LARGE_PROJECT, type MapInput } from './mapModel';
 
+/** Slower CI runners scale wall-clock budgets (LIVEMAP_TIME_SCALE, set by CI on macOS and Windows). */
+const TIME_SCALE = Number(process.env.LIVEMAP_TIME_SCALE) || 1;
+
 const sym = (name: string, line = 1, children: CodeSymbol[] = []): CodeSymbol => ({
   name, qname: name, kind: 'function', signature: `${name}()`, line, endLine: line + 1, exported: true, hash: name, children,
 });
@@ -120,6 +123,6 @@ describe('buildMap', () => {
     const ms = performance.now() - t0;
     console.log(`buildMap 5000 files folders level: ${ms.toFixed(1)} ms`);
     expect(g.folders).toHaveLength(100);
-    expect(ms).toBeLessThan(250);
+    expect(ms).toBeLessThan(250 * TIME_SCALE);
   });
 });
