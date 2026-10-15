@@ -40,6 +40,11 @@ describe('extractImports', () => {
     // shadows the standard library module.
     expect(extractImports('app/views.py', 'python', 'import logging\nimport util\nimport json', ctx))
       .toEqual({ local: ['app/logging.py', 'app/util.py'], external: ['json'] });
+    // Modules Python loads before searching any directory are never a project file.
+    const pre = ['app/views.py', 'app/time.py', 'app/io.py', 'app/os.py'];
+    const preHas = new Set(pre);
+    expect(extractImports('app/views.py', 'python', 'import time\nimport io\nfrom os import path', { has: p => preHas.has(p), files: pre, aliases: [], goModule: null }))
+      .toEqual({ local: [], external: ['os', 'time', 'io'] });
     // svc/app is a package, so its own directory is not on the import path; its parent svc/ is.
     expect(extractImports('svc/app/views.py', 'python', 'import helpers', ctx).local).toEqual(['svc/helpers.py']);
     expect(resolveSpecifier('svc/app/views.py', 'python', 'helpers', ctx)).toBe('svc/helpers.py');
@@ -165,7 +170,7 @@ describe('indexing and fixes', () => {
     const after = "\nimport y from './lib';\nimport {\n  b,\n} from './lib/b';\nexport * from 'vue';\n";
     const want = { local: ['src/lib/b.ts', 'src/lib/index.ts'], external: ['vue'] };
     expect(imp('src/a.ts', 'typescript', "const re = /`/; const q = /[/'\"]/g; const half = a / 2 / b;" + after)).toEqual(want);
-    expect(imp('src/a.ts', 'typescript', "const tick = c => /`/.test(c);" + after)).toEqual(want);
+    expect(imp('src/a.ts', 'typescript', "const tick = c => /`/.test(c);\nconst ok = x > /`/.source.length;" + after)).toEqual(want);
     // A JSX closing tag is not a regex: the template after it is read as one.
     expect(imp('src/a.tsx', 'tsx', after + "const P = () => <div><p>x</p>{`a/b`}</div>;\nconst m = require('./ui/c');\nconst v = `ok`;\n"))
       .toEqual({ ...want, local: [...want.local, 'src/ui/c.tsx'] });

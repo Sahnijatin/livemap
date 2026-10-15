@@ -91,13 +91,8 @@ function indexOf(ctx: ImportCtx): FileIndex {
 const blank = (s: string): string => s.replace(/[^\n]/g, ' ');
 
 /** Code after which a `/` starts a regex literal rather than a division. */
-const REGEX_AFTER = new Set(['', '=', '(', ',', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '~', '^']);
-/** Whether the `>` before `i` (past spaces) ends an arrow `=>`, after which `/` starts a regex; a JSX `</p>` does not. */
-function afterArrow(src: string, i: number): boolean {
-  let k = i - 1;
-  while (k > 0 && (src[k] === ' ' || src[k] === '\t')) k--;
-  return src[k] === '>' && src[k - 1] === '=';
-}
+// `<` is left out: in JSX `</p>` its `/` closes a tag. `>` (an arrow or a comparison) is in.
+const REGEX_AFTER = new Set(['', '=', '(', ',', ':', '[', '!', '&', '|', '?', '{', '}', ';', '>', '+', '-', '*', '%', '~', '^']);
 const REGEX_KEYWORD = /\b(?:return|typeof|case|void|yield|await|in|of|delete|instanceof)$/;
 
 /** End of the regex literal opening at `i` (past its closing `/`), or -1 when the line does not close one. */
@@ -144,7 +139,7 @@ function blankJs(src: string): string {
       const stop = end === -1 ? src.length : src[i + 1] === '/' ? end : end + 2;
       out += blank(src.slice(i, stop));
       i = stop;
-    } else if (c === '/' && !divisions && (REGEX_AFTER.has(prev) || (prev === '>' && afterArrow(src, i)) || (/[\w$]/.test(prev) && REGEX_KEYWORD.test(src.slice(Math.max(0, i - 12), i).trimEnd())))) {
+    } else if (c === '/' && !divisions && (REGEX_AFTER.has(prev) || (/[\w$]/.test(prev) && REGEX_KEYWORD.test(src.slice(Math.max(0, i - 12), i).trimEnd())))) {
       const end = regexEnd(src, i);
       if (end < 0) { out += c; i++; prev = c; divisions = true; continue; }
       out += '/' + blank(src.slice(i + 1, end - 1)) + '/';
@@ -308,16 +303,27 @@ function pyModule(base: string, ctx: ImportCtx): string | null {
 
 
 /**
+ * Modules built into the interpreter or imported while it starts (CPython 3.x on Linux, macOS and Windows):
+ * Python finds them before it searches any directory, so a project file of the same name never replaces them.
+ */
+const PY_PRELOADED = new Set([
+  'abc', 'builtins', 'codecs', 'encodings', 'errno', 'gc', 'genericpath', 'io', 'itertools', 'marshal', 'math', 'nt',
+  'ntpath', 'os', 'posix', 'posixpath', 'site', 'stat', 'sys', 'time', 'zipimport',
+]);
+
+/**
  * Candidate directories for a dotted module, in order: relative to `dir` (rel leading dots), or, for an
  * absolute module, each ancestor of the importing file nearest first that is not itself a package (a
  * project nested under `backend/` or `services/ml/` runs with its own directory on the import path, while
  * inside a package Python 3 has no implicit relative imports), then the root and `src`. As in Python, a
- * project file on that path named like a standard library module (`logging.py`) shadows it.
+ * project file on that path named like a standard library module (`logging.py`) shadows it, except for the
+ * modules Python has loaded before it searches any path (`PY_PRELOADED`).
  */
 function pyBases(dir: string, mod: string, rel: number, ctx: ImportCtx): string[] {
   const p = mod.replace(/\./g, '/');
   if (rel > 0) return [join(dir, ...Array(rel - 1).fill('..'), p)];
   const out: string[] = [];
+  if (PY_PRELOADED.has(mod.split('.')[0])) return out;
   if (mod) for (let d = dir; d; d = parentDir(d)) if (!ctx.has(join(d, '__init__.py'))) out.push(join(d, p));
   for (const r of ['', 'src']) out.push(join(r, p));
   return out;

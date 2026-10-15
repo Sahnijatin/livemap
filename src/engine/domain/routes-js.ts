@@ -283,8 +283,8 @@ function refArg(arg: string): boolean {
 const REQUEST_PARTS = new Set(['body', 'data', 'payload', 'params', 'query', 'config', 'cfg', 'conf', 'options', 'opts', 'init', 'headers', 'form', 'formdata', 'values', 'input', 'signal']);
 /** Nouns that are payloads as bare variables (`api.post('/u', user)`) but handlers as members (`ctl.user`). */
 const PAYLOAD_NOUNS = new Set(['event', 'evt', 'user', 'item', 'record', 'entity', 'file', 'blob']);
-/** Calls that build a request body, not a handler (`api.post('/u', JSON.stringify(user))`). */
-const CLIENT_CALLS = new Set(['JSON.stringify', 'String', 'Number', 'Boolean', 'encodeURIComponent', 'encodeURI', 'URLSearchParams', 'FormData', 'Blob']);
+/** Calls (by last name) that build a request body, not a handler: `JSON.stringify(user)`, `qs.stringify(form)`. */
+const CLIENT_CALLS = new Set(['stringify', 'String', 'Number', 'Boolean', 'encodeURIComponent', 'encodeURI']);
 /** Words after which an expression's value is used. */
 const USING_WORDS = new Set(['await', 'return', 'void', 'yield', 'typeof', 'new', 'throw', 'in', 'of', 'case', 'delete', 'instanceof']);
 /**
@@ -324,11 +324,12 @@ function routeLike(rest: string[], used: boolean): boolean {
   const last = rest[rest.length - 1].trim();
   // A factory call names its handler before the parentheses: `validate(schema)` is `validate`.
   const callee = last.replace(/\s*\([^]*$/, '').replace(/\s+/g, '');
-  if (callee !== last.replace(/\s+/g, '')) return !CLIENT_CALLS.has(callee.replace(/^new/, ''));
-  const seg = callee.slice(callee.lastIndexOf('.') + 1).toLowerCase();
-  if (REQUEST_PARTS.has(seg)) return false;
-  // A bare noun is a payload; as a member (`ctl.user`, `stripe.event`) it is a controller's handler.
-  return callee.includes('.') || !PAYLOAD_NOUNS.has(seg);
+  const seg = callee.slice(callee.lastIndexOf('.') + 1);
+  if (callee !== last.replace(/\s+/g, '')) return !CLIENT_CALLS.has(seg);
+  if (REQUEST_PARTS.has(seg.toLowerCase())) return false;
+  // A bare noun or this one's field is a payload; another object's (`ctl.user`, `stripe.event`) is a handler.
+  const owner = callee.includes('.') ? callee.slice(0, callee.lastIndexOf('.')) : '';
+  return (owner !== '' && owner !== 'this') || !PAYLOAD_NOUNS.has(seg.toLowerCase());
 }
 
 /** Fastify `route({ method, url, handler })`; a method array gives one route per method. */
