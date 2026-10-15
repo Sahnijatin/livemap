@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import clsx from 'clsx';
-import { useStore } from './store';
+import { isGated, useStore } from './store';
 import { Toolbar } from './components/Toolbar';
 import { FileTree } from './components/FileTree';
 import { Inspector } from './components/Inspector';
@@ -17,7 +17,7 @@ export function App() {
   const panel = useStore(s => s.panel);
   const name = useStore(s => s.name);
   // While the gate covers the workspace, nothing behind it is focusable or clickable.
-  const gated = useStore(s => s.connection === 'unauthorized' || !s.loaded);
+  const gated = useStore(isGated);
 
   useEffect(() => {
     document.title = name ? `${name} · LiveMap` : 'LiveMap';

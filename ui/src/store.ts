@@ -261,12 +261,16 @@ function routesByFileOf(domain: DomainIndex): Record<string, ApiRoute[]> {
 
 const freshDomain = () => ({ domain: emptyDomainIndex(), domainBase: baseOf(emptyDomainIndex()), routesByFile: {} });
 
-/** Files after upserting and removing; clears the selection if its file is gone. */
-function upsertFiles(st: StoreState, upserts: FileModel[], removed: string[]): Pick<StoreState, 'files' | 'selected'> {
+/** A peek ends for good once the selected file is missing, so the file coming back does not reopen the inspector. */
+const keepPeek = (st: StoreState, files: Record<string, FileModel>, selected: string | null): boolean => st.peek && !!selected && !!files[selected];
+
+/** Files after upserting and removing; clears the selection (and its peek) if its file is gone. */
+function upsertFiles(st: StoreState, upserts: FileModel[], removed: string[]): Pick<StoreState, 'files' | 'selected' | 'peek'> {
   const files = { ...st.files };
   for (const p of removed) delete files[p];
   for (const f of upserts) files[f.path] = f;
-  return { files, selected: st.selected && files[st.selected] ? st.selected : null };
+  const selected = st.selected && files[st.selected] ? st.selected : null;
+  return { files, selected, peek: keepPeek(st, files, selected) };
 }
 
 function recordRecent(recent: StoreState['recent'], c: ChangeSummary): void {
@@ -373,6 +377,9 @@ export const isAfter = (msg: WireMessage, stateSeq: number | undefined): boolean
   msg.seq === undefined ? stateSeq === undefined : stateSeq === undefined || msg.seq > stateSeq;
 
 
+/** The Gate covers the workspace (key needed, or no hello yet): nothing behind it is usable. */
+export const isGated = (s: StoreState): boolean => s.connection === 'unauthorized' || !s.loaded;
+
 /** The dock before Dock measures `.app` (before first paint): the window's width. */
 const windowDock = (): StoreState['dock'] => {
   const vw = globalThis.innerWidth ?? 0;
@@ -407,6 +414,7 @@ export const useStore = create<StoreState>()((set, get) => ({
           hellos: newRun(before, msg.events) ? get().hellos + 1 : get().hellos,
           historyStatus: msg.history ?? NO_HISTORY,
           selected: selected && data.files[selected] ? selected : null,
+          peek: keepPeek(get(), data.files, selected),
         });
         return;
       }
@@ -569,7 +577,7 @@ export const useStore = create<StoreState>()((set, get) => ({
     // The selection stays even when its file did not exist yet, so going back to live restores it.
     // The summarizer status is the engine's now, not history's: it stays live.
     const past = replaceData(data, get());
-    set({ ...past, summaries: { ...past.summaries, status: get().summaries.status }, rewound: { seq, at } });
+    set({ ...past, summaries: { ...past.summaries, status: get().summaries.status }, rewound: { seq, at }, peek: keepPeek(get(), past.files, get().selected) });
   },
 
   applyHistorical({ seq, at, msg }) {
@@ -632,7 +640,7 @@ export const useStore = create<StoreState>()((set, get) => ({
     const status = live.history && live.history.last >= historyStatus.last ? live.history : historyStatus;
     // Likewise a summarizer status that arrived while waiting (it is applied at once, never buffered).
     if (statusGen !== statusAt) data.summaries = { ...data.summaries, status: summaries.status };
-    set({ ...data, historyStatus: status, selected: selected && data.files[selected] ? selected : null, rewound: null });
+    set({ ...data, historyStatus: status, selected: selected && data.files[selected] ? selected : null, peek: keepPeek(get(), data.files, selected), rewound: null });
     // Then what arrived after the state was built, each once.
     for (const m of buffered) if (isAfter(m, live.seq)) get().apply(m);
   },

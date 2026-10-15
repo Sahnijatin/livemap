@@ -1,11 +1,14 @@
-/** A text field other than the palette's own input: a shortcut key typed there belongs to the field. */
-export function typingElsewhere(el: Element | null): boolean {
-  if (!el || el.closest('[cmdk-dialog]')) return false;
-  if (el instanceof HTMLTextAreaElement || (el as HTMLElement).isContentEditable) return true;
-  if (!(el instanceof HTMLInputElement)) return false;
-  return !['button', 'checkbox', 'radio', 'range', 'color', 'file', 'submit', 'reset', 'image'].includes(el.type);
-}
+const NOT_TEXT = ['button', 'checkbox', 'radio', 'range', 'color', 'file', 'submit', 'reset', 'image'];
 
-/** Focus in a form control of any kind (or an editable or text-entry widget): single-key shortcuts stay out of it. */
-export const inFormControl = (el: Element | null): boolean =>
-  !!el && ((el as HTMLElement).isContentEditable || !!el.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role=textbox], [role=combobox]'));
+/**
+ * Whether a key typed with focus on `el` belongs to the field there, not to a shortcut.
+ * - `controls`: any form control counts (every input, select, role textbox or combobox), for single-key shortcuts
+ *   like [ and ]. Otherwise only text entry does (the ⌘K check).
+ * - `palette`: false makes the palette's own input not count, so ⌘K there closes the palette.
+ */
+export function typingIn(el: Element | null, { controls = false, palette = true }: { controls?: boolean; palette?: boolean } = {}): boolean {
+  if (!el || (!palette && el.closest('[cmdk-dialog]'))) return false;
+  if ((el as HTMLElement).isContentEditable || el.closest('textarea, [contenteditable]:not([contenteditable="false"])')) return true;
+  if (controls && el.closest('input, select, [role=textbox], [role=combobox]')) return true;
+  return el instanceof HTMLInputElement && !NOT_TEXT.includes(el.type);
+}

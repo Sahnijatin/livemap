@@ -5,7 +5,7 @@ import { layerOf } from '../layers';
 import { baseName, isRecent, useNow } from '../recent';
 import { removeFlag } from '../api';
 import { READ_ONLY_TIP } from '../history';
-import { COUNTER_LABELS, CountUp, useLiveState } from './Activity';
+import { COUNTER_LABELS, CountUp, liveFlags, useLiveState } from './Activity';
 import { FlagBox } from './FlagBox';
 import { FlagIcon, LayerTile } from './icons';
 
@@ -46,12 +46,9 @@ function YourFlags() {
 export function LiveHead() {
   // Showing the past: no Live tag (the center's banner says what is on show).
   const rewound = useStore(s => s.rewound !== null);
-  // Narrow selectors (no event scans): the active session's status, and pause as useLiveState counts it.
-  const working = useStore(s => activeSession(s.sessions)?.status === 'working');
-  const paused = useStore(s => {
-    const a = activeSession(s.sessions);
-    return s.control.paused && (!a || !!a.hooks);
-  });
+  // useLiveState's rule on narrow selectors, without its event scans.
+  const working = useStore(s => liveFlags(activeSession(s.sessions), s.control.paused).working);
+  const paused = useStore(s => liveFlags(activeSession(s.sessions), s.control.paused).paused);
   return (
     <div className="live-h"><h3>Live session</h3>{working && !paused && !rewound && <span className="livetag"><i />Live</span>}{paused && <span className="livetag paused"><i />Paused</span>}</div>
   );

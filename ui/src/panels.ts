@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
-import { useStore, type StoreState } from './store';
+import { isGated, useStore, type StoreState } from './store';
 import { NARROW_QUERY, isNarrow, isPhone } from './media';
-import { inFormControl } from './keys';
+import { typingIn } from './keys';
 import { fitLayout, reach, type Panel as Side, type PanelLayout } from './panelLayout';
 
 type Panel = NonNullable<StoreState['panel']>;
@@ -115,10 +115,10 @@ export function useSlideOvers(): void {
     const onKey = (e: KeyboardEvent) => {
       const s = useStore.getState();
       if (e.key === 'Escape' && s.panel && !s.paletteOpen && !e.defaultPrevented) closePanel();
-      // Plain [ and ] only: no modifier at all; not while the Gate covers the workspace (App's `gated`), the palette is
-      // open, or focus is in a form control.
-      if ((e.key === '[' || e.key === ']') && !(e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) && !e.repeat && !e.defaultPrevented && !s.paletteOpen
-        && s.loaded && s.connection !== 'unauthorized' && !inFormControl(e.target instanceof Element ? e.target : document.activeElement)) {
+      // The [ and ] keys as typed (e.key), so layouts that type them with AltGr, Option or Shift work; not Meta or Ctrl
+      // shortcuts (AltGr reports Ctrl and Alt). Not while the Gate is up, the palette is open, or focus is in a form control.
+      if ((e.key === '[' || e.key === ']') && !e.metaKey && !(e.ctrlKey && !e.altKey) && !e.repeat && !e.defaultPrevented && !s.paletteOpen
+        && !isGated(s) && !typingIn(e.target instanceof Element ? e.target : document.activeElement, { controls: true })) {
         e.preventDefault();
         togglePanel(e.key === '[' ? 'files' : 'inspector');
       }

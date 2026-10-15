@@ -44,10 +44,12 @@ export function PanelHandle({ panel }: { panel: Panel }) {
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const step = (e.shiftKey ? 64 : 16) * dir;
-    if (e.key === 'ArrowRight') draw(now + step);
-    else if (e.key === 'ArrowLeft') draw(now - step);
+    // The drawn width now, not at this render (see draw).
+    const { fit: f, reach: r } = drawn(useStore.getState());
+    if (e.key === 'ArrowRight') draw(f[panel] + step);
+    else if (e.key === 'ArrowLeft') draw(f[panel] - step);
     else if (e.key === 'Home') draw(min);
-    else if (e.key === 'End') draw(max);
+    else if (e.key === 'End') draw(r[panel]);
     else if (e.key === 'Enter') setCollapsed(panel, true);
     else return;
     e.preventDefault();

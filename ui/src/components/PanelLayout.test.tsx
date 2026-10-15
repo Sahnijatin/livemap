@@ -514,10 +514,20 @@ describe('docked panels at 1080 px and wider', () => {
   it('[ and ] ignore modifiers, the Gate, and every form control', async () => {
     await mount();
     const collapsed = () => app().className.includes('collapsed');
-    for (const mod of [{ shiftKey: true }, { altKey: true }, { ctrlKey: true }, { metaKey: true }, { ctrlKey: true, altKey: true }]) {
+    // Ctrl or Meta shortcuts are not brackets.
+    for (const mod of [{ ctrlKey: true }, { metaKey: true }, { metaKey: true, altKey: true }]) {
       key(document.body, '[', mod);
       key(document.body, ']', mod);
     }
+    expect(collapsed()).toBe(false);
+    // Layouts that type brackets with AltGr (Ctrl+Alt on Windows), Option or Shift: e.key is the bracket, so it counts.
+    key(document.body, '[', { ctrlKey: true, altKey: true });
+    expect(app().classList.contains('left-collapsed')).toBe(true);
+    key(document.body, '[', { altKey: true });
+    key(document.body, ']', { shiftKey: true });
+    expect(app().classList.contains('left-collapsed')).toBe(false);
+    expect(app().classList.contains('right-collapsed')).toBe(true);
+    key(document.body, ']');
     expect(collapsed()).toBe(false);
 
     act(() => useStore.getState().setConnection('unauthorized'));
@@ -544,6 +554,31 @@ describe('docked panels at 1080 px and wider', () => {
     }
     key(document.body, '[');
     expect(collapsed()).toBe(true);
+  });
+
+  it('two key presses before a render both apply', async () => {
+    await mount();
+    const files = sep('Resize project panel');
+    act(() => {
+      files.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+      files.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+    });
+    expect(now('Resize project panel')).toBe(272 + 32);
+  });
+
+  it('a peek ends for good when the selected file disappears, even if it comes back', async () => {
+    await mount();
+    act(() => btn('Hide inspector').click());
+    act(() => useStore.getState().select('src/a.ts'));
+    expect(app().classList.contains('right-collapsed')).toBe(false);
+    const state = (files: string[], seq: number) => ({ seq, at: seq, root: '/p/shop', name: 'shop', files: files.map(f => file(f)), changes: [], usedBy: [], domain: emptyDomain(), indexing: false, events: [], sessions: [], control: { paused: false, flags: [] } });
+    // Rewound past its deletion (the selection stays), then forward to where it exists again.
+    act(() => useStore.getState().rewind(state(['src/b.ts'], 1)));
+    expect(app().classList.contains('right-collapsed')).toBe(true);
+    act(() => useStore.getState().rewind(state(['src/a.ts', 'src/b.ts'], 2)));
+    expect(useStore.getState().selected).toBe('src/a.ts');
+    expect(app().classList.contains('right-collapsed')).toBe(true);
+    expect(useStore.getState().peek).toBe(false);
   });
 });
 

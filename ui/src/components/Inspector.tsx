@@ -34,11 +34,11 @@ function Pane({ id, entering, leaving, View, failed, retry }: { id: string; ente
   useGlide(box);
   return (
     <div className={clsx('ins-scroll', leaving ? 'leave' : entering && 'in')} ref={box} {...(leaving ? LEAVING : {})}>
-      {!file ? <LiveSession /> : View ? <View file={file} /> : failed && (
+      {!file ? <LiveSession /> : View ? <View file={file} /> : failed && !leaving ? (
         <div className="note err" role="alert">
           Could not load the file view. <button type="button" className="linkbtn" onClick={retry}>Retry</button>
         </div>
-      )}
+      ) : <div className="muted" aria-busy="true">Loading the file view</div>}
     </div>
   );
 }
@@ -59,7 +59,10 @@ export function Inspector() {
   const [View, setView] = useState<View | undefined>(() => Detail);
   const [failed, setFailed] = useState(false);
   const retry = () => {
-    if (!Detail) void loadDetail().then(ok => { setFailed(!ok); setView(() => Detail); });
+    if (Detail) return;
+    // Pending: a loading state, not the alert.
+    setFailed(false);
+    void loadDetail().then(ok => { setFailed(!ok); setView(() => Detail); });
   };
   useEffect(retry, [selects]);
 

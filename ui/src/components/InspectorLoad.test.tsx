@@ -98,7 +98,11 @@ describe('the file view fails to load', () => {
     await flush();
     const retry = host.querySelector<HTMLButtonElement>('.ins-scroll:not(.leave) [role=alert] button')!;
     expect(retry.textContent).toBe('Retry');
+    expect(host.querySelectorAll('[role=alert]')).toHaveLength(1);
     act(() => retry.click());
+    // While the reload is pending: a loading state, no alert.
+    expect(host.querySelectorAll('[role=alert]')).toHaveLength(0);
+    expect(host.querySelector('.ins-scroll:not(.leave) [aria-busy=true]')).not.toBeNull();
     await act(async () => { await fresh.loadDetail(); });
     await flush();
     expect(host.querySelector('.ins-scroll:not(.leave) h3')?.textContent).toBe('a.ts');
