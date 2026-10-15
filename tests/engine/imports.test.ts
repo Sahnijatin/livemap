@@ -43,6 +43,14 @@ describe('extractImports', () => {
     expect(extractImports('svc/app/views.py', 'python', 'import helpers', ctx).local).toEqual(['svc/helpers.py']);
     expect(resolveSpecifier('svc/app/views.py', 'python', 'helpers', ctx)).toBe('svc/helpers.py');
   });
+  it('python resolves a nested local package named like a stdlib module through its submodules', () => {
+    const files = ['backend/main.py', 'backend/email/__init__.py', 'backend/email/services.py', 'backend/queue/tasks.py'];
+    const has = new Set(files);
+    const ctx: ImportCtx = { has: p => has.has(p), files, aliases: [], goModule: null };
+    expect(extractImports('backend/main.py', 'python', 'from email.services import send\nimport queue.tasks\nimport email\nfrom email.mime.text import MIMEText', ctx))
+      .toEqual({ local: ['backend/email/services.py', 'backend/queue/tasks.py'], external: ['email'] });
+    expect(resolveSpecifier('backend/main.py', 'python', 'email.services', ctx)).toBe('backend/email/services.py');
+  });
   it('go', () => {
     expect(imp('cmd/main.go','go','import (\n "fmt"\n "shop/internal/db"\n)', { goModule: 'shop' }).local).toEqual(['internal/db/conn.go','internal/db/db.go']);
   });

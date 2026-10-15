@@ -325,7 +325,9 @@ function pyBases(dir: string, mod: string, rel: number, ctx: ImportCtx): string[
   const p = mod.replace(/\./g, '/');
   if (rel > 0) return [join(dir, ...Array(rel - 1).fill('..'), p)];
   const out: string[] = [];
-  if (mod && !PY_STDLIB.has(mod.split('.')[0])) {
+  // A bare stdlib name (`import logging`) is the stdlib even beside a same-named file; a dotted path into a
+  // local package of that name (`email.services`) resolves only where that submodule exists.
+  if (mod && (!PY_STDLIB.has(mod.split('.')[0]) || mod.includes('.'))) {
     for (let d = dir; d; d = parentDir(d)) if (!ctx.has(join(d, '__init__.py'))) out.push(join(d, p));
   }
   for (const r of ['', 'src']) out.push(join(r, p));
