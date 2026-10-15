@@ -104,7 +104,24 @@ describe('one LiveMap per project (#21)', () => {
     await ended(first);
     expect(dirFiles('locks')).toHaveLength(1);
     const next = await started();
-    expect(fs.readFileSync(path.join(lmHome, 'locks', dirFiles('locks')[0]), 'utf8').trim()).toBe(String(next.child.pid));
+    expect(JSON.parse(fs.readFileSync(path.join(lmHome, 'locks', dirFiles('locks')[0]), 'utf8'))).toEqual({ pid: next.child.pid, port: next.port });
+  }, 30_000);
+
+  it('replaces the lock of a killed instance whose pid an unrelated process reuses (#40)', async () => {
+    const first = await started();
+    first.child.kill('SIGKILL');
+    await ended(first);
+    const lock = path.join(lmHome, 'locks', dirFiles('locks')[0]);
+    const squatter = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+    try {
+      // The lock as the killed run left it, but its pid now names a live process that is not LiveMap.
+      fs.writeFileSync(lock, JSON.stringify({ pid: squatter.pid, port: first.port }));
+      const next = await started();
+      expect(JSON.parse(fs.readFileSync(lock, 'utf8'))).toEqual({ pid: next.child.pid, port: next.port });
+    } finally {
+      squatter.kill('SIGKILL');
+      await new Promise(r => squatter.on('exit', r));
+    }
   }, 30_000);
 
   it('allows LiveMap on another project at the same time', async () => {

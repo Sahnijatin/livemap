@@ -1,31 +1,91 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
-import { livemapHome, pidAlive, real } from './agents/runtime.js';
+import { livemapHome, real } from './agents/runtime.js';
 
 /**
- * One LiveMap per project: `<LIVEMAP_HOME>/locks/<sha1(realpath root)>.lock` holds the owner's pid.
+ * One LiveMap per project: `<LIVEMAP_HOME>/locks/<sha1(realpath root)>.lock` holds the owner's pid, and its
+ * port once the server listens (`{"pid":N,"port":P}`; a bare pid is the form before that).
  * Two instances on one root would share history files and the runtime entry, so the second must not start.
  */
 export function lockFile(root: string): string {
   return path.join(livemapHome(), 'locks', `${crypto.createHash('sha1').update(real(root)).digest('hex')}.lock`);
 }
 
-function readPid(file: string): number | null {
+/** How long a lock without a port counts as held by its live pid: the holder is still starting up. */
+export const LOCK_GRACE_MS = 2 * 60_000;
+const PROBE_MS = 300;
+
+interface LockState { text: string; pid: number | null; port: number | null; mtimeMs: number }
+
+function parse(text: string): { pid: number | null; port: number | null } {
+  const t = text.trim();
+  let pid: unknown = Number(t);
+  let port: unknown = null;
+  if (t.startsWith('{')) {
+    try {
+      const o = JSON.parse(t) as Record<string, unknown> | null;
+      pid = o?.pid;
+      port = o?.port ?? null;
+    } catch { pid = null; }
+  }
+  return {
+    pid: Number.isInteger(pid) && (pid as number) > 0 ? (pid as number) : null,
+    port: Number.isInteger(port) && (port as number) > 0 && (port as number) < 65536 ? (port as number) : null,
+  };
+}
+
+function readLock(file: string): LockState | null {
   try {
-    const pid = Number(fs.readFileSync(file, 'utf8').trim());
-    return Number.isInteger(pid) && pid > 0 ? pid : null;
+    const text = fs.readFileSync(file, 'utf8');
+    return { text, ...parse(text), mtimeMs: fs.statSync(file).mtimeMs };
   } catch {
     return null;
   }
 }
 
 /**
- * Takes the project lock: `{ ok: true }`, or `{ ok: false, pid }` when another live process holds it.
- * The lock appears atomically with its pid already in it (a full temp file hard-linked into place), so a
- * reader never sees it empty. A lock whose pid is dead or unreadable is stale and replaced.
+ * Whether `pid` is a running process of this user. EPERM (another user's process) counts as not running:
+ * that cannot be a LiveMap holding a lock in this user's home, so the pid was reused after a crash or restart.
  */
-export function acquireLock(root: string): { ok: true } | { ok: false; pid: number } {
+function ownPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether something accepts TCP connections on 127.0.0.1:port within a short timeout. */
+function listening(port: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const sock = net.connect({ host: '127.0.0.1', port });
+    const done = (ok: boolean) => { sock.destroy(); resolve(ok); };
+    sock.setTimeout(PROBE_MS, () => done(false));
+    sock.once('connect', () => done(true));
+    sock.once('error', () => done(false));
+  });
+}
+
+/**
+ * Whether the lock still belongs to a running LiveMap. Its pid must be alive and ours; a pid reused by an
+ * unrelated process is then told apart by the port (nothing listens there any more), or, before the holder
+ * has written its port, by the lock's age.
+ */
+async function held(s: LockState): Promise<boolean> {
+  if (s.pid === null || !ownPidAlive(s.pid)) return false;
+  if (s.port !== null) return listening(s.port);
+  return Date.now() - s.mtimeMs < LOCK_GRACE_MS;
+}
+
+/**
+ * Takes the project lock: `{ ok: true }`, or `{ ok: false, pid }` when another running LiveMap holds it.
+ * The lock appears atomically with its pid already in it (a full temp file hard-linked into place), so a
+ * reader never sees it empty. A lock whose holder is gone, or that is unreadable, is stale and replaced.
+ */
+export async function acquireLock(root: string): Promise<{ ok: true } | { ok: false; pid: number }> {
   const file = lockFile(root);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
@@ -38,11 +98,11 @@ export function acquireLock(root: string): { ok: true } | { ok: false; pid: numb
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= 5) throw e;
       }
-      const pid = readPid(file);
-      if (pid === process.pid) return { ok: true };
-      if (pid !== null && pidAlive(pid)) return { ok: false, pid };
+      const s = readLock(file);
+      if (s?.pid === process.pid) return { ok: true };
+      if (s && await held(s)) return { ok: false, pid: s.pid as number };
       // Stale: re-check just before removing so a lock another starter took meanwhile survives.
-      if (readPid(file) === pid) {
+      if (readLock(file)?.text === s?.text) {
         try { fs.unlinkSync(file); } catch { /* already gone */ }
       }
     }
@@ -51,9 +111,26 @@ export function acquireLock(root: string): { ok: true } | { ok: false; pid: numb
   }
 }
 
+/**
+ * Records the port this process listens on in its lock (temp file, then rename), so a later starter can tell
+ * this LiveMap from an unrelated process that reuses its pid. Does nothing when this process does not hold it.
+ */
+export function setLockPort(root: string, port: number): void {
+  const file = lockFile(root);
+  if (readLock(file)?.pid !== process.pid) return;
+  const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(tmp, `${JSON.stringify({ pid: process.pid, port })}\n`, { mode: 0o600, flag: 'wx' });
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch { /* already gone */ }
+    throw e;
+  }
+}
+
 /** Removes the lock only when this process holds it. */
 export function releaseLock(root: string): void {
   const file = lockFile(root);
-  if (readPid(file) !== process.pid) return;
+  if (readLock(file)?.pid !== process.pid) return;
   try { fs.unlinkSync(file); } catch { /* already gone */ }
 }
