@@ -4,6 +4,7 @@ import type { ChangeSummary, FileModel } from '@shared/types.js';
 import { authHeaders } from '../connection';
 import { changedLines } from '../changes';
 import { highlight, MAX_HIGHLIGHT_LINES } from '../highlight';
+import { embeddedCode } from '../history';
 import { useStore } from '../store';
 import { lineScrollTop, prefersReducedMotion } from '../scroll';
 import { LockIcon } from './icons';
@@ -56,7 +57,20 @@ interface View { path: string; lines: string[]; tokens: ThemedToken[][] | null }
 
 const normalize = (text: string): string => text.replace(/\r\n?/g, '\n').replace(/\n$/, '');
 
-export function CodeView({ file, change }: { file: FileModel; change: ChangeSummary | undefined }) {
+/** While rewound the code view still shows today's file (a replay: the file at export time): say so. */
+export function CodeView(props: { file: FileModel; change: ChangeSummary | undefined }) {
+  const rewound = useStore(s => s.rewound !== null);
+  const replay = useStore(s => s.replay);
+  if (!rewound) return <Code {...props} />;
+  return (
+    <>
+      <p className="code-past" role="note">{replay ? 'Code as of the export.' : 'Current code. Past file contents are not stored.'}</p>
+      <Code {...props} />
+    </>
+  );
+}
+
+function Code({ file, change }: { file: FileModel; change: ChangeSummary | undefined }) {
   const reason = notShownReason(file);
   const [load, setLoad] = useState<Load>({ state: 'loading' });
   const [view, setView] = useState<View | null>(null);
@@ -64,8 +78,19 @@ export function CodeView({ file, change }: { file: FileModel; change: ChangeSumm
   const reveal = useStore(s => s.reveal);
   const version = `${file.path}|${file.size}|${file.lines}|${change?.id ?? 0}`;
 
+  // Reset when switching files so the previous file's code never shows under a new header.
+  // It runs before the load below, so an embedded text set at once is not reset.
+  useEffect(() => { setLoad({ state: 'loading' }); }, [file.path]);
+
   useEffect(() => {
     if (reason) return;
+    const code = embeddedCode();
+    if (code !== undefined) {
+      // An export: its embedded text, never a request.
+      const text = code?.[file.path];
+      setLoad(text === undefined ? { state: 'error', message: 'Code not included in this export' } : { state: 'ok', content: text });
+      return;
+    }
     const ctrl = new AbortController();
     setLoad(prev => (prev.state === 'ok' ? prev : { state: 'loading' }));
     fetch(`/api/file?path=${encodeURIComponent(file.path)}`, { headers: authHeaders(), signal: ctrl.signal })
@@ -80,9 +105,6 @@ export function CodeView({ file, change }: { file: FileModel; change: ChangeSumm
       .catch(e => { if ((e as Error).name !== 'AbortError') setLoad({ state: 'error', message: 'Could not load this file.' }); });
     return () => ctrl.abort();
   }, [version, reason, file.path]);
-
-  // Reset when switching files so the previous file's code never shows under a new header.
-  useEffect(() => { setLoad({ state: 'loading' }); }, [file.path]);
 
   const content = load.state === 'ok' ? load.content : null;
 

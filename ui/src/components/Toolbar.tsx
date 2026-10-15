@@ -3,27 +3,36 @@ import clsx from 'clsx';
 import { useStore } from '../store';
 import { useTheme } from '../theme';
 import { setPaused } from '../api';
+import { READ_ONLY_TIP } from '../history';
 import { AgentChips } from './AgentChips';
 import { useLiveState } from './Activity';
 import { preloadPalette } from '../palette/PaletteHost';
 import { togglePanel } from '../panels';
 import { MenuIcon, MoonIcon, PanelIcon, PauseIcon, PlayIcon, SearchIcon, SunIcon } from './icons';
 
-function StatusChip() {
+export function StatusChip() {
   const connection = useStore(s => s.connection);
+  const replay = useStore(s => s.replay);
   const indexing = useStore(s => s.indexing);
   const loaded = useStore(s => s.loaded);
+  const rewound = useStore(s => s.rewound !== null);
 
   let dot = <i className="dot" />;
   let label = 'Connecting';
   let detail = '';
-  if (connection === 'unauthorized') {
+  if (replay) {
+    label = 'Replay';
+  } else if (connection === 'unauthorized') {
     dot = <i className="dot bad" />;
     label = 'Key needed';
   } else if (connection === 'open' && indexing) {
     dot = <span className="spinner" />;
     label = 'Indexing';
     detail = indexing.total ? `${indexing.done.toLocaleString()} of ${indexing.total.toLocaleString()}` : '';
+  } else if (rewound) {
+    // Showing the past: not Live, whatever the socket says.
+    dot = <i className="dot" />;
+    label = 'Rewound';
   } else if (connection === 'open' && loaded) {
     dot = <i className="dot live" />;
     label = 'Live';
@@ -56,6 +65,8 @@ function NowLine() {
 /** Pause agent / Resume agent; a failure shows inline under the button until the next attempt. */
 export function PauseButton() {
   const paused = useStore(s => s.control.paused);
+  const rewound = useStore(s => s.rewound !== null);
+  const replay = useStore(s => s.replay);
   const showToast = useStore(s => s.showToast);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,9 +84,11 @@ export function PauseButton() {
       setBusy(false);
     }
   };
+  if (replay) return null;
   return (
-    <span className="pausewrap">
-      <button type="button" className={clsx('pillbtn pause', paused && 'on')} onClick={click} disabled={busy} aria-pressed={paused} aria-label={label} title={label}>
+    // The wrapper carries the tooltip too: some browsers show none for a disabled button.
+    <span className="pausewrap" title={rewound ? READ_ONLY_TIP : undefined}>
+      <button type="button" className={clsx('pillbtn pause', paused && 'on', rewound && 'ro')} onClick={click} disabled={busy || rewound} aria-pressed={paused} aria-label={label} title={rewound ? READ_ONLY_TIP : label}>
         {paused ? <PlayIcon /> : <PauseIcon />}<span>{label}</span>
       </button>
       {error && <span className="pause-err" role="alert">{error}</span>}

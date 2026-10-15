@@ -7,6 +7,7 @@ import { NARROW_QUERY, useMedia } from '../media';
 import { INERT } from '../panels';
 import { Activity } from './Activity';
 import { StackView } from './StackView';
+import { RewoundBanner, Timeline } from './Timeline';
 import { ApiIcon, MapIcon, PulseIcon, SchemaIcon, StackIcon } from './icons';
 
 // Map and Schema (React Flow, ELK, framer-motion) and API load on first open, so Activity's first paint does not pay for them.
@@ -66,6 +67,7 @@ function view(t: CenterTab, tools: HTMLDivElement | null): ReactNode {
 /** Center pane: a segmented control (Activity, Map, Schema, API, Stack) over the active view; the Map adds its tools to the head. */
 export function CenterTabs() {
   const tab = useStore(s => s.tab);
+  const rewound = useStore(s => s.rewound !== null);
   // Below 1080 px an open slide-over sits over the center behind a scrim: the center is out of reach until it closes.
   const panel = useStore(s => s.panel);
   const narrow = useMedia(NARROW_QUERY);
@@ -124,7 +126,7 @@ export function CenterTabs() {
   const viewClass = (t: CenterTab) => clsx('c-view', t === prev ? 'leave' : t === tab && from !== null && 'in');
 
   return (
-    <main className="center" aria-label={META[tab].label} {...(narrow && panel ? INERT : {})}>
+    <main className={clsx('center', rewound && 'rewound')} aria-label={META[tab].label} {...(narrow && panel ? INERT : {})}>
       <div className="c-head">
         <div className={clsx('tabs', placed && 'ready')} role="tablist" aria-label="Views" ref={list} onKeyDown={onKeyDown}>
           <i className="knob" ref={knob} aria-hidden="true" />
@@ -151,6 +153,7 @@ export function CenterTabs() {
         {tab === 'map' && <div className="c-tools" ref={setTools} />}
       </div>
       <div className="c-body" role="tabpanel" id="center-panel" aria-labelledby={`tab-${tab}`}>
+        <RewoundBanner />
         {/* Activity stays mounted so its scroll position and expanded rows survive a tab switch. */}
         <div className={viewClass('activity')} style={slide} hidden={tab !== 'activity' && prev !== 'activity'} {...(prev === 'activity' ? LEAVING : {})}>
           <Activity active={tab === 'activity'} />
@@ -159,6 +162,7 @@ export function CenterTabs() {
           <div className={viewClass(t)} style={slide} key={t} {...(t === prev ? LEAVING : {})}>{view(t, tools)}</div>
         ))}
       </div>
+      <Timeline />
     </main>
   );
 }
