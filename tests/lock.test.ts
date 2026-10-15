@@ -128,6 +128,36 @@ describe('project lock (#21)', () => {
     });
   });
 
+  it('keeps a fresh lock another starter took between judging the old one stale and removing it (#40)', async () => {
+    const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+    try {
+      const file = lockFile(root);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, `${await deadPid()}\n`);
+      // The other starter also saw the dead pid, and removes it and links its own lock right before this one
+      // acts on the lock it judged stale (whichever of rename or unlink that is).
+      let raced = false;
+      const race = (p: fs.PathLike) => {
+        if (raced || p !== file) return;
+        raced = true;
+        fs.rmSync(file);
+        fs.writeFileSync(file, `${other.pid}\n`);
+      };
+      const rename = fs.renameSync.bind(fs);
+      const unlink = fs.unlinkSync.bind(fs);
+      vi.spyOn(fs, 'renameSync').mockImplementation((a, b) => { race(a); rename(a, b); });
+      vi.spyOn(fs, 'unlinkSync').mockImplementation(p => { race(p); unlink(p); });
+      expect(await acquireLock(root)).toEqual({ ok: false, pid: other.pid });
+      expect(raced).toBe(true);
+      expect(fs.readFileSync(file, 'utf8')).toBe(`${other.pid}\n`);
+      expect(fs.readdirSync(path.dirname(file))).toEqual([path.basename(file)]);
+    } finally {
+      vi.restoreAllMocks();
+      other.kill('SIGKILL');
+      await new Promise(r => other.on('exit', r));
+    }
+  });
+
   it('records the port of the holder, and only of the holder', async () => {
     expect(await acquireLock(root)).toEqual({ ok: true });
     setLockPort(root, 4321);

@@ -17,7 +17,7 @@ export function lockFile(root: string): string {
 export const LOCK_GRACE_MS = 2 * 60_000;
 const PROBE_MS = 300;
 
-interface LockState { text: string; pid: number | null; port: number | null; mtimeMs: number }
+interface LockState { text: string; pid: number | null; port: number | null; mtimeMs: number; ino: number }
 
 function parse(text: string): { pid: number | null; port: number | null } {
   const t = text.trim();
@@ -39,7 +39,8 @@ function parse(text: string): { pid: number | null; port: number | null } {
 function readLock(file: string): LockState | null {
   try {
     const text = fs.readFileSync(file, 'utf8');
-    return { text, ...parse(text), mtimeMs: fs.statSync(file).mtimeMs };
+    const st = fs.statSync(file);
+    return { text, ...parse(text), mtimeMs: st.mtimeMs, ino: st.ino };
   } catch {
     return null;
   }
@@ -81,6 +82,26 @@ async function held(s: LockState): Promise<boolean> {
 }
 
 /**
+ * Removes the stale lock `stale` (null: it could not be read). Checking and then unlinking
+ * would race: another starter may replace the stale lock with its own in between, and that fresh lock would
+ * go. So the lock is first moved aside atomically and checked there; a lock that turns out to be someone
+ * else's is linked back, which succeeds only while the slot is still empty, and the caller looks again.
+ */
+function takeOver(file: string, stale: LockState | null): void {
+  const aside = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.stale`;
+  try {
+    fs.renameSync(file, aside);
+  } catch {
+    return; // gone already: the caller retries the link
+  }
+  const got = readLock(aside);
+  if (got?.text !== stale?.text || got?.ino !== stale?.ino) {
+    try { fs.linkSync(aside, file); } catch { /* the slot is taken again; the caller looks at that lock */ }
+  }
+  try { fs.unlinkSync(aside); } catch { /* already gone */ }
+}
+
+/**
  * Takes the project lock: `{ ok: true }`, or `{ ok: false, pid }` when another running LiveMap holds it.
  * The lock appears atomically with its pid already in it (a full temp file hard-linked into place), so a
  * reader never sees it empty. A lock whose holder is gone, or that is unreadable, is stale and replaced.
@@ -101,10 +122,7 @@ export async function acquireLock(root: string): Promise<{ ok: true } | { ok: fa
       const s = readLock(file);
       if (s?.pid === process.pid) return { ok: true };
       if (s && await held(s)) return { ok: false, pid: s.pid as number };
-      // Stale: re-check just before removing so a lock another starter took meanwhile survives.
-      if (readLock(file)?.text === s?.text) {
-        try { fs.unlinkSync(file); } catch { /* already gone */ }
-      }
+      takeOver(file, s);
     }
   } finally {
     try { fs.unlinkSync(tmp); } catch { /* already gone */ }
