@@ -8,7 +8,8 @@ import { AgentChips } from './AgentChips';
 import { useLiveState } from './Activity';
 import { preloadPalette } from '../palette/PaletteHost';
 import { togglePanel } from '../panels';
-import { MenuIcon, MoonIcon, PanelIcon, PauseIcon, PlayIcon, SearchIcon, SunIcon } from './icons';
+import { NARROW_QUERY, useMedia } from '../media';
+import { MenuIcon, MoonIcon, PanelIcon, PauseIcon, PlayIcon, SearchIcon, SidebarIcon, SunIcon } from './icons';
 
 export function StatusChip() {
   const connection = useStore(s => s.connection);
@@ -169,22 +170,35 @@ export function ProjectChip() {
   );
 }
 
+/** Files and Inspector: below 1080 px they open the slide-overs; wider they collapse and expand the docked panels. */
+function PanelButton({ p }: { p: 'files' | 'inspector' }) {
+  const narrow = useMedia(NARROW_QUERY);
+  const open = useStore(s => (narrow ? s.panel === p : !s.layout.collapsed[p]));
+  const files = p === 'files';
+  const name = files ? 'project panel' : 'inspector';
+  return (
+    <button
+      type="button"
+      className="iconbtn"
+      aria-label={files ? 'Files' : 'Inspector'}
+      aria-controls={files ? 'sidebar' : 'inspector'}
+      aria-keyshortcuts={files ? '[' : ']'}
+      title={narrow ? undefined : `${open ? 'Hide' : 'Show'} ${name} (${files ? '[' : ']'})`}
+      data-panel-opener={p}
+      aria-expanded={open}
+      onClick={() => togglePanel(p)}
+    >
+      {!files ? <PanelIcon /> : narrow ? <MenuIcon /> : <SidebarIcon />}
+    </button>
+  );
+}
+
 export function Toolbar() {
-  const panel = useStore(s => s.panel);
   const { theme, toggle } = useTheme();
 
   return (
     <header className="toolbar glass">
-      <button
-        className="iconbtn only-narrow"
-        aria-label="Files"
-        aria-controls="sidebar"
-        data-panel-opener="files"
-        aria-expanded={panel === 'files'}
-        onClick={() => togglePanel('files')}
-      >
-        <MenuIcon />
-      </button>
+      <PanelButton p="files" />
       <span className="brand"><i className="mark" aria-hidden="true" /><span>LiveMap</span></span>
       <span className="sep" aria-hidden="true" />
       <ProjectChip />
@@ -195,16 +209,7 @@ export function Toolbar() {
       <button type="button" className="iconbtn theme" aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} onClick={toggle}>
         {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
       </button>
-      <button
-        className="iconbtn only-narrow"
-        aria-label="Inspector"
-        aria-controls="inspector"
-        data-panel-opener="inspector"
-        aria-expanded={panel === 'inspector'}
-        onClick={() => togglePanel('inspector')}
-      >
-        <PanelIcon />
-      </button>
+      <PanelButton p="inspector" />
       <PauseButton />
     </header>
   );

@@ -11,7 +11,7 @@ export function preloadPalette(): void {
 }
 
 /** A text field other than the palette's own input: ⌘K there belongs to the field. */
-function typingElsewhere(el: Element | null): boolean {
+export function typingElsewhere(el: Element | null): boolean {
   if (!el || el.closest('[cmdk-dialog]')) return false;
   if (el instanceof HTMLTextAreaElement || (el as HTMLElement).isContentEditable) return true;
   if (!(el instanceof HTMLInputElement)) return false;

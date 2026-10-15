@@ -94,11 +94,15 @@
   .iconbtn { width:34px; height:34px; border-radius:50%; border:0; background:transparent; cursor:pointer; display:grid; place-items:center; color:var(--ink2); flex-shrink:0; transition:background .2s; }
   .iconbtn:hover, .iconbtn[aria-expanded=true] { background:var(--hair); }
   .iconbtn svg { width:17px; height:17px; }
-  .only-narrow { display:none; }
+  .iconbtn.hidebtn { width:26px; height:26px; border-radius:8px; color:var(--ink3); }
+  .iconbtn.hidebtn svg { width:15px; height:15px; }
+  .iconbtn.hidebtn:hover { color:var(--ink2); }
 
   /* sidebar */
   .sidebar { border-radius:20px; display:flex; flex-direction:column; min-height:0; box-shadow:var(--shadow); overflow:hidden; }
-  .sb-head { display:flex; align-items:center; justify-content:space-between; padding:14px 16px 6px; }
+  .sb-head { display:flex; align-items:center; padding:14px 16px 6px; }
+  .sb-head span { margin-left:auto; }
+  .sb-head .hidebtn { margin:-4px -6px -4px 4px; }
   .sb-head h2 { margin:0; font:650 13px var(--display); letter-spacing:.01em; }
   .sb-head span { font-size:12px; color:var(--ink3); font-variant-numeric:tabular-nums; }
   .filter { margin:4px 12px 8px; display:flex; align-items:center; gap:8px; background:var(--hair); border-radius:10px; padding:6px 10px; color:var(--ink3); font-size:13px; }
@@ -184,6 +188,8 @@
 
   /* inspector */
   .insp { position:relative; border-radius:20px; display:flex; flex-direction:column; min-height:0; box-shadow:var(--shadow); overflow:hidden; }
+  .hide-inspector { position:absolute; top:12px; right:10px; z-index:2; }
+  .insp .live-h { margin-right:28px; }
   .ins-scroll { flex:1; overflow:auto; padding:16px; display:flex; flex-direction:column; gap:16px; }
   /* Content cross-fade (180 ms): the new page fades in while the old one, on top, fades out a little faster, then unmounts. */
   .ins-scroll.in { animation:paneIn .18s var(--ease) backwards; }
@@ -907,12 +913,35 @@
   }
   /* Breakpoints (spec §10): wide >= 1280, medium 1080-1279, slide-overs below 1080, phone <= 640. Matches src/media.ts. */
   @media (max-width:1279.98px) {
-    .app { grid-template-columns:248px minmax(0,1fr) 340px; }
     .projsel small { display:none; }
     .agentchip .st, .agentchip .nc { display:none; }
     .pillbtn.search { min-width:0; }
   }
   @media (min-width:1080px) { .only-narrow-scrim { display:none; } }
+  /* Docked panels: widths from --left-w and --right-w (set from the store; 272/384, or 248/340 below 1280 px, by
+     default), each with its gap. A collapsed panel's column (gap included) goes to 0 and the panel fades out, sliding
+     off at its outer edge at its full width, so its content never reflows. `.glide` is on while a panel collapses or expands. */
+  .rz { display:none; }
+  @media (min-width:1080px) {
+    .app { --lc:calc(var(--left-w,272px) + 12px); --rc:calc(var(--right-w,384px) + 12px); grid-template-columns:var(--lc) minmax(0,1fr) var(--rc); column-gap:0; }
+    .app.glide { transition:grid-template-columns .45s var(--layout-glide); }
+    .app.left-collapsed { --lc:0px; }
+    .app.right-collapsed { --rc:0px; }
+    .app.resizing { cursor:col-resize; user-select:none; }
+    .sidebar { width:var(--left-w,272px); justify-self:end; margin-right:12px; }
+    .insp { width:var(--right-w,384px); justify-self:start; margin-left:12px; }
+    .sidebar, .insp { transition:opacity .3s var(--ease),visibility 0s; }
+    .left-collapsed .sidebar, .right-collapsed .insp { opacity:0; visibility:hidden; transition:opacity .25s var(--ease),visibility 0s .45s; }
+    /* The resize handle fills the gap on the panel's inner edge; its line shows on hover, drag and keyboard focus. */
+    .rz { display:block; position:absolute; top:68px; bottom:0; width:12px; z-index:5; cursor:col-resize; touch-action:none; }
+    .rz-files { left:var(--left-w,272px); }
+    .rz-inspector { right:var(--right-w,384px); }
+    .rz::after { content:""; position:absolute; left:5px; top:18px; bottom:18px; width:2px; border-radius:2px; background:var(--hair2); opacity:0; transition:opacity .2s,background .2s; }
+    .rz:hover::after, .resizing .rz:active::after { opacity:1; }
+    .rz:focus-visible { outline:0; }
+    .rz:focus-visible::after { opacity:1; background:var(--blue); }
+    .left-collapsed .rz-files, .right-collapsed .rz-inspector { display:none; }
+  }
   @media (max-width:1079.98px) {
     .app { grid-template-columns:minmax(0,1fr); }
     .sidebar { position:fixed; left:calc(var(--gutter) + var(--sal)); top:calc(var(--gutter) * 2 + 56px + var(--sat)); bottom:calc(var(--gutter) + var(--sab)); width:min(300px,calc(100vw - 24px)); z-index:25; transform:translateX(-110%); transition:transform .55s var(--ease); background:var(--glass-strong); }
@@ -920,7 +949,7 @@
     .insp { position:fixed; right:calc(var(--gutter) + var(--sar)); top:calc(var(--gutter) * 2 + 56px + var(--sat)); bottom:calc(var(--gutter) + var(--sab)); width:min(380px,calc(100vw - var(--gutter) * 2 - var(--sal) - var(--sar))); z-index:25; transform:translateX(110%); transition:transform .55s var(--ease); background:var(--glass-strong); }
     .insp.open { transform:none; box-shadow:var(--shadow-lg); }
     .sidebar:focus, .insp:focus { outline:0; }
-    .only-narrow { display:grid; }
+    .iconbtn.hidebtn { display:none; }
     /* Condensed toolbar: chips show their avatar (name in the tooltip), search shows its icon and shortcut. */
     .toolbar { gap:8px; padding:0 8px 0 12px; }
     .brand span { display:none; }

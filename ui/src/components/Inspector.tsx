@@ -16,6 +16,7 @@ import { LEAVING, useGlide, useLeaving } from '../motion';
 import { NARROW_QUERY, useMedia } from '../media';
 import { INERT } from '../panels';
 import { authHeaders } from '../connection';
+import { CollapseButton } from './PanelHandle';
 
 function FileChip({ path, note }: { path: string; note?: string }) {
   const file = useStore(s => s.files[path]);
@@ -324,7 +325,8 @@ function Pane({ id, entering, leaving }: { id: string; entering: boolean; leavin
 export function Inspector() {
   const id = useStore(s => s.selected ?? OVERVIEW);
   const panel = useStore(s => s.panel);
-  // Below 1080 px a closed slide-over is off screen: keep it out of the tab order.
+  const collapsed = useStore(s => s.layout.collapsed.inspector);
+  // Below 1080 px a closed slide-over is off screen, and wider a collapsed panel is hidden: keep it out of the tab order.
   const narrow = useMedia(NARROW_QUERY);
   // The old page stays mounted (keyed by id, so never rebuilt) while it fades out over the new one.
   const { prev, from } = useLeaving(id, SWAP_MS);
@@ -336,8 +338,9 @@ export function Inspector() {
       aria-label="Inspector"
       data-panel="inspector"
       tabIndex={-1}
-      {...(narrow && panel !== 'inspector' ? INERT : {})}
+      {...((narrow ? panel !== 'inspector' : collapsed) ? INERT : {})}
     >
+      <CollapseButton panel="inspector" />
       {ids.map(k => <Pane key={k} id={k} entering={from !== null && k === id} leaving={k === prev} />)}
     </aside>
   );

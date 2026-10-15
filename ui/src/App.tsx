@@ -10,6 +10,7 @@ import { Toast } from './components/Toast';
 import { PaletteHost } from './palette/PaletteHost';
 import { MotionRoot } from './motion';
 import { closePanel, useSlideOvers } from './panels';
+import { PanelHandle, useDockLayout } from './components/PanelHandle';
 
 export function App() {
   const panel = useStore(s => s.panel);
@@ -21,16 +22,19 @@ export function App() {
     document.title = name ? `${name} · LiveMap` : 'LiveMap';
   }, [name]);
 
-  // Esc and a resize to wide close the slide-overs; while the palette is open, Esc closes only the palette.
+  // [ and ] toggle the panels; Esc and a resize to wide close the slide-overs (while the palette is open, Esc closes only the palette).
   useSlideOvers();
+  const dock = useDockLayout();
 
   return (
     <MotionRoot>
       <div className="ambient" aria-hidden="true"><div className="blob b1" /><div className="blob b2" /><div className="blob b3" /></div>
-      <div className="app" {...(gated ? { inert: '', 'aria-hidden': true } : {})}>
+      <div className={dock.className} style={dock.style} {...(gated ? { inert: '', 'aria-hidden': true } : {})}>
         <Toolbar />
         <FileTree />
+        <PanelHandle panel="files" />
         <CenterTabs />
+        <PanelHandle panel="inspector" />
         <Inspector />
         {/* Inside .app: a fixed .app is its own stacking context, so the slide-over panels sit above this. */}
         <div className={clsx('scrim only-narrow-scrim', panel && 'open')} onClick={closePanel} aria-hidden="true" />

@@ -233,6 +233,37 @@ test('resizing from 900 to 1300 px with the sidebar open leaves no open scrim an
   await expect(tab(page, 'stack')).toHaveAttribute('aria-selected', 'true');
 });
 
+test('at 1440 px dragging the sidebar handle resizes the column, and the width survives a reload', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  const sidebar = page.locator('aside.sidebar');
+  const handle = page.getByRole('separator', { name: 'Resize project panel' });
+  const width = async () => Math.round((await sidebar.boundingBox())!.width);
+  expect(await width()).toBe(272);
+  const b = (await handle.boundingBox())!;
+  await page.mouse.move(b.x + b.width / 2, b.y + 200);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width / 2 + 60, b.y + 200, { steps: 4 });
+  await page.mouse.move(b.x + b.width / 2 + 120, b.y + 200, { steps: 4 });
+  await page.mouse.up();
+  expect(await width()).toBe(392);
+  await expect(handle).toHaveAttribute('aria-valuenow', '392');
+  // The center column gave up the room.
+  expect(Math.round((await page.locator('main.center').boundingBox())!.x)).toBe(12 + 392 + 12);
+
+  await page.reload();
+  await expect(page.getByRole('status').filter({ hasText: 'Live' })).toBeAttached({ timeout: 15_000 });
+  expect(await width()).toBe(392);
+
+  // A double-click restores the default; collapsing gives the center the whole width.
+  await handle.dblclick();
+  expect(await width()).toBe(272);
+  await page.getByRole('button', { name: 'Hide project panel' }).click();
+  await expect(page.locator('.app')).toHaveClass(/\bleft-collapsed\b/);
+  await expect.poll(async () => Math.round((await page.locator('main.center').boundingBox())!.x)).toBe(12);
+  await expect(page.getByRole('button', { name: 'Files', exact: true })).toBeFocused();
+});
+
 test('phone toolbar: condensed, and the Map tools live in the options menu', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 780 });
   await open(page);

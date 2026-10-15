@@ -76,6 +76,10 @@ export const PanelIcon = () => (
   <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M15 4v16" /></svg>
 );
 
+export const SidebarIcon = () => (
+  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /></svg>
+);
+
 export const LockIcon = () => (
   <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2.5" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
 );

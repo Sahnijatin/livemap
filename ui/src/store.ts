@@ -6,6 +6,8 @@ import { emptySummaries, type SummariesState } from '@shared/summaries.js';
 import type { AgentEvent, AgentSession, ChangeSummary, ControlState, Dep, FileModel } from '@shared/types.js';
 import { LARGE_PROJECT, codeFileCount, edgeBaseline, type Level } from './map/mapModel';
 import { historySource, type HistoryRecord, type HistoryState, type LiveState } from './history';
+import { loadLayout, saveLayout, type PanelLayout } from './panelLayout';
+import { isNarrow } from './media';
 
 export const MAX_CHANGES = 2000;
 export const MAX_EVENTS = 2000;
@@ -82,6 +84,14 @@ export type RecentKind = 'created' | 'modified';
 /** How many recently selected files the palette's "Recent" lists. */
 export const HISTORY_MAX = 8;
 
+/** A docked, collapsed inspector opens when a file is selected, so the selection is visible. */
+function showInspector(layout: PanelLayout): { layout?: PanelLayout } {
+  if (!layout.collapsed.inspector || isNarrow()) return {};
+  const next = { ...layout, collapsed: { ...layout.collapsed, inspector: false } };
+  saveLayout(next);
+  return { layout: next };
+}
+
 /** `path` first, then the rest without it, at most HISTORY_MAX. */
 function pushHistory(history: string[], path: string): string[] {
   if (history[0] === path) return history;
@@ -114,6 +124,8 @@ export interface StoreState {
   reveal: { path: string; line: number; seq: number } | null;
   /** Narrow layouts: which slide-over panel is open. */
   panel: 'files' | 'inspector' | null;
+  /** Wide layouts: docked panel widths and collapsed state, remembered across reloads. */
+  layout: PanelLayout;
   /** Agent activity: the last 2,000 events, sessions by id, and pause and flag state. */
   events: AgentEvent[];
   sessions: Record<string, AgentSession>;
@@ -172,6 +184,8 @@ export interface StoreState {
   revealLine(path: string, line: number): void;
   clearReveal(): void;
   setPanel(panel: StoreState['panel']): void;
+  /** Replaces the docked layout; `save` false skips storage (mid-drag). */
+  setLayout(layout: PanelLayout, save?: boolean): void;
   showToast(text: string, tone?: 'info' | 'error'): void;
   setTab(t: CenterTab): void;
   setMapLevel(level: Level): void;
@@ -359,6 +373,7 @@ export const useStore = create<StoreState>()((set, get) => ({
   ...freshDomain(),
   tab: loadTab(),
   follow: loadFollow(),
+  layout: loadLayout(),
 
   apply(msg) {
     if (msg.type === 'fileSummary') summaryRequests.delete(msg.path); // even while rewound: see summaryRequests
@@ -445,7 +460,7 @@ export const useStore = create<StoreState>()((set, get) => ({
   },
 
   select(path) {
-    set(path ? { selected: path, history: pushHistory(get().history, path) } : { selected: null });
+    set(path ? { selected: path, history: pushHistory(get().history, path), ...showInspector(get().layout) } : { selected: null });
   },
 
   toggle(path) {
@@ -463,7 +478,7 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   revealLine(path, line) {
     const seq = (get().reveal?.seq ?? 0) + 1;
-    set({ selected: path, reveal: { path, line, seq }, history: pushHistory(get().history, path) });
+    set({ selected: path, reveal: { path, line, seq }, history: pushHistory(get().history, path), ...showInspector(get().layout) });
   },
 
   clearReveal() {
@@ -472,6 +487,11 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   setPanel(panel) {
     set({ panel });
+  },
+
+  setLayout(layout, save = true) {
+    set({ layout });
+    if (save) saveLayout(layout);
   },
 
   showToast(text, tone = 'info') {
@@ -600,6 +620,6 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   reset() {
     summaryRequests.clear();
-    set({ ...initial, ...freshDomain(), tab: 'activity', follow: loadFollow(), historyStatus: NO_HISTORY, rewound: null, playing: false, summaries: emptySummaries(), helloFiles: new Set(), files: {}, changes: [], usedBy: [], recent: {}, expanded: {}, events: [], sessions: {}, control: { paused: false, flags: [] }, mapExpanded: {}, helloEdges: new Set(), history: [] });
+    set({ ...initial, ...freshDomain(), tab: 'activity', follow: loadFollow(), layout: loadLayout(), historyStatus: NO_HISTORY, rewound: null, playing: false, summaries: emptySummaries(), helloFiles: new Set(), files: {}, changes: [], usedBy: [], recent: {}, expanded: {}, events: [], sessions: {}, control: { paused: false, flags: [] }, mapExpanded: {}, helloEdges: new Set(), history: [] });
   },
 }));
