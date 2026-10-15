@@ -13,6 +13,8 @@ const cli = path.join(repo, 'dist', 'cli.js');
 const URL_RE = /http:\/\/127\.0\.0\.1:(\d+)\/\?t=([0-9a-f]{32})/;
 
 let root: string;
+/** LIVEMAP_HOME for each test, so history and runtime files stay out of the real ~/.livemap. */
+let home: string;
 let child: ChildProcess | null;
 let out: string;
 let err: string;
@@ -26,7 +28,8 @@ async function waitFor(pred: () => boolean, ms = 5000): Promise<void> {
     await sleep(20);
   }
 }
-function run(args: string[], env: NodeJS.ProcessEnv = process.env, cwd?: string): ChildProcess {
+const isolated = (): NodeJS.ProcessEnv => ({ ...process.env, LIVEMAP_HOME: home });
+function run(args: string[], env: NodeJS.ProcessEnv = isolated(), cwd?: string): ChildProcess {
   out = ''; err = ''; exit = null;
   const c = spawn(process.execPath, [cli, ...args], { stdio: ['ignore', 'pipe', 'pipe'], env, cwd });
   c.stdout!.setEncoding('utf8').on('data', d => (out += d));
@@ -45,6 +48,7 @@ beforeAll(buildOnce, 120_000);
 
 beforeEach(() => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-cli-')));
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-cli-home-'));
   fs.mkdirSync(path.join(root, 'src'));
   fs.writeFileSync(path.join(root, 'src', 'a.ts'), 'export const a = 1;\n');
   child = null;
@@ -54,7 +58,7 @@ afterEach(async () => {
     child.kill('SIGKILL');
     await waitFor(() => exit !== null).catch(() => {});
   }
-  fs.rmSync(root, { recursive: true, force: true });
+  for (const d of [root, home]) fs.rmSync(d, { recursive: true, force: true });
 });
 
 describe('livemap CLI', () => {
@@ -133,7 +137,7 @@ describe('livemap CLI', () => {
   });
 
   it('reads --pull 30 with a space and keeps the default folder', async () => {
-    const c = run(['--no-open', '--port', '0', '--pull', '30'], process.env, root);
+    const c = run(['--no-open', '--port', '0', '--pull', '30'], isolated(), root);
     await waitFor(() => URL_RE.test(out));
     expect(out).toContain(`LiveMap is watching ${path.basename(root)}`);
     c.kill('SIGTERM');
@@ -142,7 +146,7 @@ describe('livemap CLI', () => {
   });
 
   it('rejects --pull 3 with the interval error', async () => {
-    run(['--no-open', '--port', '0', '--pull', '3'], process.env, root);
+    run(['--no-open', '--port', '0', '--pull', '3'], isolated(), root);
     await waitFor(() => exit !== null);
     expect(exit!.code).toBe(1);
     expect(err).toContain('invalid --pull interval: 3');
@@ -151,7 +155,7 @@ describe('livemap CLI', () => {
 
   it('keeps ./30 as a folder after --pull', async () => {
     fs.mkdirSync(path.join(root, '30'));
-    const c = run(['--no-open', '--port', '0', '--pull', './30'], process.env, root);
+    const c = run(['--no-open', '--port', '0', '--pull', './30'], isolated(), root);
     await waitFor(() => URL_RE.test(out));
     expect(out).toContain('LiveMap is watching 30');
     c.kill('SIGTERM');
@@ -198,7 +202,7 @@ describe('livemap CLI', () => {
     const marker = path.join(bin, 'opened');
     fs.writeFileSync(path.join(bin, 'xdg-open'), `#!/bin/sh\necho "$1" > "${marker}"\n`, { mode: 0o755 });
     try {
-      run([root, '--port', '0'], { ...process.env, PATH: `${bin}:${process.env.PATH}` });
+      run([root, '--port', '0'], { ...isolated(), PATH: `${bin}:${process.env.PATH}` });
       await waitFor(() => URL_RE.test(out));
       const [, port, token] = out.match(URL_RE)!;
       const msgs: { type: string }[] = [];
