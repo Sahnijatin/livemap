@@ -17,9 +17,16 @@ beforeEach(() => {
   home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hist-home-')));
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hist-root-')));
 });
+// A test may leave a nested dir read-only (write failure); non-root rm needs every dir writable again.
+function makeWritable(d: string): void {
+  try {
+    fs.chmodSync(d, 0o700);
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) if (e.isDirectory()) makeWritable(path.join(d, e.name));
+  } catch { /* gone or not a dir */ }
+}
 afterEach(() => {
   for (const d of [home, root]) {
-    try { fs.chmodSync(d, 0o700); } catch { /* gone */ }
+    makeWritable(d);
     fs.rmSync(d, { recursive: true, force: true });
   }
 });
