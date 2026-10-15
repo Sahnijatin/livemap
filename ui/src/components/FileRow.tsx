@@ -4,17 +4,28 @@ import type { FileModel } from '@shared/types.js';
 import type { SymbolTag } from '../changes';
 import type { Layer } from '../layers';
 import type { LiveBadge } from '../recent';
-import { baseName } from '../recent';
-import { symKey, type FlatSymbol } from '../treeModel';
+import { splitName, symKey, type FlatSymbol } from '../treeModel';
 import { Chevron, KindBadge, LayerTile } from './icons';
 
 const PARSE_ERROR_TIP = 'Parse error: showing the last good structure';
+
+/** A name cut in the middle when it does not fit: the start shrinks with an ellipsis, the end always shows. */
+export function MidName({ name }: { name: string }) {
+  const [head, tail] = splitName(name);
+  return <span className="fn"><span>{head}</span>{tail && <span>{tail}</span>}</span>;
+}
 
 /** Test hook: called on every FileRow render. */
 export const rowRenderProbe: { fn: ((path: string) => void) | null } = { fn: null };
 
 export interface FileRowProps {
   file: FileModel;
+  /** The file's name, without its folder. */
+  name: string;
+  /** Tree depth, 1 at the top level. */
+  level: number;
+  /** The nav key of the folder holding it; null at the top level. */
+  up: string | null;
   layer: Layer;
   total: number;
   symbols: FlatSymbol[];
@@ -33,7 +44,7 @@ export interface FileRowProps {
 }
 
 export const FileRow = memo(function FileRow(props: FileRowProps) {
-  const { file, layer, total, symbols, open, selected, badge: liveBadge, target, pop, tags, activeKey } = props;
+  const { file, name, level, up, layer, total, symbols, open, selected, badge: liveBadge, target, pop, tags, activeKey } = props;
   rowRenderProbe.fn?.(file.path);
   const badge = target ? 'now' : liveBadge;
   const mounted = useRef(open);
@@ -45,11 +56,13 @@ export const FileRow = memo(function FileRow(props: FileRowProps) {
       <button
         type="button"
         role="treeitem"
-        aria-level={2}
+        aria-level={level}
         aria-selected={selected}
         aria-expanded={hasSyms ? open : undefined}
         data-nav={file.path}
         data-file={file.path}
+        data-up={up ?? undefined}
+        style={{ ['--d' as string]: level - 1 }}
         tabIndex={activeKey === file.path ? 0 : -1}
         className={clsx('frow', open && 'open', selected && 'sel', pop && 'pop')}
         title={file.path}
@@ -62,7 +75,7 @@ export const FileRow = memo(function FileRow(props: FileRowProps) {
           <Chevron className={clsx('chev', !hasSyms && 'empty')} />
         </span>
         <LayerTile layer={layer} />
-        <span className="fn">{baseName(file.path)}</span>
+        <MidName name={name} />
         {file.flags.parseError && (badge
           // Next to a live badge the parse error is a compact dot so the name keeps its room.
           ? <span className="badge b-err b-dot" role="img" aria-label="parse error" title={PARSE_ERROR_TIP} />
@@ -81,13 +94,13 @@ export const FileRow = memo(function FileRow(props: FileRowProps) {
                 <button
                   type="button"
                   role="treeitem"
-                  aria-level={3}
+                  aria-level={level + 1}
                   key={key}
                   data-nav={key}
                   data-parent={file.path}
                   tabIndex={activeKey === key ? 0 : -1}
                   className={clsx('srow', tags.get(sym.qname))}
-                  style={depth ? { paddingLeft: 30 + depth * 14 } : undefined}
+                  style={{ ['--d' as string]: level - 1, ['--sd' as string]: depth }}
                   onClick={() => props.onSymbol(file.path, sym.line)}
                   title={sym.signature || sym.name}
                 >

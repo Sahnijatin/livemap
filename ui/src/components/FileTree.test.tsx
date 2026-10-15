@@ -27,6 +27,7 @@ function mount() {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  localStorage.clear();
   useStore.getState().reset();
   host = document.createElement('div');
   document.body.appendChild(host);
@@ -131,12 +132,15 @@ describe('FileTree render cap', () => {
     expect(host.querySelectorAll('[data-file^="d6/"]')).toHaveLength(200);
   });
 
-  it('opens the folder of a file that is changing even in a big project, and shows it past the cap', () => {
+  it('in a big project a change marks its collapsed folders; an open folder shows the changing file past the cap', () => {
     const files = [];
     for (let d = 0; d < 3; d++) for (let i = 0; i < 700; i++) files.push(file(`d${d}/f${i}.ts`));
     useStore.getState().apply(hello(files));
     mount();
     act(() => useStore.getState().apply({ type: 'change', files: [], removed: [], change: change('d1/f699.ts', 'modified', { at: Date.now() }) }));
+    expect(rows()).toBe(0);
+    expect(host.querySelector('[data-dir="d1"] .dlive')!.getAttribute('aria-label')).toBe('changed');
+    act(() => host.querySelector<HTMLElement>('[data-dir="d1"]')!.click());
     expect(rows()).toBe(DIR_BATCH + 1);
     expect(host.querySelector('[data-file="d1/f699.ts"] .b-edit')).not.toBeNull();
   });
@@ -333,5 +337,167 @@ describe('FileTree live target', () => {
     renders.length = 0;
     act(() => w().apply({ type: 'agentEvent', event: event({ sessionId: 's1', type: 'message', text: 'thinking out loud' }) }));
     expect(renders).toEqual([]);
+  });
+});
+
+describe('FileTree folders', () => {
+  const dir = (path: string) => host.querySelector<HTMLElement>(`[data-dir="${path}"]`);
+  const key = (k: string, el = document.activeElement as HTMLElement) =>
+    act(() => { el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true })); });
+  const focused = () => (document.activeElement as HTMLElement).dataset.nav;
+  const scrollSpy = vi.fn();
+  beforeEach(() => {
+    scrollSpy.mockClear();
+    (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView = scrollSpy;
+  });
+  afterEach(() => { delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView; });
+
+  it('nests folders by name as on disk, folders first, root files at the top level', () => {
+    useStore.getState().apply(hello([file('README.md'), file('Web/App.tsx'), file('Web/lib/util.ts'), file('.agents/skills/a/SKILL.md'), file('.agents/skills/b/SKILL.md')]));
+    mount();
+    const tree = host.querySelector('[role=tree]')!;
+    const top = [...tree.querySelectorAll<HTMLElement>('[role=treeitem][aria-level="1"]')].map(e => e.dataset.nav);
+    expect(top).toEqual(['dir:.agents/skills', 'dir:Web', 'README.md']);
+    expect(dir('.agents/skills')!.querySelector('.fn')!.textContent).toBe('.agents/skills');
+    expect(dir('.agents/skills')!.getAttribute('title')).toBe('.agents/skills · 2 files');
+    expect(dir('Web')!.querySelector('b')!.textContent).toBe('2');
+    expect(dir('Web')!.getAttribute('aria-expanded')).toBe('true'); // top level of a small project
+    expect(dir('Web/lib')!.getAttribute('aria-expanded')).toBe('false'); // deeper folders start closed
+    expect(dir('Web/lib')!.getAttribute('aria-level')).toBe('2');
+    expect(host.querySelector('[data-file="Web/App.tsx"]')!.getAttribute('aria-level')).toBe('2');
+    expect(host.querySelector('[data-file="Web/lib/util.ts"]')).toBeNull();
+  });
+
+  it('starts every folder closed at 2,000 files', () => {
+    const files = [];
+    for (let i = 0; i < 2000; i++) files.push(file(`d${i % 4}/f${i}.ts`));
+    useStore.getState().apply(hello(files));
+    mount();
+    expect(host.querySelectorAll('.dir')).toHaveLength(4);
+    expect(rows()).toBe(0);
+  });
+
+  it('remembers opened and closed folders per project across remounts, ignoring folders that are gone', () => {
+    useStore.getState().apply(hello([file('a/b/x.ts'), file('a/y.ts'), file('c/z.ts')]));
+    mount();
+    act(() => dir('a/b')!.click());
+    act(() => dir('c')!.click());
+    expect(JSON.parse(localStorage.getItem('livemap:tree:/p/shop')!)).toEqual({ 'a/b': true, c: false });
+    act(() => root.unmount());
+    root = createRoot(host);
+    localStorage.setItem('livemap:tree:/p/shop', JSON.stringify({ 'a/b': true, c: false, gone: true, bad: 3 }));
+    mount();
+    expect(host.querySelector('[data-file="a/b/x.ts"]')).not.toBeNull();
+    expect(host.querySelector('[data-file="c/z.ts"]')).toBeNull();
+    localStorage.setItem('livemap:tree:/p/shop', '{not json');
+    act(() => root.unmount());
+    root = createRoot(host);
+    mount();
+    expect(host.querySelector('[data-file="c/z.ts"]')).not.toBeNull();
+  });
+
+  it('a compact chain splits when a file lands in its middle and keeps its open state', () => {
+    useStore.getState().apply(hello([file('src/app/(admin)/page.tsx'), file('lib/a.ts')]));
+    mount();
+    expect(dir('src/app/(admin)')!.querySelector('.fn')!.textContent).toBe('src/app/(admin)');
+    expect(host.querySelector('[data-file="src/app/(admin)/page.tsx"]')).not.toBeNull();
+    act(() => dir('lib')!.click()); // a user choice elsewhere survives the update
+    act(() => useStore.getState().apply({ type: 'files', files: [file('src/app/layout.tsx')], removed: [] }));
+    expect(dir('src/app/(admin)')!.querySelector('.fn')!.textContent).toBe('(admin)'); // its own row now
+    expect(dir('src/app')!.querySelector('.fn')!.textContent).toBe('src/app');
+    expect(dir('src/app')!.getAttribute('aria-expanded')).toBe('true');
+    expect(dir('src/app/(admin)')!.getAttribute('aria-expanded')).toBe('true');
+    expect(dir('src/app/(admin)')!.getAttribute('aria-level')).toBe('2');
+    expect(host.querySelector('[data-file="src/app/(admin)/page.tsx"]')).not.toBeNull();
+    expect(dir('lib')!.getAttribute('aria-expanded')).toBe('false');
+    // Removing the file joins the chain again, still open; removing the last file drops the folder.
+    act(() => useStore.getState().apply({ type: 'files', files: [], removed: ['src/app/layout.tsx'] }));
+    expect(dir('src/app/(admin)')!.getAttribute('aria-expanded')).toBe('true');
+    expect(dir('src/app/(admin)')!.querySelector('.fn')!.textContent).toBe('src/app/(admin)');
+    act(() => useStore.getState().apply({ type: 'files', files: [], removed: ['src/app/(admin)/page.tsx'] }));
+    expect(dir('src/app/(admin)')).toBeNull();
+    expect(dir('src')).toBeNull();
+  });
+
+  it('marks collapsed folders above a file the agent is writing, at any depth', () => {
+    useStore.getState().apply(hello([file('a/b/c/x.ts'), file('a/b/y.ts'), file('a/z.ts')]));
+    mount();
+    act(() => dir('a')!.click());
+    act(() => { vi.advanceTimersByTime(400); });
+    act(() => useStore.getState().apply({ type: 'change', files: [], removed: [], change: change('a/b/c/x.ts', 'created', { at: Date.now() }) }));
+    expect(dir('a')!.querySelector('.dlive')!.getAttribute('aria-label')).toBe('changed');
+    expect(dir('a')!.querySelector('.dlive')!.classList.contains('new')).toBe(true);
+  });
+
+  it('moves with the arrow keys: Right opens then enters, Left closes then goes up, Home and End', () => {
+    useStore.getState().apply(hello([file('a/b/x.ts'), file('a/y.ts'), file('z.ts')]));
+    mount();
+    const a = dir('a')!;
+    act(() => a.focus());
+    key('ArrowDown');
+    expect(focused()).toBe('dir:a/b');
+    key('ArrowRight');
+    expect(dir('a/b')!.getAttribute('aria-expanded')).toBe('true');
+    expect(focused()).toBe('dir:a/b');
+    key('ArrowRight');
+    expect(focused()).toBe('a/b/x.ts');
+    key('ArrowLeft');
+    expect(focused()).toBe('dir:a/b');
+    key('ArrowLeft');
+    expect(dir('a/b')!.getAttribute('aria-expanded')).toBe('false');
+    key('ArrowLeft');
+    expect(focused()).toBe('dir:a');
+    key('End');
+    expect(focused()).toBe('z.ts');
+    key('ArrowLeft'); // a root file has no parent: focus stays
+    expect(focused()).toBe('z.ts');
+    key('Home');
+    expect(focused()).toBe('dir:a');
+    key('y'); // typeahead
+    expect(focused()).toBe('a/y.ts');
+    expect(host.querySelectorAll('[role=treeitem][tabindex="0"]')).toHaveLength(1);
+  });
+
+  it('opens the folders above a file selected elsewhere and scrolls it into view', () => {
+    const files = [];
+    for (let i = 0; i < 2100; i++) files.push(file(`pkg/m${i % 3}/deep/f${i}.ts`));
+    files.push(file('pkg/other.ts'));
+    useStore.getState().apply(hello(files));
+    mount();
+    expect(rows()).toBe(0);
+    act(() => useStore.getState().select('pkg/m1/deep/f1.ts'));
+    const row = host.querySelector<HTMLElement>('[data-file="pkg/m1/deep/f1.ts"]')!;
+    expect(row).not.toBeNull();
+    expect(row.getAttribute('aria-selected')).toBe('true');
+    expect(scrollSpy.mock.contexts.at(-1)).toBe(row);
+    expect(dir('pkg/m0/deep')!.getAttribute('aria-expanded')).toBe('false'); // m0/deep is one compact row
+  });
+
+  it('a filter opens the folders above matches and hides the rest; clearing it restores the folders', () => {
+    useStore.getState().apply(hello([file('src/app/(admin)/users/page.tsx'), file('src/app/(admin)/orders/page.tsx'), file('src/lib/a.ts'), file('docs/x.md', [sym('users')])]));
+    mount();
+    act(() => dir('docs')!.click()); // user closes docs
+    act(() => useStore.getState().setFilter('users'));
+    expect(dir('src/app/(admin)/users')!.querySelector('.fn')!.textContent).toBe('src/app/(admin)/users');
+    expect(host.querySelector('[data-file="src/app/(admin)/users/page.tsx"]')).not.toBeNull();
+    expect(host.querySelector('[data-file="src/lib/a.ts"]')).toBeNull();
+    expect(host.querySelector('[data-file="docs/x.md"]')).not.toBeNull(); // symbol match, folder forced open
+    act(() => dir('src/app/(admin)/users')!.click()); // closing during a filter is not remembered
+    act(() => { vi.advanceTimersByTime(400); }); // past the fold animation
+    expect(host.querySelector('[data-file="src/app/(admin)/users/page.tsx"]')).toBeNull();
+    act(() => useStore.getState().setFilter(''));
+    expect(dir('docs')!.getAttribute('aria-expanded')).toBe('false');
+    expect(dir('src')!.getAttribute('aria-expanded')).toBe('true');
+    expect(dir('src/app/(admin)')!.getAttribute('aria-expanded')).toBe('false');
+    expect(JSON.parse(localStorage.getItem('livemap:tree:/p/shop')!)).toEqual({ docs: false });
+  });
+
+  it('keeps the start and end of a long name visible and the full path in the tooltip', () => {
+    useStore.getState().apply(hello([file('tests/api/bounty-contract-route.test.ts')]));
+    mount();
+    const row = host.querySelector<HTMLElement>('[data-file="tests/api/bounty-contract-route.test.ts"]')!;
+    const parts = [...row.querySelectorAll('.fn > span')].map(s => s.textContent);
+    expect(parts).toEqual(['bounty-contract-', 'route.test.ts']);
+    expect(row.getAttribute('title')).toBe('tests/api/bounty-contract-route.test.ts');
   });
 });

@@ -113,18 +113,24 @@
   .legendrow { display:flex; flex-wrap:wrap; gap:6px 10px; padding:0 16px 8px; font-size:11px; color:var(--ink3); }
   .legendrow i { display:inline-block; width:8px; height:8px; border-radius:3px; margin-right:4px; background:var(--c); }
   .tree { flex:1; overflow:auto; padding:0 8px 12px; }
-  .dir { display:flex; width:100%; border:0; background:transparent; text-align:left; cursor:pointer; align-items:center; gap:7px; padding:8px 8px 4px; border-radius:8px; font:600 11px var(--sans); letter-spacing:.06em; text-transform:uppercase; color:var(--ink3); white-space:nowrap; overflow:hidden; transition:color .2s; }
-  .dir:hover { color:var(--ink2); }
-  .dir i { width:8px; height:8px; border-radius:3px; background:var(--c); flex-shrink:0; }
-  .dir span { overflow:hidden; text-overflow:ellipsis; flex:1; min-width:0; }
-  .dir .dlive { width:7px; height:7px; border-radius:50%; background:var(--blue); flex-shrink:0; }
-  .dir .dlive.pulse { background:var(--orange); animation:pulse 1.2s ease-in-out infinite; }
-  .dir b { font-weight:500; letter-spacing:0; font-variant-numeric:tabular-nums; }
-  .dir .dchev { width:11px; height:11px; flex-shrink:0; transition:transform .35s var(--ease); }
+  /* Tree rows indent 12 px per level (--d is the level below the top). */
+  .dir { display:flex; width:100%; border:0; background:transparent; text-align:left; cursor:pointer; align-items:center; gap:8px; min-height:34px; padding:6px 8px 6px calc(8px + var(--d,0) * 12px); border-radius:10px; font:550 13px var(--sans); color:var(--ink); white-space:nowrap; overflow:hidden; transition:background .2s; }
+  .dir:hover { background:var(--hair); }
+  .dir .dchev { width:14px; height:14px; color:var(--ink3); flex-shrink:0; transition:transform .35s var(--ease); }
   .dir.open .dchev { transform:rotate(90deg); }
-  .more-rows { display:block; width:calc(100% - 16px); margin:8px; padding:8px 10px; border:1px dashed var(--hair2); border-radius:10px; background:transparent; color:var(--blue); font-size:12.5px; font-weight:500; cursor:pointer; }
+  /* The dominant layer's dot, centered where file rows show their layer tile. */
+  .dir i { width:8px; height:8px; margin:0 7px; border-radius:3px; background:var(--c); flex-shrink:0; }
+  .dir .dlive { width:7px; height:7px; border-radius:50%; background:var(--blue); flex-shrink:0; }
+  .dir .dlive.new { background:var(--green); }
+  .dir .dlive.pulse { background:var(--orange); animation:pulse 1.2s ease-in-out infinite; }
+  .dir b { margin-left:auto; font:500 11px var(--sans); color:var(--ink3); font-variant-numeric:tabular-nums; flex-shrink:0; }
+  /* A name cut in the middle: the start ellipsizes, the end (a word and the extension, or the last folder) stays. */
+  .frow .fn, .dir .fn { display:flex; flex:1 1 auto; min-width:7ch; overflow:hidden; white-space:pre; }
+  .fn > span:first-child { min-width:2ch; overflow:hidden; text-overflow:ellipsis; }
+  .fn > span + span { flex-shrink:0; }
+  .more-rows { display:block; width:calc(100% - 16px - var(--d,0) * 12px); margin:8px 8px 8px calc(8px + var(--d,0) * 12px); padding:8px 10px; border:1px dashed var(--hair2); border-radius:10px; background:transparent; color:var(--blue); font-size:12.5px; font-weight:500; cursor:pointer; }
   .more-rows:hover { background:var(--hair); }
-  .frow { display:flex; width:100%; text-align:left; border:0; background:transparent; align-items:center; gap:8px; padding:6px 8px; border-radius:10px; cursor:pointer; font-size:13.5px; transition:background .2s; }
+  .frow { display:flex; width:100%; text-align:left; border:0; background:transparent; align-items:center; gap:8px; padding:6px 8px 6px calc(8px + var(--d,0) * 12px); border-radius:10px; cursor:pointer; font-size:13.5px; transition:background .2s; }
   .frow:hover { background:var(--hair); }
   .frow.sel { background:var(--blue); color:#fff; }
   .frow.sel .fmeta { color:rgba(255,255,255,.8); }
@@ -132,7 +138,6 @@
   .frow.open .chev { transform:rotate(90deg); }
   .frow.sel .chev { color:#fff; }
   .frow .chev.empty { visibility:hidden; }
-  .frow .fn { flex:1 1 auto; min-width:7ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .fmeta { font-size:11px; color:var(--ink3); font-variant-numeric:tabular-nums; }
   /* Badges give up their room before the file name does (the name keeps at least 7ch). */
   .badge { font:700 9px var(--sans); letter-spacing:.06em; padding:2px 6px; border-radius:6px; flex-shrink:50; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-transform:uppercase; }
@@ -151,14 +156,15 @@
   .syms.open { grid-template-rows:1fr; }
   .syms > div { min-height:0; }
   /* A folder's rows: opening unfolds the group's height, closing folds it shut before the rows unmount. */
-  .dgroup { display:grid; grid-template-rows:1fr; }
-  .dgroup > div { min-height:0; }
+  /* minmax(0,1fr): nested rows take the panel's width, not their names' width, so long names can truncate. */
+  .dgroup { display:grid; grid-template-rows:1fr; grid-template-columns:minmax(0,1fr); }
+  .dgroup > div { min-height:0; min-width:0; }
   .dgroup.unfold > div, .dgroup.fold > div { overflow:hidden; }
   .dgroup.unfold { animation:unfold .36s var(--ease) backwards; }
   .dgroup.fold { pointer-events:none; animation:fold .36s var(--ease) both; }
   @keyframes unfold { from { grid-template-rows:0fr; opacity:0; } }
   @keyframes fold { to { grid-template-rows:0fr; opacity:0; } }
-  .srow { display:flex; width:100%; border:0; background:transparent; text-align:left; align-items:center; gap:8px; padding:4px 8px 4px 30px; border-radius:8px; font:12px var(--mono); color:var(--ink2); white-space:nowrap; cursor:pointer; }
+  .srow { display:flex; width:100%; border:0; background:transparent; text-align:left; align-items:center; gap:8px; padding:4px 8px 4px calc(30px + var(--d,0) * 12px + var(--sd,0) * 14px); border-radius:8px; font:12px var(--mono); color:var(--ink2); white-space:nowrap; cursor:pointer; }
   .srow:hover { background:var(--hair); }
   .srow > span:last-child { overflow:hidden; text-overflow:ellipsis; }
   .srow.new { color:var(--green); }

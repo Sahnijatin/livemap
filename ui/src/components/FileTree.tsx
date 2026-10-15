@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { useStore } from '../store';
 import { NARROW_QUERY, isNarrow, useMedia } from '../media';
@@ -7,9 +7,12 @@ import { prefersReducedMotion } from '../scroll';
 import { useCurrentTarget } from '../live';
 import { LAYERS } from '../layers';
 import { latestChange, type SymbolTag } from '../changes';
-import { dirName, useLiveRecent } from '../recent';
-import { BIG_PROJECT, DIR_BATCH, buildGroups, cachedTags, dirKey, moreKey, visibleItems, type Item, type Row } from '../treeModel';
-import { FileRow } from './FileRow';
+import { useLiveRecent } from '../recent';
+import {
+  BIG_PROJECT, DIR_BATCH, ancestors, buildTree, cachedTags, chainOpen, closedAbove, dirActivity, loadTreeState, moreKey, saveTreeState,
+  visibleItems, type Activity, type Item, type Row,
+} from '../treeModel';
+import { FileRow, MidName } from './FileRow';
 import { CollapseButton } from './Dock';
 import { usePrefersReducedMotion } from '../motion';
 import { Chevron, SearchIcon } from './icons';
@@ -21,13 +24,30 @@ const FOLD_MS = 360;
 const USER_SCROLL_HOLD_MS = 5000;
 /** Scroll events this soon after our own scrollIntoView are the animation, not the user. */
 const SELF_SCROLL_MS = 900;
+/** Typed letters within this long of each other search as one prefix. */
+const TYPEAHEAD_MS = 700;
 const EMPTY_TAGS = new Map<string, SymbolTag>();
 const NO_LIMITS: Record<string, number> = {};
+const NO_CLOSED: Record<string, true> = {};
+/** Folder state objects read from storage, which need no write back. */
+const fromStorage = new WeakSet<object>();
+const loadDirs = (root: string): Record<string, boolean> => {
+  const open = loadTreeState(root);
+  fromStorage.add(open);
+  return open;
+};
+const ACTIVITY: Record<Activity, { label: string; title: string }> = {
+  now: { label: 'agent is writing here', title: 'The agent is writing a file in this folder' },
+  edited: { label: 'changed', title: 'A file in this folder changed' },
+  new: { label: 'changed', title: 'A file in this folder is new' },
+};
+
 /** A string as a quoted CSS attribute value; any path (newlines included) yields a valid selector. */
 const attr = (s: string): string => (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&').replace(/\n/g, '\\a '));
 
 export function FileTree() {
   const files = useStore(s => s.files);
+  const projectRoot = useStore(s => s.root);
   const filter = useStore(s => s.filter);
   const setFilter = useStore(s => s.setFilter);
   const expanded = useStore(s => s.expanded);
@@ -47,8 +67,15 @@ export function FileTree() {
   const [reveal, setReveal] = useState<string | null>(null);
   const treeRef = useRef<HTMLDivElement>(null);
   const born = useRef(new Map<string, number>());
+  const typed = useRef({ text: '', at: 0 });
   const [focused, setFocused] = useState<string | null>(null);
-  const [openDirs, setOpenDirs] = useState<Record<string, boolean>>({});
+  // Open and closed folders by full path, remembered per project. Folders without an entry follow the defaults.
+  const [dirs, setDirs] = useState(() => ({ root: projectRoot, open: loadDirs(projectRoot) }));
+  if (dirs.root !== projectRoot) setDirs({ root: projectRoot, open: loadDirs(projectRoot) });
+  /** Folders shown open as part of a compact chain: they stay open when the chain splits. */
+  const seen = useRef(new Set<string>());
+  /** Folders closed while a filter is on; forgotten with the filter. */
+  const [filterClosed, setFilterClosed] = useState<{ q: string; byDir: Record<string, true> }>({ q: '', byDir: {} });
   const reduced = usePrefersReducedMotion();
   /** Folders mid-animation: a folding one keeps its rows (inert) until its fold ends. */
   const [moving, setMoving] = useState<Record<string, { kind: 'fold' | 'unfold'; until: number }>>({});
@@ -56,20 +83,39 @@ export function FileTree() {
 
   const q = filter.trim().toLowerCase();
   const dirLimit = limits.q === q ? limits.byDir : NO_LIMITS;
-  const { groups, layers } = useMemo(() => buildGroups(files, q), [files, q]);
-  const fileCount = Object.keys(files).length;
-  const big = fileCount > BIG_PROJECT;
+  const closedNow = filterClosed.q === q ? filterClosed.byDir : NO_CLOSED;
+  const { root: tree, layers } = useMemo(() => buildTree(files, q), [files, q]);
+  const fileCount = useMemo(() => Object.keys(files).length, [files]);
+  const big = fileCount >= BIG_PROJECT;
+  const state = dirs.open;
 
-  const liveDirs = useMemo(() => new Set(Object.keys(live).map(dirName)), [live]);
-  const selectedDir = selected === null ? null : dirName(selected);
-  const dirOpen = useCallback((dir: string): boolean => {
-    if (q) return true;
-    const explicit = openDirs[dir];
-    if (explicit !== undefined) return explicit;
-    return !big || dir === selectedDir || liveDirs.has(dir);
-  }, [q, openDirs, big, selectedDir, liveDirs]);
+  useEffect(() => { seen.current = new Set(); }, [projectRoot]);
+  useEffect(() => {
+    if (fromStorage.has(dirs.open)) return;
+    saveTreeState(dirs.root, dirs.open);
+  }, [dirs]);
+  const latest = useRef({ tree, big });
+  latest.current = { tree, big };
+  /** Opens the closed folders above `path` (the user's state, so it is remembered). */
+  const openAbove = useCallback((path: string) => {
+    setDirs(d => {
+      const need = closedAbove(latest.current.tree, path, d.open, latest.current.big, seen.current);
+      if (!need.length) return d;
+      const open = { ...d.open };
+      for (const a of need) open[a] = true;
+      return { root: d.root, open };
+    });
+  }, []);
 
-  // Auto-reveal: open the target's folder, then scroll its row into view. Never selects or focuses.
+  const activity = useMemo(() => dirActivity(live, targetPath), [live, targetPath]);
+  const selectedDirs = useMemo(() => new Set(selected === null ? [] : ancestors(selected)), [selected]);
+  const dirOpen = useCallback((paths: string[], level: number): boolean => {
+    // A filter shows every folder above a match, except those closed during it.
+    if (q) return !closedNow[paths[paths.length - 1]];
+    return chainOpen(paths, level, state, big, seen.current);
+  }, [q, closedNow, state, big]);
+
+  // Auto-reveal: open the target's folders, then scroll its row into view. Never selects or focuses.
   // During the hold after a user scroll the latest target waits, and is revealed when the hold ends.
   const [holdEnded, setHoldEnded] = useState(0);
   useEffect(() => {
@@ -79,22 +125,42 @@ export function FileTree() {
       const t = window.setTimeout(() => setHoldEnded(n => n + 1), wait);
       return () => window.clearTimeout(t);
     }
-    setOpenDirs(o => (o[dirName(targetPath)] === true ? o : { ...o, [dirName(targetPath)]: true }));
+    openAbove(targetPath);
     setReveal(targetPath);
-  }, [targetPath, holdEnded]);
+  }, [targetPath, holdEnded, openAbove]);
+  // A file selected anywhere (Map, palette, Activity, inspector) is revealed here too.
+  useEffect(() => {
+    if (selected === null) return;
+    openAbove(selected);
+    setReveal(selected);
+  }, [selected, openAbove]);
   const rowOpen = useCallback((row: Row) => row.forceOpen || !!expanded[row.file.path], [expanded]);
-  const pinned = useCallback((path: string) => path === selected || path === targetPath || live[path] !== undefined, [selected, targetPath, live]);
+  const pins = useMemo(() => {
+    const out = Object.keys(live);
+    if (selected !== null) out.push(selected);
+    if (targetPath !== null) out.push(targetPath);
+    return out;
+  }, [selected, targetPath, live]);
   const { items: openItems, navKeys } = useMemo(
-    () => visibleItems(groups, dirOpen, rowOpen, dirLimit, pinned),
-    [groups, dirOpen, rowOpen, dirLimit, pinned],
+    () => visibleItems(tree, dirOpen, rowOpen, dirLimit, pins),
+    [tree, dirOpen, rowOpen, dirLimit, pins],
   );
+  useEffect(() => {
+    if (q) return;
+    for (const it of openItems) if (it.kind === 'dir' && it.open && it.chain.length > 1) for (const p of it.chain) seen.current.add(p);
+  }, [openItems, q]);
+  const dirItems = useMemo(() => {
+    const m = new Map<string, Extract<Item, { kind: 'dir' }>>();
+    for (const it of openItems) if (it.kind === 'dir') m.set(it.node.path, it);
+    return m;
+  }, [openItems]);
   // Rows of folding folders render until the fold ends, but are never part of keyboard navigation.
-  const folding = useMemo(() => Object.keys(moving).filter(d => moving[d].kind === 'fold' && !dirOpen(d)), [moving, dirOpen]);
+  const folding = useMemo(() => Object.keys(moving).filter(d => moving[d].kind === 'fold' && dirItems.get(d)?.open === false), [moving, dirItems]);
   const items = useMemo(() => {
     if (!folding.length) return openItems;
     const f = new Set(folding);
-    return visibleItems(groups, d => dirOpen(d) || f.has(d), rowOpen, dirLimit, pinned).items;
-  }, [openItems, folding, groups, dirOpen, rowOpen, dirLimit, pinned]);
+    return visibleItems(tree, (paths, level) => dirOpen(paths, level) || f.has(paths[paths.length - 1]), rowOpen, dirLimit, pins).items;
+  }, [openItems, folding, tree, dirOpen, rowOpen, dirLimit, pins]);
   useEffect(() => {
     const ends = Object.values(moving).map(m => m.until);
     if (!ends.length) return;
@@ -141,10 +207,35 @@ export function FileTree() {
     if (isNarrow()) s.setPanel('inspector');
   }, []);
   const toggleDir = (dir: string) => {
-    const open = dirOpen(dir);
-    setOpenDirs(o => ({ ...o, [dir]: !open }));
+    const item = dirItems.get(dir);
+    if (!item) return;
+    const { open, chain } = item;
+    if (q) {
+      setFilterClosed(f => {
+        const byDir = { ...(f.q === q ? f.byDir : {}) };
+        if (open) byDir[dir] = true; else delete byDir[dir];
+        return { q, byDir };
+      });
+    } else {
+      // A chain opens and closes as a whole, so each of its folders keeps the state when the chain splits.
+      setDirs(d => {
+        const next = { ...d.open };
+        for (const p of chain) { delete next[p]; next[p] = !open; } // re-added last: the newest choices are kept longest
+        return { root: d.root, open: next };
+      });
+    }
     if (!reduced) setMoving(m => ({ ...m, [dir]: { kind: open ? 'fold' : 'unfold', until: Date.now() + FOLD_MS } }));
   };
+
+  /** Lowercase row names by nav key, for typeahead. */
+  const labels = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const it of openItems) {
+      if (it.kind === 'dir') m.set(`dir:${it.node.path}`, it.label.toLowerCase());
+      else if (it.kind === 'file') m.set(it.row.file.path, it.row.name.toLowerCase());
+    }
+    return m;
+  }, [openItems]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const el = document.activeElement as HTMLElement | null;
@@ -157,6 +248,7 @@ export function FileTree() {
     };
     const expandedAttr = el.getAttribute('aria-expanded');
     const toggleEl = () => (el.dataset.dir !== undefined ? toggleDir(el.dataset.dir) : onToggle(el.dataset.file!));
+    const up = el.dataset.parent ?? el.dataset.up;
     switch (e.key) {
       case 'ArrowDown': focusKey(i + 1); break;
       case 'ArrowUp': focusKey(i - 1); break;
@@ -169,27 +261,75 @@ export function FileTree() {
         break;
       case 'ArrowLeft':
         if (expandedAttr === 'true') toggleEl();
-        else if (el.dataset.parent) focusKey(navKeys.indexOf(el.dataset.parent));
-        else if (el.dataset.file !== undefined) focusKey(navKeys.indexOf(dirKey(dirName(el.dataset.file))));
+        else if (up !== undefined && navSet.has(up)) focusKey(navKeys.indexOf(up));
         else return;
         break;
-      default: return;
+      default: {
+        // Typeahead: letters and digits move to the next row whose name starts with what was typed.
+        if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey || !/^[\p{L}\p{N}._-]$/u.test(e.key)) return;
+        const now = Date.now();
+        const t = typed.current;
+        t.text = now - t.at < TYPEAHEAD_MS ? t.text + e.key.toLowerCase() : e.key.toLowerCase();
+        t.at = now;
+        const from = t.text.length > 1 ? i : i + 1;
+        for (let n = 0; n < navKeys.length; n++) {
+          const j = (from + n) % navKeys.length;
+          if (labels.get(navKeys[j])?.startsWith(t.text)) { focusKey(j); break; }
+        }
+      }
     }
     e.preventDefault();
   };
 
   const animateFrom = helloAt + 1000;
   const now = Date.now();
-  const renderRow = (item: Item) => {
+  const renderItem = (item: Item, kids: Block[]): ReactNode => {
     if (item.kind === 'more') {
       const k = moreKey(item.dir);
       return (
-        <button type="button" key={k} className="more-rows" data-nav={k} tabIndex={active === k ? 0 : -1} onClick={() => showMore(item.dir, item.shown)}>
+        <button type="button" key={k} className="more-rows" style={{ ['--d' as string]: item.level - 1 }} data-nav={k} tabIndex={active === k ? 0 : -1} onClick={() => showMore(item.dir, item.shown)}>
           Show {Math.min(item.hidden, DIR_BATCH).toLocaleString()} more ({item.hidden.toLocaleString()} hidden)
         </button>
       );
     }
-    if (item.kind === 'dir') return null;
+    if (item.kind === 'dir') {
+      const { node, label, level, up } = item;
+      const dir = node.path;
+      // A folding folder lists its rows until the fold ends, but shows as closed.
+      const open = item.open && !folding.includes(dir);
+      const k = `dir:${dir}`;
+      const m = moving[dir];
+      const fold = !open && m?.kind === 'fold';
+      const act = open ? undefined : activity.get(dir);
+      return [
+        <button
+          type="button"
+          key={k}
+          className={clsx('dir', open && 'open')}
+          style={{ ['--c' as string]: LAYERS[node.layer].color, ['--d' as string]: level - 1 }}
+          role="treeitem"
+          aria-level={level}
+          aria-expanded={open}
+          aria-selected={false}
+          data-nav={k}
+          data-dir={dir}
+          data-up={up ?? undefined}
+          tabIndex={active === k ? 0 : -1}
+          onClick={() => toggleDir(dir)}
+          title={`${dir} · ${node.count.toLocaleString()} ${node.count === 1 ? 'file' : 'files'}`}
+        >
+          <Chevron className="dchev" /><i /><MidName name={label} />
+          {act && <em className={clsx('dlive', act, act !== 'new' && 'pulse')} role="img" aria-label={ACTIVITY[act].label} title={ACTIVITY[act].title} />}
+          {!open && !act && selectedDirs.has(dir) && <em className="dlive" role="img" aria-label="contains the selected file" title="The selected file is in this folder" />}
+          <b>{node.count.toLocaleString()}</b>
+        </button>,
+        kids.length > 0 && (
+          <div key={`g:${dir}`} role="group" className={clsx('dgroup', fold && 'fold', open && m?.kind === 'unfold' && 'unfold')} {...(fold ? { inert: '' } : {})}>
+            <div>{kids.map(b => renderItem(b.item, b.kids))}</div>
+          </div>
+        ),
+      ];
+    }
     const { row } = item;
     const path = row.file.path;
     if (!born.current.has(path)) born.current.set(path, now < animateFrom ? 0 : now);
@@ -199,6 +339,9 @@ export function FileTree() {
       <FileRow
         key={path}
         file={row.file}
+        name={row.name}
+        level={item.level}
+        up={item.up}
         layer={row.meta.layer}
         total={row.meta.total}
         symbols={row.symbols}
@@ -215,11 +358,14 @@ export function FileTree() {
       />
     );
   };
-  // Each folder header is followed by a group holding its rows, so opening and closing can animate its height.
-  const blocks: { head: Extract<Item, { kind: 'dir' }>; rows: Item[] }[] = [];
+  // Each open folder is followed by a group holding its rows, so opening and closing can animate its height.
+  const blocks: Block[] = [];
+  const stack: { level: number; kids: Block[] }[] = [{ level: 0, kids: blocks }];
   for (const item of items) {
-    if (item.kind === 'dir') blocks.push({ head: item, rows: [] });
-    else blocks[blocks.length - 1]?.rows.push(item);
+    while (stack[stack.length - 1].level >= item.level) stack.pop();
+    const b: Block = { item, kids: [] };
+    stack[stack.length - 1].kids.push(b);
+    if (item.kind === 'dir') stack.push({ level: item.level, kids: b.kids });
   }
   return (
     <aside
@@ -257,41 +403,11 @@ export function FileTree() {
         onTouchMove={markUser}
         onFocus={e => { const k = (e.target as HTMLElement).dataset.nav; if (k) setFocused(k); }}
       >
-        {blocks.map(({ head, rows }) => {
-          const { dir, layer, rows: all } = head.group;
-          const k = dirKey(dir);
-          const open = dirOpen(dir);
-          const m = moving[dir];
-          const fold = !open && m?.kind === 'fold';
-          return [
-            <button
-              type="button"
-              key={k}
-              className={clsx('dir', open && 'open')}
-              style={{ ['--c' as string]: LAYERS[layer].color }}
-              role="treeitem"
-              aria-level={1}
-              aria-expanded={open}
-              data-nav={k}
-              data-dir={dir}
-              tabIndex={active === k ? 0 : -1}
-              onClick={() => toggleDir(dir)}
-              title={`${dir || 'project root'} · ${all.length} files`}
-            >
-              <i /><span>{dir || 'project root'}</span>
-              {!open && liveDirs.has(dir) && <em className="dlive pulse" role="img" aria-label="changed" title="A file in this folder changed" />}
-              {!open && !liveDirs.has(dir) && dir === selectedDir && <em className="dlive" role="img" aria-label="contains the selected file" title="The selected file is in this folder" />}
-              {(big || !open) && <><b>{all.length}</b><Chevron className="dchev" /></>}
-            </button>,
-            rows.length > 0 && (
-              <div key={`g:${dir}`} role="group" className={clsx('dgroup', fold && 'fold', open && m?.kind === 'unfold' && 'unfold')} {...(fold ? { inert: '' } : {})}>
-                <div>{rows.map(renderRow)}</div>
-              </div>
-            ),
-          ];
-        })}
-        {fileCount > 0 && groups.length === 0 && <div className="tree-empty">No files or functions match “{filter}”.</div>}
+        {blocks.map(b => renderItem(b.item, b.kids))}
+        {fileCount > 0 && tree.count === 0 && <div className="tree-empty">No files or functions match “{filter}”.</div>}
       </div>
     </aside>
   );
 }
+
+type Block = { item: Item; kids: Block[] };

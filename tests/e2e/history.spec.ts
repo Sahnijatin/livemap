@@ -6,6 +6,7 @@ import path from 'node:path';
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
+import { openFolders } from './tree';
 import { projectDir } from '../../src/history/paths.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -300,6 +301,7 @@ test('history: timeline, rewind, read-only past, play, restarts, summaries and e
     await expect(banner(page).locator('> span')).toHaveText(/^Viewing \S.*\. Changes made since then are hidden\.$/);
 
     // The Flag box is read-only.
+    await openFolders(tree(page), SERVICE);
     await fileRow(page, SERVICE).click();
     await expect(inspector(page).getByRole('textbox', { name: 'Flag note for this file' })).toBeDisabled();
     await expect(inspector(page).locator('.flagbox').first()).toHaveAttribute('title', 'Back to live to make changes');
@@ -382,6 +384,7 @@ test('history: timeline, rewind, read-only past, play, restarts, summaries and e
     expect(runStart).toBeGreaterThan(seqs.edit4);
 
     const expand = async () => {
+      await openFolders(tree(page), SERVICE);
       const row = fileRow(page, SERVICE);
       await row.waitFor();
       if ((await row.getAttribute('aria-expanded')) !== 'true') await row.locator('.chev').click();

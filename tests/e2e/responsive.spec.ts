@@ -4,6 +4,7 @@ import path from 'node:path';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
+import { openFolders } from './tree';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../..');
@@ -181,6 +182,7 @@ test('at 900 px the Files and Inspector buttons open and close their slide-overs
   await page.mouse.click(880, 500);
   await expect(sidebar).not.toHaveClass(/\bopen\b/);
   await files.click();
+  await openFolders(sidebar, 'server/services/orderService.ts');
   await sidebar.locator('[data-file="server/services/orderService.ts"]').click();
   await expect(sidebar).not.toHaveClass(/\bopen\b/);
   await expect(inspector).not.toHaveClass(/\bopen\b/);
@@ -193,6 +195,7 @@ test('on a phone, selecting a file in the sidebar opens the inspector', async ({
   await page.getByRole('button', { name: 'Files', exact: true }).click();
   // Opening the slide-over moves focus into it; a keyboard pick hands focus on to the inspector, never to <body>.
   await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('aside.sidebar'))).toBe(true);
+  await openFolders(page.locator('aside.sidebar'), 'server/services/orderService.ts');
   const row = page.locator('aside.sidebar [data-file="server/services/orderService.ts"]');
   await row.focus();
   await page.keyboard.press('Enter');
