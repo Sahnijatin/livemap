@@ -262,6 +262,7 @@ React 18 + TypeScript + Vite; Tailwind CSS with Radix primitives (shadcn-style c
 - npm package `livemap` (name to be confirmed), Node 18+, macOS, Linux, Windows. `npx livemap` or a global install.
 - Dependencies: `chokidar`, `web-tree-sitter`, `tree-sitter-wasms` (grammars), `ignore`, `diff`, `ws`. No native modules.
 - License: open core. The local tool is MIT. Future paid features (hosted snapshot links, team history sync, LSP deep-analysis plugin) are separate packages that consume the same event log.
+  - Note (2026-10-15): the license is now MIT + Commons Clause, not plain MIT (see [LICENSE](../../../LICENSE)).
 - No telemetry in v1.
 
 ## 12. Privacy and security
