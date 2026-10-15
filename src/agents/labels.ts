@@ -1,4 +1,4 @@
-import { isSecretEnvPath } from '../engine/languages.js';
+import { isSecretEnvPath, SECRET_NAME_ALT } from '../engine/languages.js';
 
 const MAX_LABEL = 160;
 /** Stored in place of a shell command that names a secret env file. */
@@ -194,7 +194,8 @@ export function touchesSecret(name: string, input: unknown, paths: string[]): bo
   return paths.some(isSecretEnvPath) || redactSecretInput(name, input) !== input;
 }
 
-const SECRET_REF = /(?:^|[\s/\\'"`(=])(\.env(?:rc)?(?:[._-][\w.-]*)?)(?=[:\s'"`),;]|$)/gim;
+// Built from the same names as isSecretEnvPath (`.env`, `.envrc`, `.npmrc`, `.netrc`, `.pypirc`), which then rules out examples.
+const SECRET_REF = new RegExp(`(?:^|[\\s/\\\\'"\`(=])(\\.(?:${SECRET_NAME_ALT})(?:[._-][\\w.-]*)?)(?=[:\\s'"\`),;]|$)`, 'gim');
 
 /** True when tool output names a secret env file (as grep, cat or diff output does), example files aside. */
 export function outputMentionsSecret(text: string): boolean {

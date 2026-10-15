@@ -91,6 +91,14 @@ describe('C1: shell commands and outputs that touch secret files', () => {
     expect(outputMentionsSecret('loaded environment.ts')).toBe(false);
     expect(outputMentionsSecret('process.env.KEY')).toBe(false);
   });
+  it('outputMentionsSecret covers credential rc files (#18)', () => {
+    expect(outputMentionsSecret('.npmrc:1://registry.npmjs.org/:_authToken=npm_SECRET')).toBe(true);
+    expect(outputMentionsSecret('cat: /home/u/.netrc')).toBe(true);
+    expect(outputMentionsSecret("'.pypirc' password = x")).toBe(true);
+    expect(outputMentionsSecret('pkg/.npmrc.bak:1:_authToken=x')).toBe(true);
+    expect(outputMentionsSecret('.npmrc.example:1:registry=')).toBe(false);
+    expect(outputMentionsSecret('.pypirc-sample:1:[pypi]')).toBe(false);
+  });
 });
 
 describe('M4: relative paths resolve against cwd', () => {
