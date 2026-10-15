@@ -90,27 +90,71 @@ function indexOf(ctx: ImportCtx): FileIndex {
 
 const blank = (s: string): string => s.replace(/[^\n]/g, ' ');
 
+/** A line inside a template that starts an import or export statement; the template is taken to end before it. */
+const STATEMENT_LINE = /\n[ \t]*(?:import[ \t]*['"]|(?:import|export)[ \t{*][^'"`;]{0,500}?\bfrom[ \t]*['"])/y;
+/** Code after which a `/` starts a regex literal rather than a division. */
+const REGEX_AFTER = new Set(['', '=', '(', ',', ':', '[', '!', '&', '|', '?', '{', '}', ';']);
+const REGEX_KEYWORD = /\b(?:return|typeof|case|void|yield|await|in|of|delete|instanceof)$/;
+
+/** End of the regex literal opening at `i` (past its closing `/`), or -1 when the line does not close one. */
+function regexEnd(src: string, i: number): number {
+  let cls = false;
+  for (let j = i + 1; j < src.length && src[j] !== '\n'; j++) {
+    const c = src[j];
+    if (c === '\\') j++;
+    else if (c === '[') cls = true;
+    else if (c === ']') cls = false;
+    else if (c === '/' && !cls) return j + 1;
+  }
+  return -1;
+}
+
 /**
- * `src` with comments and the bodies of string and template literals blanked (quotes and newlines kept),
- * so offsets still match `src`: statements are matched here and their specifiers read back from `src`.
+ * `src` with comments and the bodies of string, template and regex literals blanked (quotes and newlines
+ * kept), so offsets still match `src`: statements are matched here and their specifiers read back from `src`.
+ * A stray quote must not hide the imports after it: a quoted string ends at its line's end, and a template
+ * ends early before a line that starts an import or export statement.
  */
 function blankJs(src: string): string {
   let out = '';
   let i = 0;
+  // The last code character on this line ('' at a line start), to tell a regex from a division.
+  let prev = '';
+  // Set when a `/` opened no regex: the rest of the line is not read for one again, keeping long lines linear.
+  let divisions = false;
   while (i < src.length) {
     const c = src[i];
     if (c === '"' || c === "'" || c === '`') {
       let j = i + 1;
-      while (j < src.length && src[j] !== c && (c === '`' || src[j] !== '\n')) j += src[j] === '\\' ? 2 : 1;
-      const closed = j < src.length;
-      out += c + blank(src.slice(i + 1, closed ? j : src.length)) + (closed ? src[j] : '');
-      i = j + 1;
+      let closed = false;
+      for (; j < src.length; j += src[j] === '\\' ? 2 : 1) {
+        if (src[j] === c) { closed = true; break; }
+        if (src[j] !== '\n') continue;
+        if (c !== '`') break;
+        STATEMENT_LINE.lastIndex = j;
+        if (STATEMENT_LINE.test(src)) break;
+      }
+      j = Math.min(j, src.length);
+      out += c + blank(src.slice(i + 1, j)) + (closed ? c : '');
+      i = closed ? j + 1 : j;
+      prev = c;
     } else if (c === '/' && (src[i + 1] === '/' || src[i + 1] === '*')) {
       const end = src[i + 1] === '/' ? src.indexOf('\n', i) : src.indexOf('*/', i + 2);
       const stop = end === -1 ? src.length : src[i + 1] === '/' ? end : end + 2;
       out += blank(src.slice(i, stop));
       i = stop;
-    } else { out += c; i++; }
+    } else if (c === '/' && !divisions && (REGEX_AFTER.has(prev) || (/[\w$]/.test(prev) && REGEX_KEYWORD.test(src.slice(Math.max(0, i - 12), i).trimEnd())))) {
+      const end = regexEnd(src, i);
+      if (end < 0) { out += c; i++; prev = c; divisions = true; continue; }
+      out += '/' + blank(src.slice(i + 1, end - 1)) + '/';
+      i = end;
+      prev = ')';
+    } else {
+      out += c;
+      i++;
+      if (c === '\n') { prev = ''; divisions = false; }
+      else if (c !== ' ' && c !== '\t' && c !== '\r') prev = c;
+    }
   }
   return out;
 }
@@ -140,7 +184,7 @@ function parseJsSpecs(src: string): string[] {
   indexStats.jsParses++;
   const out: string[] = [];
   const patterns = [
-    /\b(?:import|export)\s+(?:type\s+)?(?:[^'";]*?\s+from\s+)?['"]([^'"\n]+)['"]/dg,
+    /\b(?:import|export)\s+(?:type\s+)?(?:[^'";]{0,2000}?\s+from\s+)?['"]([^'"\n]+)['"]/dg,
     /\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)/dg,
     /\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*\)/dg,
   ];
@@ -224,16 +268,34 @@ function pyModule(base: string, ctx: ImportCtx): string | null {
   return null;
 }
 
+/** Common top-level standard library modules, which a project file of the same name only shadows from the root. */
+const PY_STDLIB = new Set([
+  'os', 'sys', 're', 'json', 'logging', 'email', 'typing', 'collections', 'datetime', 'time', 'math', 'random',
+  'pathlib', 'subprocess', 'threading', 'asyncio', 'functools', 'itertools', 'http', 'urllib', 'socket', 'ssl',
+  'hashlib', 'base64', 'uuid', 'io', 'csv', 'sqlite3', 'unittest', 'argparse', 'dataclasses', 'enum', 'abc', 'copy',
+  'string', 'struct', 'shutil', 'tempfile', 'glob', 'pickle', 'queue', 'signal', 'traceback', 'types', 'warnings',
+  'inspect', 'contextlib', 'operator', 'decimal', 'fractions', 'statistics', 'secrets', 'html', 'xml', 'zipfile',
+  'tarfile', 'gzip', 'platform', 'locale', 'calendar', 'textwrap', 'pprint', 'heapq', 'bisect', 'weakref', 'gc',
+  'select', 'selectors', 'mimetypes', 'smtplib', 'configparser', 'getpass', 'ctypes', 'multiprocessing',
+  'concurrent', 'importlib', 'pkgutil', 'codecs', 'unicodedata', 'difflib', 'fnmatch', 'stat', 'errno', 'numbers',
+  'array', 'binascii', 'zlib', 'ipaddress', 'shlex', 'cmd', 'token', 'tokenize', 'ast', 'dis', 'site', 'sysconfig',
+  'builtins', '__future__',
+]);
+
 /**
  * Candidate directories for a dotted module, in order: relative to `dir` (rel leading dots), or, for an
- * absolute module, each ancestor of the importing file nearest first (a project nested under `backend/`
- * or `services/ml/` runs with its own directory on the import path), then the root and `src`.
+ * absolute module, each ancestor of the importing file nearest first that is not itself a package (a
+ * project nested under `backend/` or `services/ml/` runs with its own directory on the import path, while
+ * inside a package Python 3 has no implicit relative imports), then the root and `src`. A standard library
+ * name is only looked up at the root and `src`, so `app/logging.py` does not take `import logging`.
  */
-function pyBases(dir: string, mod: string, rel: number): string[] {
+function pyBases(dir: string, mod: string, rel: number, ctx: ImportCtx): string[] {
   const p = mod.replace(/\./g, '/');
   if (rel > 0) return [join(dir, ...Array(rel - 1).fill('..'), p)];
   const out: string[] = [];
-  if (mod) for (let d = dir; d; d = parentDir(d)) out.push(join(d, p));
+  if (mod && !PY_STDLIB.has(mod.split('.')[0])) {
+    for (let d = dir; d; d = parentDir(d)) if (!ctx.has(join(d, '__init__.py'))) out.push(join(d, p));
+  }
   for (const r of ['', 'src']) out.push(join(r, p));
   return out;
 }
@@ -248,7 +310,7 @@ function pythonImports(path: string, src: string, ctx: ImportCtx, local: Set<str
   const dir = parentDir(path);
   // The first base holding the module or one of the imported submodules wins, as on Python's import path.
   const add = (mod: string, names: string[], rel: number): boolean => {
-    for (const b of pyBases(dir, mod, rel)) {
+    for (const b of pyBases(dir, mod, rel, ctx)) {
       const hits = [pyTarget(b, mod, ctx), ...names.map(n => pyModule(join(b, n), ctx))].filter((h): h is string => !!h);
       if (!hits.length) continue;
       for (const h of hits) local.add(h);
@@ -429,7 +491,7 @@ export function resolveSpecifier(from: string, lang: Lang, spec: string, ctx: Im
     case 'python': {
       const m = /^(\.*)([\w.]*)$/.exec(spec);
       if (!m) return null;
-      for (const b of pyBases(dir, m[2], m[1].length)) {
+      for (const b of pyBases(dir, m[2], m[1].length, ctx)) {
         const hit = pyTarget(b, m[2], ctx);
         if (hit) return hit;
       }

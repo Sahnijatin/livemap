@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Lang } from '../../src/shared/types.js';
-import { extractImports, readTsconfigAliases, indexStats, type ImportCtx } from '../../src/engine/imports.js';
+import { extractImports, readTsconfigAliases, indexStats, resolveSpecifier, type ImportCtx } from '../../src/engine/imports.js';
 
 const FILES = ['src/main/java/com/shop.java','src/a.ts','src/lib/b.ts','src/lib/index.ts','src/ui/c.tsx','pkg/__init__.py','pkg/mod.py','pkg/sub/x.py','app/main.py','internal/db/db.go','internal/db/conn.go','src/lib.rs','src/api.rs','src/api/routes.rs','src/main/java/com/shop/Order.java','lib/util.rb','include/geo.h'];
 const set = new Set(FILES);
@@ -31,6 +31,17 @@ describe('extractImports', () => {
     expect(py('backend/app/api/users.py', 'from app import models').local).toEqual(['backend/app/__init__.py', 'backend/app/models.py']);
     // A root-level project still resolves from the root.
     expect(py('main.py', 'from app.models import User').local).toEqual(['app/models.py']);
+  });
+  it('python does not let a local file shadow the standard library, nor resolve from inside a package', () => {
+    const files = ['app/views.py', 'app/logging.py', 'app/util.py', 'svc/app/__init__.py', 'svc/app/views.py', 'svc/app/helpers.py', 'svc/helpers.py'];
+    const has = new Set(files);
+    const ctx: ImportCtx = { has: p => has.has(p), files, aliases: [], goModule: null };
+    expect(extractImports('app/views.py', 'python', 'import logging\nfrom logging import handlers\nimport util', ctx))
+      .toEqual({ local: ['app/util.py'], external: ['logging'] });
+    expect(resolveSpecifier('app/views.py', 'python', 'logging', ctx)).toBeNull();
+    // svc/app is a package, so its own directory is not on the import path; its parent svc/ is.
+    expect(extractImports('svc/app/views.py', 'python', 'import helpers', ctx).local).toEqual(['svc/helpers.py']);
+    expect(resolveSpecifier('svc/app/views.py', 'python', 'helpers', ctx)).toBe('svc/helpers.py');
   });
   it('go', () => {
     expect(imp('cmd/main.go','go','import (\n "fmt"\n "shop/internal/db"\n)', { goModule: 'shop' }).local).toEqual(['internal/db/conn.go','internal/db/db.go']);
@@ -140,6 +151,15 @@ describe('indexing and fixes', () => {
       + "import y from './lib'; export { b } from \"./lib/b\";\nconst r = require('react'); const m = await import('./ui/c');\nconst esc = 'it\\'s import a from \"vue\"';\n";
     expect(imp('src/a.ts', 'typescript', src)).toEqual({ local: ['src/lib/b.ts', 'src/lib/index.ts', 'src/ui/c.tsx'], external: ['react'] });
     expect(imp('src/a.ts', 'typescript', "import a from 'react' // import b from 'vue'\n/* 'x' */ import c from \"preact\"")).toEqual({ local: [], external: ['react', 'preact'] });
+  });
+  it('keeps imports after a stray quote that opens no real string', () => {
+    const after = "\nimport y from './lib';\nimport {\n  b,\n} from './lib/b';\nexport * from 'vue';\n";
+    const want = { local: ['src/lib/b.ts', 'src/lib/index.ts'], external: ['vue'] };
+    expect(imp('src/a.ts', 'typescript', "const re = /`/; const q = /[/'\"]/g; const half = a / 2 / b;" + after)).toEqual(want);
+    expect(imp('src/a.tsx', 'tsx', 'const P = () => <p>Don`t</p>;' + after)).toEqual(want);
+    expect(imp('src/a.tsx', 'tsx', "const P = () => <p>Don't</p>;" + after)).toEqual(want);
+    // A regex body is not code, and a template still hides import-like text that does not start a line.
+    expect(imp('src/a.ts', 'typescript', "const r = /import x from 'lodash'/;\nconst t = `a\n  b; import z from 'chalk'`;" + after)).toEqual(want);
   });
   it('prefers the longest alias prefix', () => {
     expect(imp('src/a.ts','typescript',`import b from '@a/lib/b'`, { aliases: [['@a',['nowhere']],['@a/lib',['src/lib']]] }).local).toEqual(['src/lib/b.ts']);

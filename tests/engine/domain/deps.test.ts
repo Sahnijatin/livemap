@@ -23,6 +23,9 @@ const GOLDEN: Record<string, { name: string; version: string; eco: string; dev?:
     { name: 'SQLAlchemy', version: '>=2.0,<3', eco: 'pypi', line: 7 },
     { name: 'urllib3', version: '2.2.1', eco: 'pypi', line: 8 },
     { name: 'idna', version: '3.7', eco: 'pypi', line: 11 },
+    { name: 'certifi', version: '>=2', eco: 'pypi', line: 12 },
+    { name: 'numpy', version: '1.26', eco: 'pypi', line: 13 },
+    { name: 'six', version: '1.16', eco: 'pypi', line: 14 },
   ],
   'pyproject.toml': [
     { name: 'fastapi', version: '>=0.110', eco: 'pypi', line: 7 },

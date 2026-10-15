@@ -95,8 +95,9 @@ const requirements: Parser = text => {
     let line = noHash(ls[i]).trim();
     while (line.endsWith('\\') && i + 1 < ls.length) line = line.slice(0, -1) + ' ' + noHash(ls[++i]).trim();
     if (!line || line.startsWith('-') || /^[\w+.-]*:\/\//.test(line)) continue;
-    // Per-requirement options (`--hash=sha256:...`) follow the requirement.
-    const r = pep508(line.replace(/\\$/, '').replace(/\s--[\w-]+(?:=\S*)?/g, ' '));
+    // Per-requirement options (`--hash=sha256:...`, `--hash sha256:...`) follow the requirement.
+    const opts = line.search(/\s--/);
+    const r = pep508((opts < 0 ? line : line.slice(0, opts)).replace(/\\$/, ''));
     if (r) deps.push(dep(r.name, r.version, 'pypi', first + 1));
   }
   return { deps };

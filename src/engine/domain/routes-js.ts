@@ -4,7 +4,7 @@ import { blankStrings, defaultExport, filePath, handlerOf, lineAt, maskCommentsA
 
 type MountFact = Omit<Mount, 'target'>;
 /** `assigned` marks a name set from a router factory in this file, which is also accepted as `this.<name>`. */
-/** `guessed`: a conventional name in a file without a server import, a route only when it passes a handler. */
+/** `guessed`: a conventional name in a file without a server import, a route only when it looks like one (see `routeLike`). */
 interface Receiver { fw: string; prefix: string; assigned?: true; guessed?: true }
 
 const LANGS = new Set<Lang>(['typescript', 'tsx', 'javascript', 'svelte']);
@@ -84,7 +84,7 @@ const THIS_RECEIVERS = new Set(['app', 'router', 'server']);
 /**
  * Router receivers of this file: identifiers assigned from a router factory, plus the conventional names.
  * Without a server import those names are only guessed (`api.get('/users')` is usually an HTTP client),
- * so their calls count as routes only when they pass a handler (see `handlerLike`).
+ * so their calls count as routes only when they look like route registrations (see `routeLike`).
  */
 function receiversOf(code: string, scan: string, imports: Map<string, string>, fileFw: string): Map<string, Receiver> {
   const recv = new Map<string, Receiver>();
@@ -172,13 +172,20 @@ function codeRoutes(code: string, scan: string): { routes: Route[]; mounts: Moun
 
   const call = new RegExp(`(?<![\\w$.])(this\\s*\\.\\s*)?(${ID})\\s*\\.\\s*(get|post|put|patch|delete|options|head|all|on|use|route|register)\\b`, 'g');
   const chained = /\s*\.\s*(get|post|put|patch|delete|options|head|all)\b/y;
+  const then = /\s*\.\s*(?:then|catch)\s*\(/y;
+  /** A guessed receiver's call at `end` registers a route; `used` when the chain's value is consumed. */
+  const ok = (r: Receiver, rest: string[], used: boolean, end: number): boolean => {
+    if (!r.guessed) return true;
+    then.lastIndex = end;
+    return routeLike(rest, used || then.test(scan));
+  };
   /** `verb(path, ...handlers)` and any `.verb(path, ...)` calls chained after it. */
-  const verbCalls = (verb: string, args: string[], index: number, end: number, r: Receiver): void => {
+  const verbCalls = (verb: string, args: string[], index: number, end: number, r: Receiver, used: boolean): void => {
     for (;;) {
       let rest = args.slice(1);
       let path = literal(args[0]);
       if (!isPath(path) && r.fw === 'koa' && isPath(literal(args[1]))) { path = literal(args[1]); rest = args.slice(2); }
-      if (isPath(path) && (!r.guessed || handlerLike(rest))) add(verb === 'all' ? 'ANY' : verb.toUpperCase(), path, handlerOf(rest), index, r);
+      if (isPath(path) && ok(r, rest, used, end)) add(verb === 'all' ? 'ANY' : verb.toUpperCase(), path, handlerOf(rest), index, r);
       chained.lastIndex = end;
       const c = chained.exec(scan);
       const open = c ? callOpen(scan, chained.lastIndex) : -1;
@@ -196,6 +203,7 @@ function codeRoutes(code: string, scan: string): { routes: Route[]; mounts: Moun
     const open = callOpen(scan, m.index + m[0].length);
     if (open < 0) continue;
     const { args, end } = splitArgs(code, open);
+    const used = !!r.guessed && CONSUMED.test(scan.slice(Math.max(0, m.index - 16), m.index));
     if (verb === 'use') {
       const prefix = literal(args[0]);
       if (isPath(prefix) && args.length > 1) mount(prefix, specOf(args[args.length - 1], imports), m.index, r);
@@ -206,7 +214,7 @@ function codeRoutes(code: string, scan: string): { routes: Route[]; mounts: Moun
       const path = literal(args[1]);
       if (!isPath(path) || !args[0]) continue;
       const methods = args[0].startsWith('[') ? [...args[0].matchAll(/['"`]([A-Za-z]+)['"`]/g)].map(x => x[1]) : [literal(args[0])].filter((x): x is string => !!x);
-      if (r.guessed && !handlerLike(args.slice(2))) continue;
+      if (!ok(r, args.slice(2), used, end)) continue;
       for (const method of methods) add(method.toUpperCase(), path, handlerOf(args.slice(2)), m.index, r);
     } else if (verb === 'route') {
       if (args.length > 1) {
@@ -222,24 +230,35 @@ function codeRoutes(code: string, scan: string): { routes: Route[]; mounts: Moun
           const open = callOpen(scan, chained.lastIndex);
           if (open < 0) break;
           const cargs = splitArgs(code, open);
-          add(c[1] === 'all' ? 'ANY' : c[1].toUpperCase(), path, handlerOf(cargs.args), c.index + c[0].indexOf(c[1]), r);
+          if (ok(r, cargs.args, used, cargs.end)) add(c[1] === 'all' ? 'ANY' : c[1].toUpperCase(), path, handlerOf(cargs.args), c.index + c[0].indexOf(c[1]), r);
           chained.lastIndex = cargs.end;
         }
       }
     } else {
-      verbCalls(verb, args, m.index, end, r);
+      verbCalls(verb, args, m.index, end, r, used);
     }
   }
   return { routes, mounts };
 }
 
-/** Fastify `route({ method, url, handler })`; a method array gives one route per method. */
 const FN_ARG = /^(?:async\s+)?(?:function\b|(?:\([^()]*\)|[\w$]+)\s*(?::[^=]{0,200})?=>)/;
-/** Route handlers, as opposed to HTTP client arguments: an inline function, or a middleware chain. */
-function handlerLike(rest: string[]): boolean {
-  return rest.some(a => FN_ARG.test(a.trim())) || (rest.length >= 2 && !rest.some(a => /^[{[]/.test(a.trim())));
+const REF_ARG = /^[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*$/;
+/** Last segments that name a request payload or config, as passed to an HTTP client. */
+const CLIENT_ARG = new Set(['body', 'data', 'payload', 'params', 'query', 'config', 'cfg', 'conf', 'options', 'opts', 'init', 'headers', 'form', 'formdata', 'values', 'input', 'signal']);
+/** Text before a call whose value is used (`await`, `return`, an assignment, an argument or an arrow body). */
+const CONSUMED = /(?:\bawait|\breturn|=>|[=(,])\s*$/;
+/**
+ * Route registrations, as opposed to HTTP client calls: an inline function, or only handler references
+ * (the last not named like a payload or config) in a call whose value is not used.
+ */
+function routeLike(rest: string[], used: boolean): boolean {
+  if (rest.some(a => FN_ARG.test(a.trim()))) return true;
+  if (used || !rest.length || !rest.every(a => REF_ARG.test(a.trim()))) return false;
+  const last = rest[rest.length - 1].trim();
+  return !CLIENT_ARG.has(last.slice(last.lastIndexOf('.') + 1).trim().toLowerCase());
 }
 
+/** Fastify `route({ method, url, handler })`; a method array gives one route per method. */
 function routeOptions(obj: string, index: number, r: Receiver, add: (m: string, p: string, h: string | undefined, i: number, r: Receiver) => void): void {
   const url = /\b(?:url|path)\s*:\s*(['"`])([^'"`\n]*)\1/.exec(obj);
   const method = /\bmethod\s*:\s*(?:(['"`])([A-Za-z]+)\1|\[([^\]]*)\])/.exec(obj);
