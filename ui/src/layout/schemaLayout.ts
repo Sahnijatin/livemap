@@ -23,16 +23,33 @@ export const shownRows = (fields: number, expanded = false): number =>
 export const nodeHeight = (t: Pick<Table, 'fields'>, expanded = false): number =>
   HEADER_H + ROW_H * shownRows(t.fields.length, expanded);
 
+/** Which way parent tables lead to their children: across a wide pane, down a tall or narrow one. */
+export type Direction = 'RIGHT' | 'DOWN';
+/** Below this pane width the layout always runs down (phones, a squeezed center pane). */
+export const NARROW_PANE = 640;
+/** How far past square a pane must go before the layout turns, so a pane near square does not flip back and forth. */
+const HYSTERESIS = 1.15;
+
+/**
+ * The layout direction for a pane of this size. A pane taller than it is wide, or narrower than
+ * `NARROW_PANE`, reads top to bottom; a wide one left to right. An unmeasured pane (0 x 0) keeps
+ * `current` (RIGHT at first). With `current`, the aspect must pass square by 15% to turn.
+ */
+export function layoutDirection(width: number, height: number, current: Direction = 'RIGHT'): Direction {
+  if (!(width > 0 && height > 0)) return current;
+  if (width < NARROW_PANE) return 'DOWN';
+  if (current === 'DOWN') return width > height * HYSTERESIS ? 'RIGHT' : 'DOWN';
+  return height > width * HYSTERESIS ? 'DOWN' : 'RIGHT';
+}
+
 const OPTIONS = {
   'elk.algorithm': 'layered',
-  'elk.direction': 'RIGHT',
   'elk.spacing.nodeNode': '44',
   'elk.layered.spacing.nodeNodeBetweenLayers': '104',
   'elk.layered.nodePlacement.strategy': 'BRANDES_KOEPF',
   'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
   'elk.separateConnectedComponents': 'true',
   'elk.spacing.componentComponent': '72',
-  'elk.aspectRatio': '1.6',
   'elk.padding': '[top=0,left=0,bottom=0,right=0]',
 };
 
@@ -76,9 +93,10 @@ export function relationLinks(tables: Table[]): Link[] {
 
 /**
  * The ELK graph for these tables, with one edge per `relationLinks` link. Edges run from the referenced
- * (parent) table to the referencing one, so parents sit left of their children. Self links are left out.
+ * (parent) table to the referencing one, so parents sit left of (RIGHT) or above (DOWN) their children.
+ * Unlinked groups pack to the pane's shape: wide for RIGHT, tall for DOWN. Self links are left out.
  */
-export function elkGraph(tables: Table[]): ElkNode {
+export function elkGraph(tables: Table[], direction: Direction = 'RIGHT'): ElkNode {
   const edges: ElkExtendedEdge[] = [];
   const seen = new Set<string>();
   for (const l of relationLinks(tables)) {
@@ -91,7 +109,7 @@ export function elkGraph(tables: Table[]): ElkNode {
   }
   return {
     id: 'root',
-    layoutOptions: OPTIONS,
+    layoutOptions: { ...OPTIONS, 'elk.direction': direction, 'elk.aspectRatio': direction === 'DOWN' ? '0.6' : '1.6' },
     children: tables.map(t => ({ id: tableKey(t), width: NODE_W, height: nodeHeight(t) })),
     edges,
   };
@@ -129,8 +147,9 @@ export function settle(tables: Table[], placed: Map<string, Pos>): Map<string, P
  * (`settle`). A new table takes ELK's position, moved next to an already placed neighbor when it has one
  * (ELK's offset from that neighbor is kept), then shifted down in 24 px steps until it overlaps nothing.
  * ELK runs only when there is a new table, and a run that has not settled in 10 s rejects.
+ * `direction` only shapes new placements; a full re-layout in another direction passes an empty `prev`.
  */
-export async function layoutTables(tables: Table[], prev: Map<string, Pos>, run: ElkRun): Promise<Map<string, Pos>> {
+export async function layoutTables(tables: Table[], prev: Map<string, Pos>, run: ElkRun, direction: Direction = 'RIGHT'): Promise<Map<string, Pos>> {
   const kept = new Map<string, Pos>();
   const fresh: Table[] = [];
   for (const t of tables) {
@@ -141,7 +160,7 @@ export async function layoutTables(tables: Table[], prev: Map<string, Pos>, run:
   const out = settle(tables, kept);
   if (!fresh.length) return out;
 
-  const res = await withTimeout(run(elkGraph(tables)), LAYOUT_TIMEOUT);
+  const res = await withTimeout(run(elkGraph(tables, direction)), LAYOUT_TIMEOUT);
   const elkPos = new Map<string, Pos>();
   for (const c of res.children ?? []) elkPos.set(c.id, { x: Math.round(c.x ?? 0), y: Math.round(c.y ?? 0) });
 
