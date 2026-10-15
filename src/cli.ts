@@ -91,7 +91,7 @@ function parseArgs(argv: string[]): Args {
     if (a === '--no-open') args.open = false;
     else if (a === '--no-history') args.history = false;
     else if (a === '--summaries') args.summaries = true;
-    else if (a === '--pull') args.pullSec = DEFAULT_PULL_SEC;
+    else if (a === '--pull') args.pullSec = /^\d+$/.test(argv[i + 1] ?? '') ? parsePull(argv[++i]) : DEFAULT_PULL_SEC;
     else if (a.startsWith('--pull=')) args.pullSec = parsePull(a.slice('--pull='.length));
     else if (a === '--port') args.port = parsePort(argv[++i]);
     else if (a.startsWith('--port=')) args.port = parsePort(a.slice('--port='.length));

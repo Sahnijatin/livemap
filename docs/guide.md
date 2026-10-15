@@ -17,7 +17,7 @@ livemap init [dir=.] [--agents claude,codex,cursor] [--remove]
 livemap export [dir=.] [--session ID] [--no-code] [--out FILE]
 ```
 
-`dir` is the project folder in every command. It defaults to the current folder. `-h` or `--help` prints the usage. Options that take a value also accept `=` (`--port=5000`, `--agents=claude`, `--out=shop.html`), except `--pull`, which takes its value only after `=`.
+`dir` is the project folder in every command. It defaults to the current folder. `-h` or `--help` prints the usage. Options that take a value also accept `=` (`--port=5000`, `--agents=claude`, `--out=shop.html`).
 
 ### `livemap`
 
@@ -27,7 +27,7 @@ Indexes the project, starts the local server and opens the UI in your browser.
 |---|---|---|
 | `--port N` | `4317` | The first port to try. If it is taken, LiveMap tries the next 20 ports. `--port 0` lets the system pick one. |
 | `--no-open` | the browser opens | Does not open a browser. Open the URL LiveMap prints instead. |
-| `--pull[=SEC]` | off; `--pull` alone pulls every 15 seconds | Runs `git pull --ff-only` every SEC seconds (5 to 3600), for agents that push to a remote. See [agents.md](agents.md#cloud-builders-git-and---pull). |
+| `--pull[=SEC]` / `--pull SEC` | off; `--pull` alone pulls every 15 seconds | Runs `git pull --ff-only` every SEC seconds (5 to 3600), for agents that push to a remote. See [agents.md](agents.md#cloud-builders-git-and---pull). |
 | `--no-history` | history is recorded | Records nothing; the timeline says "History is off". |
 | `--summaries` | off | Turns on AI summaries for this run. You still need to configure a provider (a key, or a local Ollama). See [AI summaries](#ai-summaries). |
 

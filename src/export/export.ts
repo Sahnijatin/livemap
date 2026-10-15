@@ -15,7 +15,7 @@ const gzip = promisify(zlib.gzip);
 
 export const NO_HISTORY = 'No history recorded for this project yet. Run livemap here first.';
 export const codeWarning = (n: number): string =>
-  `This export contains source code for ${n} files. Share it only with people who may see this code.`;
+  `This export contains source code for ${n} ${n === 1 ? 'file' : 'files'}. Share it only with people who may see this code.`;
 
 export interface ExportOptions { home?: string; session?: string; code: boolean; uiHtml: string }
 export interface ExportResult { html: string; files: number; events: number }

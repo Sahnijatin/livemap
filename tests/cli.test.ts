@@ -26,9 +26,9 @@ async function waitFor(pred: () => boolean, ms = 5000): Promise<void> {
     await sleep(20);
   }
 }
-function run(args: string[], env: NodeJS.ProcessEnv = process.env): ChildProcess {
+function run(args: string[], env: NodeJS.ProcessEnv = process.env, cwd?: string): ChildProcess {
   out = ''; err = ''; exit = null;
-  const c = spawn(process.execPath, [cli, ...args], { stdio: ['ignore', 'pipe', 'pipe'], env });
+  const c = spawn(process.execPath, [cli, ...args], { stdio: ['ignore', 'pipe', 'pipe'], env, cwd });
   c.stdout!.setEncoding('utf8').on('data', d => (out += d));
   c.stderr!.setEncoding('utf8').on('data', d => (err += d));
   c.on('exit', (code, signal) => (exit = { code, signal }));
@@ -130,6 +130,33 @@ describe('livemap CLI', () => {
     run([root, '--no-open', '--port', 'abc']);
     await waitFor(() => exit !== null);
     expect(exit!.code).toBe(1);
+  });
+
+  it('reads --pull 30 with a space and keeps the default folder', async () => {
+    const c = run(['--no-open', '--port', '0', '--pull', '30'], process.env, root);
+    await waitFor(() => URL_RE.test(out));
+    expect(out).toContain(`LiveMap is watching ${path.basename(root)}`);
+    c.kill('SIGTERM');
+    await waitFor(() => exit !== null);
+    expect(exit!.code).toBe(0);
+  });
+
+  it('rejects --pull 3 with the interval error', async () => {
+    run(['--no-open', '--port', '0', '--pull', '3'], process.env, root);
+    await waitFor(() => exit !== null);
+    expect(exit!.code).toBe(1);
+    expect(err).toContain('invalid --pull interval: 3');
+    expect(err).not.toContain('directory not found');
+  });
+
+  it('keeps ./30 as a folder after --pull', async () => {
+    fs.mkdirSync(path.join(root, '30'));
+    const c = run(['--no-open', '--port', '0', '--pull', './30'], process.env, root);
+    await waitFor(() => URL_RE.test(out));
+    expect(out).toContain('LiveMap is watching 30');
+    c.kill('SIGTERM');
+    await waitFor(() => exit !== null);
+    expect(exit!.code).toBe(0);
   });
 
   it('keeps edits and new files made while the initial index is running', async () => {
