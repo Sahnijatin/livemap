@@ -6,18 +6,24 @@ import { livemapHome, real } from './agents/runtime.js';
 
 /**
  * One LiveMap per project: `<LIVEMAP_HOME>/locks/<sha1(realpath root)>.lock` holds the owner's pid, and its
- * port once the server listens (`{"pid":N,"port":P}`; a bare pid is the form before that).
+ * port once the server listens (`{"pid":N,"port":P}`; a bare pid is the form before that). The holder
+ * touches the file every `HEARTBEAT_MS`, so a lock left by a crash goes stale even when its pid is reused.
  * Two instances on one root would share history files and the runtime entry, so the second must not start.
  */
 export function lockFile(root: string): string {
   return path.join(livemapHome(), 'locks', `${crypto.createHash('sha1').update(real(root)).digest('hex')}.lock`);
 }
 
+export const HEARTBEAT_MS = 30_000;
+/** A lock not touched for this long belongs to a LiveMap that is gone (or frozen far beyond any normal pause). */
+export const LOCK_STALE_MS = 3 * 60_000;
+/** How long starters that found the same stale lock wait for each other before giving up. */
+export const TAKEOVER_WAIT_MS = 15_000;
 const PROBE_MS = 300;
-/** A takeover mutex older than this was left by a starter that died mid-takeover. */
-const MUTEX_STALE_MS = 10_000;
 const RETRY_MS = 50;
-const ATTEMPTS = 40;
+
+/** Thrown when the lock stays contended for `TAKEOVER_WAIT_MS` (another LiveMap is starting here). */
+export class LockBusyError extends Error {}
 
 interface LockState { text: string; pid: number | null; port: number | null; mtimeMs: number; ino: number }
 
@@ -38,13 +44,15 @@ function parse(text: string): { pid: number | null; port: number | null } {
   };
 }
 
+/** The lock, null when there is none (ENOENT); other read errors are thrown. */
 function readLock(file: string): LockState | null {
   try {
     const text = fs.readFileSync(file, 'utf8');
     const st = fs.statSync(file);
     return { text, ...parse(text), mtimeMs: st.mtimeMs, ino: st.ino };
-  } catch {
-    return null;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw e;
   }
 }
 
@@ -70,71 +78,114 @@ function listening(port: number): Promise<boolean> {
 }
 
 /**
- * Whether the lock still belongs to a running LiveMap: its pid runs and, once the holder has recorded its
- * port, something still listens there (a pid reused after a crash has no LiveMap on that port). A lock with
- * no port yet counts as held while its pid runs: its holder is starting up.
+ * Whether the lock still belongs to a running LiveMap: its pid runs, its holder touched it recently and,
+ * once the port is recorded, something listens there. A crash stops the touches, so a lock whose pid was
+ * reused after a crash or reboot goes stale within `LOCK_STALE_MS` even before it has a port.
  */
 async function held(s: LockState): Promise<boolean> {
   if (s.pid === null || !pidRuns(s.pid)) return false;
+  if (Date.now() - s.mtimeMs > LOCK_STALE_MS) return false;
   return s.port === null || listening(s.port);
 }
 
 /**
- * Removes the lock if it is still exactly `stale`. Starters that found the same stale lock take turns under a
- * mutex file, so none of them can remove a fresh lock another just linked in its place. Returns false when
- * another starter holds the mutex (the caller waits and looks again).
+ * Takes the takeover mutex (`<lock>.takeover`, holding the taker's pid). It is held only around one read and
+ * unlink, so one whose pid is gone was left by a starter that died there: it is moved aside, checked there and
+ * removed, and a fresh mutex moved aside by mistake is put back while the slot is still empty.
  */
-function removeStale(file: string, stale: LockState | null): boolean {
-  const mutex = `${file}.takeover`;
+function takeMutex(mutex: string): boolean {
   try {
     fs.writeFileSync(mutex, `${process.pid}\n`, { mode: 0o600, flag: 'wx' });
-  } catch {
-    // Left by a starter that died mid-takeover: clear it so the next attempt can proceed.
-    try { if (Date.now() - fs.statSync(mutex).mtimeMs > MUTEX_STALE_MS) fs.unlinkSync(mutex); } catch { /* gone */ }
-    return false;
+    return true;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
   }
+  let owner: number | null;
+  try { owner = parse(fs.readFileSync(mutex, 'utf8')).pid; } catch { return false; }
+  if (owner !== null && pidRuns(owner)) return false;
+  const aside = `${mutex}.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
+  try { fs.renameSync(mutex, aside); } catch { return false; }
+  let moved: number | null = null;
+  try { moved = parse(fs.readFileSync(aside, 'utf8')).pid; } catch { /* unreadable: treat as the dead one */ }
+  if (moved !== null && moved !== owner && pidRuns(moved)) {
+    try { fs.linkSync(aside, mutex); } catch { /* the slot is taken again */ }
+  }
+  try { fs.unlinkSync(aside); } catch { /* already gone */ }
+  return false;
+}
+
+/**
+ * Removes the lock if it is still exactly `stale`. Starters that found the same stale lock take turns under
+ * the mutex, so none can remove a fresh lock another just linked in its place. Returns false when another
+ * starter holds the mutex (the caller waits and looks again).
+ */
+function removeStale(file: string, stale: LockState): boolean {
+  const mutex = `${file}.takeover`;
+  if (!takeMutex(mutex)) return false;
   try {
     const now = readLock(file);
-    if (now && now.text === stale?.text && now.ino === stale?.ino) fs.unlinkSync(file);
-    else if (now && !stale) fs.unlinkSync(file); // unreadable before, still there: stale
-  } catch { /* already gone */ } finally {
+    if (now && now.text === stale.text && now.ino === stale.ino && now.mtimeMs === stale.mtimeMs) fs.unlinkSync(file);
+  } finally {
     try { fs.unlinkSync(mutex); } catch { /* already gone */ }
   }
   return true;
 }
 
+let heartbeat: NodeJS.Timeout | undefined;
+
 /**
  * Takes the project lock: `{ ok: true }`, or `{ ok: false, pid }` when another running LiveMap holds it.
  * The lock appears atomically with its pid already in it (a full temp file hard-linked into place), so a
- * reader never sees it empty. A lock whose holder is gone, or that is unreadable, is stale and replaced.
+ * reader never sees it empty. A lock whose holder is gone is stale and replaced. Throws `LockBusyError` when
+ * the lock stays contended, and the filesystem's error when the lock cannot be written at all.
  */
 export async function acquireLock(root: string): Promise<{ ok: true } | { ok: false; pid: number }> {
   const file = lockFile(root);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   fs.writeFileSync(tmp, `${process.pid}\n`, { mode: 0o600, flag: 'wx' });
+  const deadline = Date.now() + TAKEOVER_WAIT_MS;
   try {
-    for (let attempt = 0; ; attempt++) {
+    for (;;) {
       try {
         fs.linkSync(tmp, file);
+        startHeartbeat(file);
         return { ok: true };
       } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= ATTEMPTS) throw e;
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
       }
       const s = readLock(file);
-      if (s?.pid === process.pid) return { ok: true };
+      if (s?.pid === process.pid) { startHeartbeat(file); return { ok: true }; }
       if (s && await held(s)) return { ok: false, pid: s.pid as number };
-      if (!removeStale(file, s)) await new Promise(r => setTimeout(r, RETRY_MS));
+      // Gone meanwhile (s === null): link again at once. Stale: remove it, or wait for whoever is.
+      if (s && !removeStale(file, s)) {
+        if (Date.now() > deadline) throw new LockBusyError('another LiveMap is starting for this project');
+        await new Promise(r => setTimeout(r, RETRY_MS));
+      }
     }
   } finally {
     try { fs.unlinkSync(tmp); } catch { /* already gone */ }
   }
 }
 
+/** Touches the lock while this process holds it, so it never looks abandoned. */
+function startHeartbeat(file: string): void {
+  clearInterval(heartbeat);
+  heartbeat = setInterval(() => {
+    try {
+      if (readLock(file)?.pid === process.pid) {
+        const now = new Date();
+        fs.utimesSync(file, now, now);
+      }
+    } catch { /* retried at the next beat */ }
+  }, HEARTBEAT_MS);
+  heartbeat.unref();
+}
+
 /**
  * Records the port this process listens on in its lock (temp file, then rename), so a later starter can tell
  * this LiveMap from an unrelated process that reuses its pid. Returns false, writing nothing, when this
- * process no longer holds the lock.
+ * process no longer holds the lock; a filesystem error is thrown (the lock is still this process's).
  */
 export function setLockPort(root: string, port: number): boolean {
   const file = lockFile(root);
@@ -152,7 +203,10 @@ export function setLockPort(root: string, port: number): boolean {
 
 /** Removes the lock only when this process holds it. */
 export function releaseLock(root: string): void {
+  clearInterval(heartbeat);
   const file = lockFile(root);
-  if (readLock(file)?.pid !== process.pid) return;
-  try { fs.unlinkSync(file); } catch { /* already gone */ }
+  try {
+    if (readLock(file)?.pid !== process.pid) return;
+    fs.unlinkSync(file);
+  } catch { /* already gone or unreadable */ }
 }

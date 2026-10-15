@@ -8,7 +8,7 @@ livemap init [dir=.] [--agents claude,codex,cursor] [--remove]
 livemap export [dir=.] [--session ID] [--no-code] [--out FILE]
 ```
 
-One LiveMap runs per project. Starting a second one on the same folder exits with "LiveMap is already running for this project (pid N) at http://127.0.0.1:PORT"; use that one or stop it first. The lock is a file in `~/.livemap/locks/` (or under `LIVEMAP_HOME`) and records the pid and port of the LiveMap holding it. A lock is replaced when that process is no longer running or no longer listens on its port, as after a crash or restart that left its pid to another program.
+One LiveMap runs per project. Starting a second one on the same folder exits with "LiveMap is already running for this project (pid N) at http://127.0.0.1:PORT"; use that one or stop it first. The lock is a file in `~/.livemap/locks/` (or under `LIVEMAP_HOME`) and records the pid and port of the LiveMap holding it. The running LiveMap refreshes the lock every 30 seconds. A lock is replaced when its process is no longer running, no longer listens on its port, or has not refreshed it for 3 minutes, as after a crash or restart that left its pid to another program.
 
 ## Using LiveMap
 

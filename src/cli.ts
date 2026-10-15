@@ -9,7 +9,7 @@ import { AgentHub } from './agents/hub.js';
 import { Attributor } from './agents/attribution.js';
 import { GitWatcher } from './agents/git.js';
 import { livemapHome, removeRuntime, runtimeFor, writeRuntime } from './agents/runtime.js';
-import { acquireLock, releaseLock, setLockPort } from './lock.js';
+import { acquireLock, LockBusyError, releaseLock, setLockPort } from './lock.js';
 import { HistoryStore } from './history/store.js';
 import { buildExport, codeWarning } from './export/export.js';
 import { loadSummaryConfig } from './summarize/config.js';
@@ -193,6 +193,11 @@ async function main(): Promise<void> {
     lock = await acquireLock(root);
     locked = lock.ok;
   } catch (e) {
+    if (e instanceof LockBusyError) {
+      process.stderr.write(`LiveMap is already starting for this project (${e.message}); try again in a moment\n`);
+      process.exit(1);
+    }
+    // The lock file cannot be written (a read-only home, say): run without it rather than not at all.
     process.stderr.write(`livemap: warning: could not take the project lock: ${(e as Error).message}\n`);
   }
   if (!lock.ok) {

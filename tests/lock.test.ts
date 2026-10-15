@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { acquireLock, lockFile, releaseLock, setLockPort } from '../src/lock.js';
+import { acquireLock, HEARTBEAT_MS, LOCK_STALE_MS, lockFile, releaseLock, setLockPort } from '../src/lock.js';
 
 let home: string;
 let root: string;
@@ -108,11 +108,17 @@ describe('project lock (#21)', () => {
       }
     });
 
-    it('is held without a port while its pid runs, however old: the holder may still be starting', async () => {
+    it('is held without a port while its holder keeps touching it: the holder is starting', async () => {
       fs.writeFileSync(lockFile(root), `${other.pid}\n`);
-      const old = (Date.now() - 60 * 60_000) / 1000;
-      fs.utimesSync(lockFile(root), old, old);
       expect(await acquireLock(root)).toEqual({ ok: false, pid: other.pid });
+    });
+
+    it('is stale once no heartbeat touched it for LOCK_STALE_MS, even with the pid reused', async () => {
+      fs.writeFileSync(lockFile(root), `${other.pid}\n`);
+      const old = (Date.now() - LOCK_STALE_MS - 1000) / 1000;
+      fs.utimesSync(lockFile(root), old, old);
+      expect(await acquireLock(root)).toEqual({ ok: true });
+      expect(fs.readFileSync(lockFile(root), 'utf8').trim()).toBe(String(process.pid));
     });
 
     it('is held when the pid belongs to another user (EPERM), such as a LiveMap started with sudo', async () => {
@@ -152,11 +158,40 @@ describe('project lock (#21)', () => {
     const file = lockFile(root);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, `${await deadPid()}\n`);
-    fs.writeFileSync(`${file}.takeover`, '1\n');
-    const old = (Date.now() - 60_000) / 1000;
-    fs.utimesSync(`${file}.takeover`, old, old);
+    fs.writeFileSync(`${file}.takeover`, `${await deadPid()}\n`);
     expect(await acquireLock(root)).toEqual({ ok: true });
     expect(fs.readdirSync(path.dirname(file))).toEqual([path.basename(file)]);
+  });
+
+  it('keeps its lock fresh with a heartbeat while it holds it', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      expect(await acquireLock(root)).toEqual({ ok: true });
+      const old = (Date.now() - LOCK_STALE_MS - 1000) / 1000;
+      fs.utimesSync(lockFile(root), old, old);
+      vi.advanceTimersByTime(HEARTBEAT_MS);
+      expect(Date.now() - fs.statSync(lockFile(root)).mtimeMs).toBeLessThan(5000);
+      releaseLock(root);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never removes a lock it could not read as stale', async () => {
+    const file = lockFile(root);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${await deadPid()}\n`);
+    const read = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, 'readFileSync').mockImplementation(((p: fs.PathOrFileDescriptor, o?: unknown) => {
+      if (p === file) throw Object.assign(new Error('EIO'), { code: 'EIO' });
+      return read(p, o as BufferEncoding);
+    }) as typeof fs.readFileSync);
+    try {
+      await expect(acquireLock(root)).rejects.toThrow('EIO');
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(fs.existsSync(file)).toBe(true);
   });
 
   it('records the port of the holder, and only of the holder', async () => {
