@@ -237,6 +237,15 @@ describe('project lock (#21)', () => {
     expect(fs.existsSync(file)).toBe(true);
   });
 
+  it('adopts a lock left with its own pid but no id, and gives it one', async () => {
+    fs.mkdirSync(path.dirname(lockFile(root)), { recursive: true });
+    fs.writeFileSync(lockFile(root), `${process.pid}\n`);
+    expect(await acquireLock(root)).toEqual({ ok: true });
+    expect(lockId(root)).toMatch(/^[0-9a-f]{24}$/);
+    expect(setLockPort(root, 4321)).toBe('held');
+    releaseLock(root);
+  });
+
   it('records the port of the holder, and only of the holder', async () => {
     expect(await acquireLock(root)).toEqual({ ok: true });
     const id = lockId(root);
@@ -281,6 +290,20 @@ describe('project lock (#21)', () => {
     it('is stale when another LiveMap took its port after a crash and its pid was reused', async () => {
       answer = res => res.end(JSON.stringify({ lock: 'someone-else' }));
       lockOn();
+      expect(await acquireLock(root)).toEqual({ ok: true });
+    });
+
+    it('is held when nothing answers in time but the heartbeat is recent (a suspended LiveMap)', async () => {
+      answer = () => { /* never answers */ };
+      lockOn();
+      expect(await acquireLock(root)).toEqual({ ok: false, pid: other.pid });
+    });
+
+    it('is stale when nothing answers and the heartbeat stopped (a crash; pid and port reused)', async () => {
+      answer = () => { /* a service that does not speak HTTP */ };
+      lockOn();
+      const old = (Date.now() - LOCK_STALE_MS - 1000) / 1000;
+      fs.utimesSync(lockFile(root), old, old);
       expect(await acquireLock(root)).toEqual({ ok: true });
     });
 
