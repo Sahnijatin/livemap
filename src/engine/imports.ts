@@ -205,10 +205,18 @@ function pyModule(base: string, ctx: ImportCtx): string | null {
   return null;
 }
 
-/** Candidate directories for a dotted module: relative to `dir` (rel leading dots) or to the roots. */
+/**
+ * Candidate directories for a dotted module, in order: relative to `dir` (rel leading dots), or, for an
+ * absolute module, each ancestor of the importing file nearest first (a project nested under `backend/`
+ * or `services/ml/` runs with its own directory on the import path), then the root and `src`.
+ */
 function pyBases(dir: string, mod: string, rel: number): string[] {
   const p = mod.replace(/\./g, '/');
-  return rel > 0 ? [join(dir, ...Array(rel - 1).fill('..'), p)] : ['', 'src'].map(r => join(r, p));
+  if (rel > 0) return [join(dir, ...Array(rel - 1).fill('..'), p)];
+  const out: string[] = [];
+  if (mod) for (let d = dir; d; d = parentDir(d)) out.push(join(d, p));
+  for (const r of ['', 'src']) out.push(join(r, p));
+  return out;
 }
 
 /** The module file at a base; an empty module (`from . import x`) is the package's `__init__.py`. */
@@ -219,17 +227,15 @@ function pyTarget(base: string, mod: string, ctx: ImportCtx): string | null {
 
 function pythonImports(path: string, src: string, ctx: ImportCtx, local: Set<string>, external: Set<string>): void {
   const dir = parentDir(path);
+  // The first base holding the module or one of the imported submodules wins, as on Python's import path.
   const add = (mod: string, names: string[], rel: number): boolean => {
-    let found = false;
     for (const b of pyBases(dir, mod, rel)) {
-      const m = pyTarget(b, mod, ctx);
-      if (m) { local.add(m); found = true; }
-      for (const n of names) {
-        const s = pyModule(join(b, n), ctx);
-        if (s) { local.add(s); found = true; }
-      }
+      const hits = [pyTarget(b, mod, ctx), ...names.map(n => pyModule(join(b, n), ctx))].filter((h): h is string => !!h);
+      if (!hits.length) continue;
+      for (const h of hits) local.add(h);
+      return true;
     }
-    return found;
+    return false;
   };
   for (const m of src.matchAll(/^[ \t]*from[ \t]+(\.*)([\w.]*)[ \t]+import[ \t]+(\([^)]*\)|[^\n#]*)/gm)) {
     const rel = m[1].length;
@@ -404,12 +410,7 @@ export function resolveSpecifier(from: string, lang: Lang, spec: string, ctx: Im
     case 'python': {
       const m = /^(\.*)([\w.]*)$/.exec(spec);
       if (!m) return null;
-      const rel = m[1].length;
-      // An absolute module also resolves from each ancestor of the importing file, nearest first: a project
-      // nested under `backend/` or `services/ml/` runs with its own directory on the import path.
-      const ancestors: string[] = [];
-      if (rel === 0 && m[2]) for (let d = dir; d; d = posix.dirname(d) === '.' ? '' : posix.dirname(d)) ancestors.push(join(d, m[2].replace(/\./g, '/')));
-      for (const b of [...ancestors, ...pyBases(dir, m[2], rel)]) {
+      for (const b of pyBases(dir, m[2], m[1].length)) {
         const hit = pyTarget(b, m[2], ctx);
         if (hit) return hit;
       }

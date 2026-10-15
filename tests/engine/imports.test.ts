@@ -22,6 +22,16 @@ describe('extractImports', () => {
     expect(imp('app/main.py','python','import requests.auth').external).toEqual(['requests']);
     expect(imp('pkg/mod.py','python','from .sub import x').local).toEqual(['pkg/sub/x.py']);
   });
+  it('python resolves absolute modules from each ancestor of a nested project, nearest first', () => {
+    const files = ['backend/app/__init__.py','backend/app/main.py','backend/app/models.py','backend/app/api/__init__.py','backend/app/api/users.py','app/models.py'];
+    const has = new Set(files);
+    const py = (path: string, src: string) => extractImports(path, 'python', src, { has: p => has.has(p), files, aliases: [], goModule: null });
+    expect(py('backend/app/main.py', 'from app.models import User\nimport app.api.users\nfrom app.api import users\nimport fastapi'))
+      .toEqual({ local: ['backend/app/api/__init__.py', 'backend/app/api/users.py', 'backend/app/models.py'], external: ['fastapi'] });
+    expect(py('backend/app/api/users.py', 'from app import models').local).toEqual(['backend/app/__init__.py', 'backend/app/models.py']);
+    // A root-level project still resolves from the root.
+    expect(py('main.py', 'from app.models import User').local).toEqual(['app/models.py']);
+  });
   it('go', () => {
     expect(imp('cmd/main.go','go','import (\n "fmt"\n "shop/internal/db"\n)', { goModule: 'shop' }).local).toEqual(['internal/db/conn.go','internal/db/db.go']);
   });
