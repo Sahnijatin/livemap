@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import path from 'node:path';
 import { livemapHome, real } from './agents/runtime.js';
 
@@ -8,7 +9,7 @@ import { livemapHome, real } from './agents/runtime.js';
  * One LiveMap per project: `<LIVEMAP_HOME>/locks/<sha1(realpath root)>.lock` holds the owner's pid, a random
  * id, and its port once the server listens (`{"pid":N,"id":"…","port":P}`). The server answers
  * `GET /__livemap/lock` with that id, so a later starter can tell the holder from anything else that reuses
- * its pid or port. Until the port is recorded the holder touches the file every `HEARTBEAT_MS`.
+ * its pid or port. The holder also touches the file every `HEARTBEAT_MS`.
  * Two instances on one root would share history files and the runtime entry, so the second must not start.
  */
 export function lockFile(root: string): string {
@@ -18,14 +19,14 @@ export function lockFile(root: string): string {
 export const HEARTBEAT_MS = 30_000;
 /** A lock not touched for this long belongs to a LiveMap that is gone (or frozen far beyond any normal pause). */
 export const LOCK_STALE_MS = 3 * 60_000;
-/** How long starters that found the same stale lock wait for each other before giving up. */
-export const TAKEOVER_WAIT_MS = 15_000;
+/** How long starters that found the same stale lock wait for each other (and for a dead starter's mutex). */
+export const TAKEOVER_WAIT_MS = 20_000;
 const PROBE_MS = 500;
 /** The path a LiveMap server answers with its lock id (no token: the id is random and says nothing). */
 export const LOCK_PATH = '/__livemap/lock';
 const RETRY_MS = 50;
 /** A takeover mutex is held for one read and unlink; one this old was left by a starter that died there. */
-const MUTEX_STALE_MS = 60_000;
+const MUTEX_STALE_MS = 10_000;
 
 /** Thrown when the lock stays contended for `TAKEOVER_WAIT_MS` (another LiveMap is starting here). */
 export class LockBusyError extends Error {}
@@ -78,15 +79,26 @@ function pidRuns(pid: number): boolean {
   }
 }
 
+/** Whether something accepts TCP connections on 127.0.0.1:port within a short timeout. */
+function listening(port: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const sock = net.connect({ host: '127.0.0.1', port });
+    const done = (ok: boolean) => { sock.destroy(); resolve(ok); };
+    sock.setTimeout(PROBE_MS, () => done(false));
+    sock.once('connect', () => done(true));
+    sock.once('error', () => done(false));
+  });
+}
+
 /**
- * Whether the LiveMap holding lock `id` answers on `port`: yes when the server there names that id; no when
- * nothing listens, or a server answers with another id or is not a LiveMap; yes, to be safe, when a
- * connection opens but no answer comes in time (a suspended or sleeping LiveMap).
+ * Whether the LiveMap holding lock `id` answers on `port`: `yes` when the server there names that id; `no`
+ * when nothing listens, or a server answers with another id or is not a LiveMap; `silent` when a connection
+ * opens but no answer comes in time (a suspended LiveMap, or a service that does not speak HTTP).
  */
-function answers(port: number, id: string | null): Promise<boolean> {
+function answers(port: number, id: string): Promise<'yes' | 'no' | 'silent'> {
   return new Promise(resolve => {
     let settled = false;
-    const done = (ok: boolean) => { if (!settled) { settled = true; req.destroy(); resolve(ok); } };
+    const done = (r: 'yes' | 'no' | 'silent') => { if (!settled) { settled = true; req.destroy(); resolve(r); } };
     const req = http.get({ host: '127.0.0.1', port, path: LOCK_PATH, timeout: PROBE_MS }, res => {
       let body = '';
       res.setEncoding('utf8');
@@ -94,26 +106,30 @@ function answers(port: number, id: string | null): Promise<boolean> {
       res.on('end', () => {
         let got: unknown;
         try { got = (JSON.parse(body) as { lock?: unknown }).lock; } catch { got = undefined; }
-        done(res.statusCode === 200 && (id === null ? typeof got === 'string' : got === id));
+        done(res.statusCode === 200 && got === id ? 'yes' : 'no');
       });
-      res.on('error', () => done(false));
+      res.on('error', () => done('no'));
     });
-    req.on('timeout', () => done(true));
-    req.on('error', () => done(false));
+    req.on('timeout', () => done('silent'));
+    req.on('error', () => done('no'));
   });
 }
 
 /**
  * Whether the lock still belongs to a running LiveMap: its pid runs and, once its port is recorded, the
- * LiveMap there answers with the lock's id (whatever the lock's age: a suspended or sleeping LiveMap keeps
- * its port). A crash leaves a lock whose pid or port something else may take after a reboot; neither
- * answers with the id. Before the port is recorded the holder's heartbeat must be recent, so a lock left
- * by a crash at start-up goes stale within `LOCK_STALE_MS` even when its pid is reused.
+ * LiveMap there answers with the lock's id, whatever the lock's age (a sleeping laptop's LiveMap answers once
+ * it wakes). A crash leaves a lock whose pid or port something else may take after a reboot; neither
+ * answers with the id. When nothing answers in time, or before the port is recorded, the holder's heartbeat
+ * decides: recent means held (a suspended LiveMap, or one still starting), `LOCK_STALE_MS` old means gone.
  */
 async function held(s: LockState): Promise<boolean> {
   if (s.pid === null || !pidRuns(s.pid)) return false;
-  if (s.port !== null) return answers(s.port, s.id);
-  return Date.now() - s.mtimeMs <= LOCK_STALE_MS;
+  const fresh = Date.now() - s.mtimeMs <= LOCK_STALE_MS;
+  if (s.port === null) return fresh;
+  // A lock written before locks had ids: something listening on its port is all that can be checked.
+  if (s.id === null) return listening(s.port);
+  const a = await answers(s.port, s.id);
+  return a === 'yes' || (a === 'silent' && fresh);
 }
 
 /**
@@ -192,7 +208,9 @@ export async function acquireLock(root: string): Promise<{ ok: true } | { ok: fa
       }
       const s = readLock(file);
       if (s?.pid === process.pid) {
+        // Ours already (re-entry), or left with this pid by an earlier process: adopt it with an id.
         if (s.id) ids.set(file, s.id);
+        else { fs.writeFileSync(tmp, content({ id }), { mode: 0o600 }); fs.renameSync(tmp, file); ids.set(file, id); }
         startHeartbeat(file);
         return { ok: true };
       }
@@ -243,9 +261,6 @@ export function setLockPort(root: string, port: number): 'held' | 'lost' | 'unkn
     try { fs.unlinkSync(tmp); } catch { /* already gone */ }
     throw e;
   }
-  // With the port recorded the server answers for the lock; the touches are no longer read.
-  clearInterval(heartbeats.get(file));
-  heartbeats.delete(file);
   return 'held';
 }
 
