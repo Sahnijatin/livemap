@@ -276,4 +276,15 @@ describe('envKeys', () => {
   it('extracts names only', () => {
     expect(envKeys('A=1\n  export B = 2\n#C=3\n\nbad line\nD_1=\n')).toEqual(['A', 'B', 'D_1']);
   });
+
+  it('does not let an unterminated quote swallow the following keys (#29)', () => {
+    expect(envKeys('A="x\nB="y"\nC=1\n')).toEqual(['A', 'B', 'C']);
+    expect(envKeys("A='x\nexport B=2\n")).toEqual(['A', 'B']);
+    expect(envKeys('A="x\nB="y\nmore"\nC=1\n')).toEqual(['A', 'B', 'C']);
+  });
+
+  it('keeps a valid multi-line value, comment after the close included (#29)', () => {
+    const src = 'CERT="-----BEGIN-----\nMIIBabc=\nkey=value\n-----END-----" # pem\nNEXT=1\n';
+    expect(envKeys(src)).toEqual(['CERT', 'NEXT']);
+  });
 });
