@@ -2,10 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { acquireLock, HEARTBEAT_MS, LOCK_STALE_MS, lockFile, releaseLock, setLockPort } from '../src/lock.js';
+import { acquireLock, HEARTBEAT_MS, LOCK_STALE_MS, lockFile, lockId, releaseLock, setLockPort } from '../src/lock.js';
 
 let home: string;
 let root: string;
@@ -18,7 +19,7 @@ async function deadPid(): Promise<number> {
 }
 
 async function closedPort(): Promise<number> {
-  const srv = net.createServer();
+  const srv = net.createServer(sock => sock.resume());
   await new Promise<void>(r => srv.listen(0, '127.0.0.1', r));
   const port = (srv.address() as net.AddressInfo).port;
   await new Promise(r => srv.close(r));
@@ -46,7 +47,7 @@ describe('project lock (#21)', () => {
 
   it('is taken with this pid, re-entrant for the same process, and released', async () => {
     expect(await acquireLock(root)).toEqual({ ok: true });
-    expect(fs.readFileSync(lockFile(root), 'utf8').trim()).toBe(String(process.pid));
+    expect(JSON.parse(fs.readFileSync(lockFile(root), 'utf8')).pid).toBe(process.pid);
     expect(await acquireLock(root)).toEqual({ ok: true });
     expect(fs.readdirSync(path.dirname(lockFile(root)))).toEqual([path.basename(lockFile(root))]);
     releaseLock(root);
@@ -72,10 +73,10 @@ describe('project lock (#21)', () => {
     fs.mkdirSync(path.dirname(lockFile(root)), { recursive: true });
     fs.writeFileSync(lockFile(root), `${await deadPid()}\n`);
     expect(await acquireLock(root)).toEqual({ ok: true });
-    expect(fs.readFileSync(lockFile(root), 'utf8').trim()).toBe(String(process.pid));
+    expect(JSON.parse(fs.readFileSync(lockFile(root), 'utf8')).pid).toBe(process.pid);
     fs.writeFileSync(lockFile(root), 'garbage');
     expect(await acquireLock(root)).toEqual({ ok: true });
-    expect(fs.readFileSync(lockFile(root), 'utf8').trim()).toBe(String(process.pid));
+    expect(JSON.parse(fs.readFileSync(lockFile(root), 'utf8')).pid).toBe(process.pid);
   });
 
   describe('a pid reused by an unrelated process (#40)', () => {
@@ -93,11 +94,11 @@ describe('project lock (#21)', () => {
     it('is stale when nothing listens on the port the lock records', async () => {
       fs.writeFileSync(lockFile(root), JSON.stringify({ pid: other.pid, port: await closedPort() }));
       expect(await acquireLock(root)).toEqual({ ok: true });
-      expect(fs.readFileSync(lockFile(root), 'utf8').trim()).toBe(String(process.pid));
+      expect(JSON.parse(fs.readFileSync(lockFile(root), 'utf8')).pid).toBe(process.pid);
     });
 
     it('is held while something listens on its port, however long since the last heartbeat (sleep, Ctrl-Z)', async () => {
-      const srv = net.createServer();
+      const srv = net.createServer(sock => sock.resume());
       await new Promise<void>(r => srv.listen(0, '127.0.0.1', r));
       try {
         const port = (srv.address() as net.AddressInfo).port;
@@ -121,7 +122,7 @@ describe('project lock (#21)', () => {
     });
 
     it('is held while something listens on that port', async () => {
-      const srv = net.createServer();
+      const srv = net.createServer(sock => sock.resume());
       await new Promise<void>(r => srv.listen(0, '127.0.0.1', r));
       try {
         const port = (srv.address() as net.AddressInfo).port;
@@ -142,7 +143,7 @@ describe('project lock (#21)', () => {
       const old = (Date.now() - LOCK_STALE_MS - 1000) / 1000;
       fs.utimesSync(lockFile(root), old, old);
       expect(await acquireLock(root)).toEqual({ ok: true });
-      expect(fs.readFileSync(lockFile(root), 'utf8').trim()).toBe(String(process.pid));
+      expect(JSON.parse(fs.readFileSync(lockFile(root), 'utf8')).pid).toBe(process.pid);
     });
 
     it('is held when the pid belongs to another user (EPERM), such as a LiveMap started with sudo', async () => {
@@ -238,16 +239,56 @@ describe('project lock (#21)', () => {
 
   it('records the port of the holder, and only of the holder', async () => {
     expect(await acquireLock(root)).toEqual({ ok: true });
-    expect(setLockPort(root, 4321)).toBe(true);
-    expect(JSON.parse(fs.readFileSync(lockFile(root), 'utf8'))).toEqual({ pid: process.pid, port: 4321 });
+    const id = lockId(root);
+    expect(id).toMatch(/^[0-9a-f]{24}$/);
+    expect(setLockPort(root, 4321)).toBe('held');
+    expect(JSON.parse(fs.readFileSync(lockFile(root), 'utf8'))).toEqual({ pid: process.pid, id, port: 4321 });
     expect(await acquireLock(root)).toEqual({ ok: true });
     expect(fs.readdirSync(path.dirname(lockFile(root)))).toEqual([path.basename(lockFile(root))]);
     fs.writeFileSync(lockFile(root), `${process.pid + 1}\n`);
-    expect(setLockPort(root, 5555)).toBe(false);
+    expect(setLockPort(root, 5555)).toBe('lost');
     expect(fs.readFileSync(lockFile(root), 'utf8')).toBe(`${process.pid + 1}\n`);
-    fs.writeFileSync(lockFile(root), JSON.stringify({ pid: process.pid, port: 4321 }));
+    fs.writeFileSync(lockFile(root), JSON.stringify({ pid: process.pid, id, port: 4321 }));
     releaseLock(root);
     expect(fs.existsSync(lockFile(root))).toBe(false);
+    expect(lockId(root)).toBeUndefined();
+  });
+
+  describe('the holder is told apart by its id once its port is recorded (#40)', () => {
+    let other: ChildProcess;
+    let srv: http.Server;
+    let answer: (res: http.ServerResponse) => void;
+    beforeEach(async () => {
+      other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+      fs.mkdirSync(path.dirname(lockFile(root)), { recursive: true });
+      srv = http.createServer((req, res) => answer(res));
+      await new Promise<void>(r => srv.listen(0, '127.0.0.1', r));
+    });
+    afterEach(async () => {
+      srv.closeAllConnections();
+      await new Promise(r => srv.close(r));
+      other.kill('SIGKILL');
+      await new Promise(r => other.on('exit', r));
+    });
+    const lockOn = () => fs.writeFileSync(lockFile(root), JSON.stringify({ pid: other.pid, id: 'abc', port: (srv.address() as net.AddressInfo).port }));
+
+    it('is held when the LiveMap on its port answers with its id', async () => {
+      answer = res => res.end(JSON.stringify({ lock: 'abc' }));
+      lockOn();
+      expect(await acquireLock(root)).toEqual({ ok: false, pid: other.pid });
+    });
+
+    it('is stale when another LiveMap took its port after a crash and its pid was reused', async () => {
+      answer = res => res.end(JSON.stringify({ lock: 'someone-else' }));
+      lockOn();
+      expect(await acquireLock(root)).toEqual({ ok: true });
+    });
+
+    it('is stale when something that is not LiveMap answers on its port', async () => {
+      answer = res => { res.statusCode = 404; res.end('not found'); };
+      lockOn();
+      expect(await acquireLock(root)).toEqual({ ok: true });
+    });
   });
 
   it('is shared by every path to the same root', () => {
