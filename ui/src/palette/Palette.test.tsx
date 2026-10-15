@@ -182,6 +182,29 @@ describe('Palette', () => {
     expect(useStore.getState().reveal).toMatchObject({ path: SERVICE, line: 14 });
   });
 
+  it('the Enter that commits an IME conversion in Safari (keyCode 229) opens nothing', async () => {
+    await openWithKeys(document.getElementById('before')!);
+    await type('Cart');
+    const el = input();
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(el, 'createOrder');
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const e = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    Object.defineProperty(e, 'keyCode', { value: 229 });
+    act(() => { el.dispatchEvent(e); });
+    await frames();
+    expect(useStore.getState().paletteOpen).toBe(true);
+    expect(useStore.getState().reveal).toBeNull();
+  });
+
+  it('Ctrl+K opens the palette on a non-Latin layout (key л, code KeyK)', async () => {
+    document.getElementById('before')!.focus();
+    key('л', { ctrlKey: true, code: 'KeyK' }, document.getElementById('before'));
+    await frames();
+    expect(dialog()).not.toBeNull();
+  });
+
   it('arrow keys move the active row', async () => {
     await openWithKeys(document.getElementById('before')!);
     await type('order');

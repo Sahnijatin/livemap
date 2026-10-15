@@ -261,9 +261,31 @@ describe('FileTree live target', () => {
     act(() => { host.querySelector('.tree')!.dispatchEvent(new Event('scroll')); });
     target('src/a.ts');
     expect(scrollSpy).not.toHaveBeenCalled();
-    act(() => { vi.advanceTimersByTime(6000); });
-    act(() => w().apply({ type: 'agentEvent', event: { ...startEdit('src/b.ts'), tool: { id: 'x2', name: 'Edit', label: 'Edit', paths: ['src/b.ts'] } } }));
+    act(() => { vi.advanceTimersByTime(6000); }); // the hold ends: the waiting target is revealed
     expect(scrollSpy).toHaveBeenCalledTimes(1);
+    act(() => w().apply({ type: 'agentEvent', event: { ...startEdit('src/b.ts'), tool: { id: 'x2', name: 'Edit', label: 'Edit', paths: ['src/b.ts'] } } }));
+    expect(scrollSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('a target that changes during the hold is revealed once the hold ends', () => {
+    useStore.getState().apply(hello([file('src/a.ts'), file('src/b.ts')]));
+    mount();
+    act(() => { host.querySelector('.tree')!.dispatchEvent(new Event('scroll')); });
+    target('src/a.ts');
+    act(() => { vi.advanceTimersByTime(2000); });
+    act(() => w().apply({ type: 'agentEvent', event: { ...startEdit('src/b.ts'), tool: { id: 'x2', name: 'Edit', label: 'Edit', paths: ['src/b.ts'] } } }));
+    expect(scrollSpy).not.toHaveBeenCalled();
+    act(() => { vi.advanceTimersByTime(3100); });
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    expect((scrollSpy.mock.contexts[0] as HTMLElement).dataset.file).toBe('src/b.ts');
+  });
+
+  it('a path with a newline is revealed without breaking the tree', () => {
+    useStore.getState().apply(hello([file('src/a.ts'), file('src/we\nird.ts')]));
+    mount();
+    target('src/we\nird.ts');
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[data-file]')).not.toBeNull();
   });
 
   it('ignores scroll events caused by its own smooth scroll, but not wheel; scrollend ends the guard', () => {
@@ -280,13 +302,14 @@ describe('FileTree live target', () => {
     act(() => { tree.dispatchEvent(new Event('wheel', { bubbles: true })); }); // always the user
     next('src/c.ts', 'x3');
     expect(scrollSpy).toHaveBeenCalledTimes(2);
-    act(() => { vi.advanceTimersByTime(6000); });
-    next('src/a.ts', 'x4');
+    act(() => { vi.advanceTimersByTime(6000); }); // the hold ends: the waiting src/c.ts is revealed
     expect(scrollSpy).toHaveBeenCalledTimes(3);
+    next('src/a.ts', 'x4');
+    expect(scrollSpy).toHaveBeenCalledTimes(4);
     act(() => { tree.dispatchEvent(new Event('scrollend')); });
     act(() => { tree.dispatchEvent(new Event('scroll')); }); // after scrollend a scroll is the user's
     next('src/b.ts', 'x5');
-    expect(scrollSpy).toHaveBeenCalledTimes(3);
+    expect(scrollSpy).toHaveBeenCalledTimes(4);
   });
 
   it('uses instant scrolling under reduced motion and smooth otherwise', () => {

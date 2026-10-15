@@ -860,7 +860,7 @@
     /* Touch targets: at least 40 x 40. */
     .iconbtn, .mt-btn { width:40px; height:40px; }
     /* Phone toolbar: menu, brand mark, the first agent as an avatar, the Now line, search, Inspector and Pause. */
-    .brand span, .sep, .projsel, .iconbtn.theme { display:none; }
+    .brand span, .sep, .projsel { display:none; }
     .toolbar { gap:6px; padding:0 6px 0 8px; }
     .statuschip { padding:0; background:none; box-shadow:none; }
     .agentchips { flex-shrink:0; }

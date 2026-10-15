@@ -3,7 +3,7 @@ import type { ApiRoute, DomainIndex, Table } from '@shared/domain.js';
 import type { FileModel } from '@shared/types.js';
 import { emptyDomainIndex } from '../store';
 import { file, sym } from '../fixtures';
-import { PATH, SUBSTRING, buildIndex, query, type Entry } from './searchIndex';
+import { INITIALS, PATH, SUBSTRING, WORD, buildIndex, query, type Entry } from './searchIndex';
 
 const route = (method: string, fullPath: string, file: string, line: number, kind: ApiRoute['kind'] = 'api'): ApiRoute => ({
   id: `${method} ${fullPath} ${file}:${line}`, method, path: fullPath, fullPath, file, line, kind, framework: 'express',
@@ -177,5 +177,12 @@ describe('incremental rebuild', () => {
     expect(same(b, 'POST /api/orders')).toBe(same(a, 'POST /api/orders'));
     expect(same(b, 'orders.ts')).not.toBe(same(a, 'orders.ts'));
     expect(b.some(e => e.label === 'mount')).toBe(true);
+  });
+
+  it('a match at the start of a word ranks above letters scattered through one word', () => {
+    const idx = buildIndex(files([file('src/overrider.ts', [sym('overrider', 'function', 1), sym('placeOrder', 'function', 2)]), file('src/r.ts', [sym('currentUser', 'function', 2)])]), domain());
+    const order = query(idx, 'order').filter(r => r.entry.kind === 'symbol');
+    expect(order.map(r => [r.entry.label, r.score])).toEqual([['placeOrder', WORD], ['overrider', INITIALS]]);
+    expect(query(idx, 'user').find(r => r.entry.label === 'currentUser')?.score).toBe(WORD);
   });
 });

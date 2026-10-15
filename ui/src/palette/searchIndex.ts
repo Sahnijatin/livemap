@@ -43,7 +43,7 @@ export interface Result { entry: Entry; score: number }
  * Score tiers, highest first. PATH is a file matched only through its folders (path segment initials or a
  * substring of the path), below any match on a name, so a folder named like the query does not flood results.
  */
-export const EXACT = 6, PREFIX = 5, INITIALS = 4, SUBSTRING = 3, PATH = 2, FUZZY = 1;
+export const EXACT = 7, PREFIX = 6, WORD = 5, INITIALS = 4, SUBSTRING = 3, PATH = 2, FUZZY = 1;
 
 const KIND_RANK: Record<EntryKind, number> = { file: 0, symbol: 1, route: 2, table: 3 };
 
@@ -164,11 +164,23 @@ export function initialsMatch(q: string, words: string[]): boolean {
   return go(0, -1, 0);
 }
 
+/** True when `q` runs on unbroken from the start of a later word (`order` in place**Order**). */
+function wordStart(q: string, words: string[]): boolean {
+  for (let i = 1; i < words.length; i++) {
+    if (words[i][0] !== q[0]) continue;
+    let joined = '';
+    for (let j = i; j < words.length && joined.length < q.length; j++) joined += words[j];
+    if (joined.startsWith(q)) return true;
+  }
+  return false;
+}
+
 function score(e: IndexEntry, q: string, qs: string): number {
   if (e.lo === q) return EXACT;
   if (e.lo.startsWith(q)) return PREFIX;
   // Everything below needs the letters in order somewhere; most entries stop here.
   if (!subsequence(qs, e.hay)) return 0;
+  if (e.ini.includes(qs[0]) && wordStart(qs, e.words)) return WORD;
   if (e.ini.includes(qs[0]) && initialsMatch(qs, e.words)) return INITIALS;
   if (e.lo.includes(q)) return SUBSTRING;
   if (e.pwords && ((e.pini!.includes(qs[0]) && initialsMatch(qs, e.pwords)) || e.hay.includes(q))) return PATH;
@@ -176,7 +188,7 @@ function score(e: IndexEntry, q: string, qs: string): number {
 }
 
 /**
- * The best `limit` matches for `q` (case-insensitive): exact label, label prefix, camelCase or path
+ * The best `limit` matches for `q` (case-insensitive): exact label, label prefix, a later word's start, camelCase or path
  * initials, substring, then fuzzy subsequence. Ties go to file, symbol, route, table, then the shorter label.
  */
 export function query(index: IndexEntry[], q: string, limit = 50): Result[] {

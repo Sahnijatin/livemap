@@ -22,7 +22,8 @@ const USER_SCROLL_HOLD_MS = 5000;
 const SELF_SCROLL_MS = 900;
 const EMPTY_TAGS = new Map<string, SymbolTag>();
 const NO_LIMITS: Record<string, number> = {};
-const attr = (s: string): string => s.replace(/["\\]/g, '\\$&');
+/** A string as a quoted CSS attribute value; any path (newlines included) yields a valid selector. */
+const attr = (s: string): string => (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&').replace(/\n/g, '\\a '));
 
 export function FileTree() {
   const files = useStore(s => s.files);
@@ -67,12 +68,18 @@ export function FileTree() {
   }, [q, openDirs, big, selectedDir, liveDirs]);
 
   // Auto-reveal: open the target's folder, then scroll its row into view. Never selects or focuses.
+  // During the hold after a user scroll the latest target waits, and is revealed when the hold ends.
+  const [holdEnded, setHoldEnded] = useState(0);
   useEffect(() => {
     if (targetPath === null) return;
-    if (Date.now() - userScrolledAt.current < USER_SCROLL_HOLD_MS) return;
+    const wait = userScrolledAt.current + USER_SCROLL_HOLD_MS - Date.now();
+    if (wait > 0) {
+      const t = window.setTimeout(() => setHoldEnded(n => n + 1), wait);
+      return () => window.clearTimeout(t);
+    }
     setOpenDirs(o => (o[dirName(targetPath)] === true ? o : { ...o, [dirName(targetPath)]: true }));
     setReveal(targetPath);
-  }, [targetPath]);
+  }, [targetPath, holdEnded]);
   const rowOpen = useCallback((row: Row) => row.forceOpen || !!expanded[row.file.path], [expanded]);
   const pinned = useCallback((path: string) => path === selected || path === targetPath || live[path] !== undefined, [selected, targetPath, live]);
   const { items: openItems, navKeys } = useMemo(

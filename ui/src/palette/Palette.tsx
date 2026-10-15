@@ -46,7 +46,8 @@ function useFrameValue(text: string): string {
     const id = window.requestAnimationFrame(() => setValue(text));
     return () => window.cancelAnimationFrame(id);
   }, [text, value]);
-  return text === '' ? '' : value;
+  // Text that does not extend the last value (a reopened palette, a deletion) is never shown a stale frame.
+  return text === '' || !text.startsWith(value) ? text : value;
 }
 
 interface Row { key: string; entry: Entry }
@@ -177,7 +178,8 @@ export default function Palette() {
       onValueChange={v => setPicked({ q, gen: generation, value: v })}
       onKeyDown={e => {
         // Enter within a frame of typing: the results are a frame old, so open the best match for what is typed now.
-        if (e.key !== 'Enter' || e.nativeEvent.isComposing || !index) return;
+        // Safari commits an IME conversion with an Enter that has isComposing false but keyCode 229.
+        if (e.key !== 'Enter' || e.nativeEvent.isComposing || e.keyCode === 229 || !index) return;
         const now = text.trim();
         if (!now || now === q) return;
         e.preventDefault();

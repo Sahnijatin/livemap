@@ -29,7 +29,7 @@ export function PaletteHost() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'k') return;
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || (e.key.toLowerCase() !== 'k' && e.code !== 'KeyK')) return; // KeyK: Ctrl+K on Cyrillic, Greek or Hebrew layouts
       const s = useStore.getState();
       if (s.connection === 'unauthorized' || !s.loaded) return;
       const target = e.target instanceof Element ? e.target : document.activeElement;
