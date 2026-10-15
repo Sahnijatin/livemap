@@ -36,7 +36,22 @@ export interface AgentHubOptions {
   /** A tailer whose file has not grown for this long is stopped; a later watch resumes at its offset. */
   tailerIdleMs?: number;
 }
-export interface HookOptions { /** False when the hook can no longer receive an answer: nothing is blocked or delivered. */ canBlock?: boolean }
+export interface HookOptions {
+  /** False when the hook can no longer receive an answer: nothing is blocked or delivered. */
+  canBlock?: boolean;
+  /**
+   * The caller reports whether a block reached the hook through the result's `settle`: the failed
+   * tool_end added for a blocked Codex or Cursor call waits for it, and an undelivered block is undone.
+   */
+  settle?: boolean;
+}
+export interface HookResult {
+  block: string | null;
+  /** The flags whose block this answer carries. */
+  flags?: number[];
+  /** With `settle` and a block: call once the answer was delivered (true) or lost (false). */
+  settle?: (delivered: boolean) => void;
+}
 export interface IngestHints { agent: AgentKind; cwd: string; transcriptPath?: string; hooks: boolean }
 
 interface SessionState {
@@ -135,10 +150,9 @@ export class AgentHub extends EventEmitter {
     return this.blocked.has(`${sessionId}\u0000${toolId}`);
   }
 
-  /** `flags` lists the flags whose block this answer carries (so the caller can undeliver them). */
   ingestHook(
     agent: 'claude-code' | 'codex' | 'cursor', event: string, payload: unknown, now: number = Date.now(), opts: HookOptions = {},
-  ): { block: string | null; flags?: number[] } {
+  ): HookResult {
     let n: ReturnType<typeof normalizeHook>;
     try {
       n = normalizeHook({ agent, event, payload, root: this.root, now });
@@ -151,8 +165,9 @@ export class AgentHub extends EventEmitter {
       decision = n.blockable && opts.canBlock !== false ? this.control.check(agent, sid, now) : null;
     } catch { /* the decision below must not depend on emission */ }
     const block = decision?.block ?? null;
+    let blocked: { ids: string[]; ends: RawAgentEvent[] } = { ids: [], ends: [] };
     try {
-      if (block !== null) this.blockTools(agent, sid, n, now);
+      if (block !== null) blocked = this.blockTools(agent, sid, n, now, opts.settle === true);
       const st = this.upsert(sid, agent, { cwd: n.cwd, transcriptPath: n.transcriptPath, hooks: true }, now);
       this.touch(st, now);
       if (n.prompt) this.setTitle(st, n.prompt);
@@ -175,26 +190,55 @@ export class AgentHub extends EventEmitter {
         });
       }
     } catch { /* bookkeeping failure never changes the control decision */ }
-    return decision?.flags ? { block, flags: decision.flags } : { block };
+    const result: HookResult = decision?.flags ? { block, flags: decision.flags } : { block };
+    if (block !== null && opts.settle) result.settle = this.settler(sid, decision?.flags ?? [], blocked);
+    return result;
+  }
+
+  /**
+   * Delivered: records the held failed tool_ends (after the starts, which may still wait on a tail read).
+   * Lost: the tool ran after all, so its calls are no longer blocked and the flags are queued again.
+   */
+  private settler(sid: string, flags: number[], blocked: { ids: string[]; ends: RawAgentEvent[] }): (delivered: boolean) => void {
+    let done = false;
+    return (delivered) => {
+      if (done) return;
+      done = true;
+      if (!delivered) {
+        for (const id of blocked.ids) this.blocked.delete(`${sid}\u0000${id}`);
+        if (flags.length) this.control.undeliver(flags);
+        return;
+      }
+      if (!blocked.ends.length) return;
+      const emit = () => { for (const e of blocked.ends) { try { this.record(e); } catch { /* keep recording the rest */ } } };
+      if (this.chains.get(sid)) this.enqueue(sid, async () => emit());
+      else emit();
+    };
   }
 
   /**
    * Marks the hook's tool call blocked. Codex and Cursor never report a blocked call, so each tool_start
-   * gets a failed tool_end right after it; Claude Code writes its own error result to the transcript.
+   * gets a failed tool_end right after it (or, with `hold`, returned for the caller to record once the
+   * block is delivered); Claude Code writes its own error result to the transcript. Returns the marked ids.
    */
-  private blockTools(agent: AgentKind, sid: string, n: ReturnType<typeof normalizeHook>, now: number): void {
-    if (n.toolId) this.markBlocked(sid, n.toolId);
-    if (agent === 'claude-code') return;
+  private blockTools(agent: AgentKind, sid: string, n: ReturnType<typeof normalizeHook>, now: number, hold: boolean): { ids: string[]; ends: RawAgentEvent[] } {
+    const ids: string[] = [];
+    const ends: RawAgentEvent[] = [];
+    const mark = (id: string) => { this.markBlocked(sid, id); ids.push(id); };
+    if (n.toolId) mark(n.toolId);
+    if (agent === 'claude-code') return { ids, ends };
     const out: RawAgentEvent[] = [];
     n.events.forEach((e, i) => {
       out.push(e);
       if (e.type !== 'tool_start' || !e.tool) return;
       if (!e.tool.id) e.tool = { ...e.tool, id: `blocked:${sid}:${now}:${i}` };
       const { id, name, label, paths } = e.tool;
-      this.markBlocked(sid, id as string);
-      out.push({ agent: e.agent, sessionId: e.sessionId, at: now, type: 'tool_end', tool: { id, name, label, paths, ok: false, output: BLOCKED_OUTPUT } });
+      mark(id as string);
+      const end: RawAgentEvent = { agent: e.agent, sessionId: e.sessionId, at: now, type: 'tool_end', tool: { id, name, label, paths, ok: false, output: BLOCKED_OUTPUT } };
+      (hold ? ends : out).push(end);
     });
     n.events = out;
+    return { ids, ends };
   }
 
   private markBlocked(sid: string, id: string): void {
