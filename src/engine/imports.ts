@@ -268,16 +268,34 @@ function pyModule(base: string, ctx: ImportCtx): string | null {
   return null;
 }
 
+/** Common top-level standard library modules, which a project file of the same name only shadows from the root. */
+const PY_STDLIB = new Set([
+  'os', 'sys', 're', 'json', 'logging', 'email', 'typing', 'collections', 'datetime', 'time', 'math', 'random',
+  'pathlib', 'subprocess', 'threading', 'asyncio', 'functools', 'itertools', 'http', 'urllib', 'socket', 'ssl',
+  'hashlib', 'base64', 'uuid', 'io', 'csv', 'sqlite3', 'unittest', 'argparse', 'dataclasses', 'enum', 'abc', 'copy',
+  'string', 'struct', 'shutil', 'tempfile', 'glob', 'pickle', 'queue', 'signal', 'traceback', 'types', 'warnings',
+  'inspect', 'contextlib', 'operator', 'decimal', 'fractions', 'statistics', 'secrets', 'html', 'xml', 'zipfile',
+  'tarfile', 'gzip', 'platform', 'locale', 'calendar', 'textwrap', 'pprint', 'heapq', 'bisect', 'weakref', 'gc',
+  'select', 'selectors', 'mimetypes', 'smtplib', 'configparser', 'getpass', 'ctypes', 'multiprocessing',
+  'concurrent', 'importlib', 'pkgutil', 'codecs', 'unicodedata', 'difflib', 'fnmatch', 'stat', 'errno', 'numbers',
+  'array', 'binascii', 'zlib', 'ipaddress', 'shlex', 'cmd', 'token', 'tokenize', 'ast', 'dis', 'site', 'sysconfig',
+  'builtins', '__future__',
+]);
+
 /**
  * Candidate directories for a dotted module, in order: relative to `dir` (rel leading dots), or, for an
- * absolute module, each ancestor of the importing file nearest first (a project nested under `backend/`
- * or `services/ml/` runs with its own directory on the import path), then the root and `src`.
+ * absolute module, each ancestor of the importing file nearest first that is not itself a package (a
+ * project nested under `backend/` or `services/ml/` runs with its own directory on the import path, while
+ * inside a package Python 3 has no implicit relative imports), then the root and `src`. A standard library
+ * name is only looked up at the root and `src`, so `app/logging.py` does not take `import logging`.
  */
-function pyBases(dir: string, mod: string, rel: number): string[] {
+function pyBases(dir: string, mod: string, rel: number, ctx: ImportCtx): string[] {
   const p = mod.replace(/\./g, '/');
   if (rel > 0) return [join(dir, ...Array(rel - 1).fill('..'), p)];
   const out: string[] = [];
-  if (mod) for (let d = dir; d; d = parentDir(d)) out.push(join(d, p));
+  if (mod && !PY_STDLIB.has(mod.split('.')[0])) {
+    for (let d = dir; d; d = parentDir(d)) if (!ctx.has(join(d, '__init__.py'))) out.push(join(d, p));
+  }
   for (const r of ['', 'src']) out.push(join(r, p));
   return out;
 }
@@ -292,7 +310,7 @@ function pythonImports(path: string, src: string, ctx: ImportCtx, local: Set<str
   const dir = parentDir(path);
   // The first base holding the module or one of the imported submodules wins, as on Python's import path.
   const add = (mod: string, names: string[], rel: number): boolean => {
-    for (const b of pyBases(dir, mod, rel)) {
+    for (const b of pyBases(dir, mod, rel, ctx)) {
       const hits = [pyTarget(b, mod, ctx), ...names.map(n => pyModule(join(b, n), ctx))].filter((h): h is string => !!h);
       if (!hits.length) continue;
       for (const h of hits) local.add(h);
@@ -473,7 +491,7 @@ export function resolveSpecifier(from: string, lang: Lang, spec: string, ctx: Im
     case 'python': {
       const m = /^(\.*)([\w.]*)$/.exec(spec);
       if (!m) return null;
-      for (const b of pyBases(dir, m[2], m[1].length)) {
+      for (const b of pyBases(dir, m[2], m[1].length, ctx)) {
         const hit = pyTarget(b, m[2], ctx);
         if (hit) return hit;
       }
