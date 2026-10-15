@@ -72,6 +72,13 @@ describe('routes-js analyzer', () => {
     expect(run('src/client.ts', client).routes).toEqual([]);
   });
 
+  it('reads guessed routes in code without semicolons, and drops one-argument client calls', () => {
+    const src = "import { list } from './ctl'\nconst mw = [a, b]\napp.get('/users', auth, list)\nconst x = 'y'\napp.get('/x', list)\nconst n = 1\napp.post('/n', create)\nconst d =\n  app.get('/no', id)\n";
+    expect(run('routes/users.js', src).routes.map(r => `${r.method} ${r.path}`)).toEqual(['GET /users', 'GET /x', 'POST /n']);
+    const client = "export function track(api, event, user, a, b) {\n  api.post('/events', event);\n  api.post('/users', JSON.stringify(user));\n  api.post('/z', a(user) || b(user));\n}\n";
+    expect(run('src/client.ts', client).routes).toEqual([]);
+  });
+
   it('ignores member receivers except this.app/router/server and this.X assigned from a router factory', () => {
     expect(run('src/users.service.ts', "export class UsersService {\n  list() { return this.api.get('/users'); }\n}\nctx.router.get('/x', h);\n").routes).toEqual([]);
     const src = "import express from 'express';\nclass S {\n  web = express();\n  start() {\n    this.app.get('/a', a);\n    this.web.get('/w', w);\n  }\n}\n";

@@ -242,30 +242,65 @@ function codeRoutes(code: string, scan: string): { routes: Route[]; mounts: Moun
 }
 
 const FN_ARG = /^(?:async\s+)?(?:function\b|(?:\([^()]*\)|[\w$]+)\s*(?::[^=]{0,200})?=>)/;
-/** A handler reference or a middleware factory call: `list`, `ctl.show`, `requireAuth()`, `h.bind(ctl)`. */
-const REF_ARG = /^[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*|\s*\([^]*\))*$/;
-/** Last segments that name a request payload or config, as passed to an HTTP client. */
-const CLIENT_ARG = new Set(['body', 'data', 'payload', 'params', 'query', 'config', 'cfg', 'conf', 'options', 'opts', 'init', 'headers', 'form', 'formdata', 'values', 'input', 'signal']);
+/**
+ * Whether `arg` is a handler reference or a middleware factory call: `list`, `ctl.show`, `requireAuth()`,
+ * `validate(schema)`, `h.bind(ctl)`. Names, dots and balanced call parentheses only, so an expression such as
+ * `a(x) || b(y)` or a literal is not one.
+ */
+function refArg(arg: string): boolean {
+  const a = arg.trim();
+  const id = /[A-Za-z_$][\w$]*/y;
+  id.lastIndex = 0;
+  if (!id.test(a)) return false;
+  let i = id.lastIndex;
+  while (i < a.length) {
+    while (/\s/.test(a[i] ?? '')) i++;
+    if (a[i] === '.') {
+      i++;
+      while (/\s/.test(a[i] ?? '')) i++;
+      id.lastIndex = i;
+      if (!id.test(a)) return false;
+      i = id.lastIndex;
+    } else if (a[i] === '(') {
+      let depth = 0;
+      for (; i < a.length; i++) {
+        if (a[i] === '(') depth++;
+        else if (a[i] === ')' && --depth === 0) break;
+      }
+      if (depth !== 0) return false;
+      i++;
+    } else if (i < a.length) {
+      return false;
+    }
+  }
+  return true;
+}
+/** Names (last segment, before any call) of a request payload or config, as passed to an HTTP client. */
+const CLIENT_ARG = new Set(['body', 'data', 'payload', 'params', 'query', 'config', 'cfg', 'conf', 'options', 'opts', 'init', 'headers', 'form', 'formdata', 'values', 'input', 'signal', 'event', 'evt', 'user', 'item', 'record', 'entity', 'file', 'blob', 'stringify', 'string', 'number', 'encodeuricomponent']);
 /** Words after which an expression's value is used. */
 const USING_WORDS = new Set(['await', 'return', 'void', 'yield', 'typeof', 'new', 'throw', 'in', 'of', 'case', 'delete', 'instanceof']);
+/** Line ends that continue an expression onto the next line (`=`, `,`, `(`, an operator, `=>`). */
+const CONTINUES = /[=,(\[?:+\-*/%&|^!<>~.]$/;
 /**
  * Whether the call starting at `index` is part of a larger expression rather than a statement of its own:
  * route registrations are statements, while a client call's value is awaited, returned, assigned, passed
- * on, put in an array or used in a condition. A statement starts the file or follows `;`, `{`, `}`, `)`
- * (`if (x) app.get(...)`) or a word that does not use a value (a line ending without `;`).
+ * on, put in an array or used in a condition. On its own line, a call is a statement unless the line before
+ * ends in something that continues an expression (code without semicolons); after code on the same line it
+ * is one only after `;`, `{`, `}` or `)` (`if (x) app.get(...)`).
  */
 function valueUsed(scan: string, index: number): boolean {
   let i = index - 1;
-  while (i >= 0 && /\s/.test(scan[i])) i--;
+  let newline = false;
+  while (i >= 0 && /\s/.test(scan[i])) { if (scan[i] === '\n') newline = true; i--; }
   if (i < 0) return false;
   const c = scan[i];
-  if (c === ';' || c === '{' || c === '}' || c === ')') return false;
   if (/[\w$]/.test(c)) {
     let j = i;
     while (j > 0 && /[\w$]/.test(scan[j - 1])) j--;
     return USING_WORDS.has(scan.slice(j, i + 1));
   }
-  return true;
+  if (newline) return CONTINUES.test(c);
+  return !(c === ';' || c === '{' || c === '}' || c === ')');
 }
 /**
  * Route registrations, as opposed to HTTP client calls: an inline function, or only handler references
@@ -273,10 +308,9 @@ function valueUsed(scan: string, index: number): boolean {
  */
 function routeLike(rest: string[], used: boolean): boolean {
   if (rest.some(a => FN_ARG.test(a.trim()))) return true;
-  if (used || !rest.length || !rest.every(a => REF_ARG.test(a.trim()))) return false;
-  const last = rest[rest.length - 1].trim();
+  if (used || !rest.length || !rest.every(refArg)) return false;
   // A factory call names its handler before the parentheses: `validate(schema)` is `validate`.
-  const name = last.replace(/\([^]*$/, '');
+  const name = rest[rest.length - 1].trim().replace(/\s*\([^]*$/, '');
   return !CLIENT_ARG.has(name.slice(name.lastIndexOf('.') + 1).trim().toLowerCase());
 }
 
