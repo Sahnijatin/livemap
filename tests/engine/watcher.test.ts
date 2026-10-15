@@ -287,6 +287,42 @@ describe('Watcher', () => {
     await waitFor(() => changes.some(c => c.change.path === 'gen/src/out.ts' && c.change.kind === 'modified'), 4000);
   });
 
+  it('un-ignoring a directory of 50 files reads each file once', async () => {
+    put('.gitignore', 'gen/\n');
+    for (let i = 0; i < 50; i++) put(`gen/f${i}.ts`, `export const v${i} = ${i};\n`);
+    await startWatcher();
+    const reads = new Map<string, number>();
+    const read = (model as unknown as { read: (rel: string) => Promise<unknown> }).read.bind(model);
+    vi.spyOn(model as unknown as { read: (rel: string) => Promise<unknown> }, 'read').mockImplementation(rel => {
+      reads.set(rel, (reads.get(rel) ?? 0) + 1);
+      return read(rel);
+    });
+    put('.gitignore', '# nothing ignored\n');
+    await waitFor(() => model.get('gen/f49.ts') !== undefined);
+    await sleep(800); // let chokidar's crawl of gen/ report its adds
+    for (let i = 0; i < 50; i++) expect(reads.get(`gen/f${i}.ts`)).toBe(1);
+    // A later add of the same path is not skipped.
+    put('gen/late.ts', 'export const late = 1;\n');
+    await waitFor(() => model.get('gen/late.ts') !== undefined, 4000);
+  });
+
+  it('a reload whose rescan also throws still emits reset', async () => {
+    put('.gitignore', 'gen/\n');
+    const w = await startWatcher();
+    const resets: number[] = [];
+    w.on('reset', () => resets.push(1));
+    vi.spyOn(model, 'reloadIgnores').mockRejectedValue(new Error('reload failed'));
+    vi.spyOn(model, 'scan').mockRejectedValue(new Error('scan failed'));
+    put('.gitignore', '# nothing\n');
+    await waitFor(() => resets.length >= 1);
+    expect(errors.map(e => e.message)).toEqual(['reload failed', 'scan failed']);
+  });
+
+  it('start() on a started watcher throws', async () => {
+    const w = await startWatcher();
+    expect(() => w.start()).toThrow('watcher already started');
+  });
+
   it('several .gitignore edits at once reload the rules once', async () => {
     for (let i = 0; i < 5; i++) put(`p${i}/.gitignore`, 'tmp/\n');
     const w = await startWatcher();

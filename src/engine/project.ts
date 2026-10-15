@@ -176,12 +176,13 @@ export class ProjectModel {
    * freed room (returned as `created` changes).
    *
    * `onIncluded` gets the topmost newly included directories (empty ones too) right after the
-   * walk, before anything is read, so the watcher can start watching them.
+   * walk, before anything is read, so the watcher can start watching them. `indexed` lists the
+   * paths read and indexed by this reload (so the caller can skip their redundant add events).
    */
   reloadIgnores(
     changed: string[] = [],
     opts: { onIncluded?: (dirs: string[]) => void } = {},
-  ): Promise<{ files: FileModel[]; removed: string[]; created: UpdateResult[] }> {
+  ): Promise<{ files: FileModel[]; removed: string[]; created: UpdateResult[]; indexed: string[] }> {
     // If this throws partway the model is left inconsistent; the caller rescans (see Watcher).
     return this.serial(() => this.reconcileIgnores(changed, opts));
   }
@@ -189,7 +190,7 @@ export class ProjectModel {
   private async reconcileIgnores(
     changed: string[],
     opts: { onIncluded?: (dirs: string[]) => void },
-  ): Promise<{ files: FileModel[]; removed: string[]; created: UpdateResult[] }> {
+  ): Promise<{ files: FileModel[]; removed: string[]; created: UpdateResult[]; indexed: string[] }> {
     const old = this.isIgnored;
     const changedDirs = changed.map(parentDir);
     this.isIgnored = changed.length ? createIgnore(this.root, { previous: old, changed: changedDirs }) : createIgnore(this.root);
@@ -228,7 +229,7 @@ export class ProjectModel {
     if (done < fresh.length) full = true;
     if (whole) this.truncated = walked.truncated || full;
     else if (full || walked.truncated) this.truncated = true;
-    if (!removed.length && !included.length && !unreached.length) return { files: [], removed, created: [] };
+    if (!removed.length && !included.length && !unreached.length) return { files: [], removed, created: [], indexed: [] };
     const touched = this.relink([]);
     const byPath = new Map<string, FileModel>();
     for (const rel of included) byPath.set(rel, this.files.get(rel)!);
@@ -237,7 +238,7 @@ export class ProjectModel {
     const created: UpdateResult[] = unreached.map(rel => ({
       path: rel, kind: 'created', before: null, after: this.files.get(rel) ?? null, beforeText: null, afterText: this.texts.get(rel) ?? null, touched: [],
     }));
-    return { files: [...byPath.values()].sort((x, y) => cmp(x.path, y.path)), removed, created };
+    return { files: [...byPath.values()].sort((x, y) => cmp(x.path, y.path)), removed, created, indexed: [...included, ...unreached] };
   }
 
   /** Marks the file set changed; the rest of the burst resolves against the live set. */

@@ -335,7 +335,7 @@ describe('ProjectModel fix round 1', () => {
     expect(m.get('secrets.json')).toBeUndefined();
     expect(m.content('secrets.json')).toBeNull();
     expect(m.get('gen/out.ts')!.imports.local).toEqual(['src/b.ts']);
-    expect(await m.reloadIgnores(['.gitignore'])).toEqual({ files: [], removed: [], created: [] });
+    expect(await m.reloadIgnores(['.gitignore'])).toEqual({ files: [], removed: [], created: [], indexed: [] });
   });
 
   it('reloadIgnores reads nested .gitignore files created after their directory was seen', async () => {
