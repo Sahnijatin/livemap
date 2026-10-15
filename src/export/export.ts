@@ -121,9 +121,51 @@ async function sessionScope(store: HistoryStore, all: Rec[], id: string, firstSe
 /** Stands in for a fenced block or an inline code span in agent text under `--no-code`. */
 export const CODE_REMOVED = '[code removed]';
 
-/** Agent text with fenced blocks (an unclosed one runs to the end) and inline code spans replaced. */
-export const stripCode = (text: string): string =>
-  text.replace(/```[\s\S]*?(?:```|$)/g, CODE_REMOVED).replace(/`[^`\n]+`/g, CODE_REMOVED);
+/**
+ * Agent text with code replaced. A fence of three or more backticks or tildes (also one opened mid-line) runs
+ * to a closing fence of the same character at least as long, so an inner shorter fence does not end it, and an
+ * unclosed one runs to the end. An inline span ends at a backtick run of its own length; an unclosed one (as in
+ * a truncated title) runs to the end of its line. Indented code blocks are not recognized.
+ */
+export function stripCode(text: string): string {
+  const out: string[] = [];
+  let fence: string | null = null;
+  for (const line of text.split('\n')) {
+    let rest = line;
+    if (fence !== null) {
+      const close = /^\s*(`{3,}|~{3,})/.exec(line);
+      if (!close || close[1][0] !== fence[0] || close[1].length < fence.length) continue;
+      fence = null;
+      rest = line.slice(close[0].length);
+      if (rest.trim() === '') continue;
+    }
+    const open = /^\s*(~{3,})/.exec(rest);
+    if (open) { fence = open[1]; out.push(CODE_REMOVED); continue; }
+    const r = inlineCode(rest);
+    fence = r.fence;
+    out.push(r.text);
+  }
+  return out.join('\n');
+}
+
+/** One line with its backtick spans replaced; `fence` is set when a run of three or more opens a block. */
+function inlineCode(line: string): { text: string; fence: string | null } {
+  let text = '';
+  let i = 0;
+  for (;;) {
+    const start = line.indexOf('`', i);
+    if (start < 0) return { text: text + line.slice(i), fence: null };
+    let n = start;
+    while (line[n] === '`') n++;
+    const run = line.slice(start, n);
+    const close = new RegExp(`(?<!\`)${run}(?!\`)`, 'g');
+    close.lastIndex = n;
+    const m = close.exec(line);
+    text += line.slice(i, start) + CODE_REMOVED;
+    if (!m) return { text, fence: run.length >= 3 ? run : null };
+    i = m.index + run.length;
+  }
+}
 
 /** `$ <command name>` of a shell label (`$ FOO=1 ./bin/run --x` is `$ run`); the secret marker stays. */
 function shellLabel(label: string): string {
@@ -147,7 +189,7 @@ function withoutCode(initial: ProjectState, messages: Rec[]): { initial: Project
     const out = e.text !== undefined && prose.has(e.type) ? { ...e, text: stripCode(e.text) } : e;
     if (!out.tool) return out;
     const { input: _i, output: _o, ...tool } = out.tool;
-    return { ...out, tool: toolFamily(tool.name) === 'shell' ? { ...tool, label: shellLabel(tool.label) } : tool };
+    return { ...out, tool: { ...tool, label: toolFamily(tool.name) === 'shell' ? shellLabel(tool.label) : stripCode(tool.label) } };
   };
   const session = (s: AgentSession): AgentSession => ({ ...s, title: stripCode(s.title) });
   const state = <T extends Pick<ProjectState, 'changes' | 'events' | 'sessions'>>(s: T): T =>
