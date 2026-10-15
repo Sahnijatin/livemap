@@ -79,6 +79,15 @@ describe('routes-js analyzer', () => {
     expect(run('src/client.ts', client).routes).toEqual([]);
   });
 
+  it('keeps guessed routes after regex, generic and x++ lines, with member handlers and parens in strings', () => {
+    const src = "const SLUG = /^[a-z]+$/\napp.get('/a', list)\ntype H = Map<string, number>\napp.get('/b', list)\nn++\napp.get('/c', list)\n"
+      + "app.get('/me', auth, ctl.user)\napp.post('/track', a.record);\nrouter.post('/webhook', stripe.event)\napp.get('/x', match(')'), list)\napp.get('/r', requireRole('admin (ro)'), list)\n";
+    expect(run('routes/all.js', src).routes.map(r => `${r.method} ${r.path}`))
+      .toEqual(['GET /a', 'GET /b', 'GET /c', 'GET /me', 'POST /track', 'POST /webhook', 'GET /x', 'GET /r']);
+    const client = "export function f(api, data, x) {\n  api.post('/a', new FormData(x));\n  api.put('/b', encodeURIComponent(x));\n  api.patch('/c', data)\n}\n";
+    expect(run('src/client.ts', client).routes).toEqual([]);
+  });
+
   it('ignores member receivers except this.app/router/server and this.X assigned from a router factory', () => {
     expect(run('src/users.service.ts', "export class UsersService {\n  list() { return this.api.get('/users'); }\n}\nctx.router.get('/x', h);\n").routes).toEqual([]);
     const src = "import express from 'express';\nclass S {\n  web = express();\n  start() {\n    this.app.get('/a', a);\n    this.web.get('/w', w);\n  }\n}\n";

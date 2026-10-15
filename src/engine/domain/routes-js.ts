@@ -264,8 +264,12 @@ function refArg(arg: string): boolean {
     } else if (a[i] === '(') {
       let depth = 0;
       for (; i < a.length; i++) {
-        if (a[i] === '(') depth++;
-        else if (a[i] === ')' && --depth === 0) break;
+        const q = a[i];
+        if (q === "'" || q === '"' || q === '`') {
+          // Parentheses inside a string argument (`match(')')`) do not count.
+          for (i++; i < a.length && a[i] !== q; i++) if (a[i] === '\\') i++;
+        } else if (q === '(') depth++;
+        else if (q === ')' && --depth === 0) break;
       }
       if (depth !== 0) return false;
       i++;
@@ -275,12 +279,20 @@ function refArg(arg: string): boolean {
   }
   return true;
 }
-/** Names (last segment, before any call) of a request payload or config, as passed to an HTTP client. */
-const CLIENT_ARG = new Set(['body', 'data', 'payload', 'params', 'query', 'config', 'cfg', 'conf', 'options', 'opts', 'init', 'headers', 'form', 'formdata', 'values', 'input', 'signal', 'event', 'evt', 'user', 'item', 'record', 'entity', 'file', 'blob', 'stringify', 'string', 'number', 'encodeuricomponent']);
+/** Request parts and config, passed to an HTTP client bare or as members (`body`, `req.body`, `opts`). */
+const REQUEST_PARTS = new Set(['body', 'data', 'payload', 'params', 'query', 'config', 'cfg', 'conf', 'options', 'opts', 'init', 'headers', 'form', 'formdata', 'values', 'input', 'signal']);
+/** Nouns that are payloads as bare variables (`api.post('/u', user)`) but handlers as members (`ctl.user`). */
+const PAYLOAD_NOUNS = new Set(['event', 'evt', 'user', 'item', 'record', 'entity', 'file', 'blob']);
+/** Calls that build a request body, not a handler (`api.post('/u', JSON.stringify(user))`). */
+const CLIENT_CALLS = new Set(['JSON.stringify', 'String', 'Number', 'Boolean', 'encodeURIComponent', 'encodeURI', 'URLSearchParams', 'FormData', 'Blob']);
 /** Words after which an expression's value is used. */
 const USING_WORDS = new Set(['await', 'return', 'void', 'yield', 'typeof', 'new', 'throw', 'in', 'of', 'case', 'delete', 'instanceof']);
-/** Line ends that continue an expression onto the next line (`=`, `,`, `(`, an operator, `=>`). */
-const CONTINUES = /[=,(\[?:+\-*/%&|^!<>~.]$/;
+/**
+ * Line ends that continue an expression onto the next line: `=`, `,`, `(`, `[`, `?`, `:`, `&&`, `||`, `!`, `.`,
+ * `=>`. `+`, `-`, `*`, `/`, `<` and `>` are left out: lines ending in `x++`, a regex literal or a generic
+ * type end statements far more often than they break an expression across lines.
+ */
+const CONTINUES = /(?:[=,(\[?:&|!.]|=>)$/;
 /**
  * Whether the call starting at `index` is part of a larger expression rather than a statement of its own:
  * route registrations are statements, while a client call's value is awaited, returned, assigned, passed
@@ -299,7 +311,7 @@ function valueUsed(scan: string, index: number): boolean {
     while (j > 0 && /[\w$]/.test(scan[j - 1])) j--;
     return USING_WORDS.has(scan.slice(j, i + 1));
   }
-  if (newline) return CONTINUES.test(c);
+  if (newline) return CONTINUES.test(scan.slice(Math.max(0, i - 1), i + 1));
   return !(c === ';' || c === '{' || c === '}' || c === ')');
 }
 /**
@@ -309,9 +321,14 @@ function valueUsed(scan: string, index: number): boolean {
 function routeLike(rest: string[], used: boolean): boolean {
   if (rest.some(a => FN_ARG.test(a.trim()))) return true;
   if (used || !rest.length || !rest.every(refArg)) return false;
+  const last = rest[rest.length - 1].trim();
   // A factory call names its handler before the parentheses: `validate(schema)` is `validate`.
-  const name = rest[rest.length - 1].trim().replace(/\s*\([^]*$/, '');
-  return !CLIENT_ARG.has(name.slice(name.lastIndexOf('.') + 1).trim().toLowerCase());
+  const callee = last.replace(/\s*\([^]*$/, '').replace(/\s+/g, '');
+  if (callee !== last.replace(/\s+/g, '')) return !CLIENT_CALLS.has(callee.replace(/^new/, ''));
+  const seg = callee.slice(callee.lastIndexOf('.') + 1).toLowerCase();
+  if (REQUEST_PARTS.has(seg)) return false;
+  // A bare noun is a payload; as a member (`ctl.user`, `stripe.event`) it is a controller's handler.
+  return callee.includes('.') || !PAYLOAD_NOUNS.has(seg);
 }
 
 /** Fastify `route({ method, url, handler })`; a method array gives one route per method. */
