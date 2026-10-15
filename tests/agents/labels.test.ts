@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { toolLabel, toolPaths, patchPaths, redactSecretInput, touchesSecret, outputMentionsSecret, SECRET_COMMAND } from '../../src/agents/labels.js';
+import { toolLabel, toolPaths, patchPaths, redactSecretInput, touchesSecret, outputMentionsSecret, SECRET_COMMAND, REAL_CACHE_MS } from '../../src/agents/labels.js';
 
 describe('toolLabel', () => {
   it('labels known tools', () => {
@@ -160,6 +160,22 @@ describe('symlinked project folder (#32)', () => {
       expect(spy).not.toHaveBeenCalled();
     } finally {
       spy.mockRestore();
+    }
+  });
+  it('#40: sees a symlink created after an earlier lookup missed, once the cache entry expires', () => {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-late-')));
+    vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] });
+    try {
+      const real = path.join(tmp, 'real');
+      fs.mkdirSync(path.join(real, 'src'), { recursive: true });
+      const link = path.join(tmp, 'later');
+      expect(toolPaths('Edit', { file_path: `${link}/src/a.ts` }, real)).toEqual([]);
+      fs.symlinkSync(real, link, 'dir');
+      vi.setSystemTime(Date.now() + REAL_CACHE_MS + 1);
+      expect(toolPaths('Edit', { file_path: `${link}/src/a.ts` }, real)).toEqual(['src/a.ts']);
+    } finally {
+      vi.useRealTimers();
+      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 });

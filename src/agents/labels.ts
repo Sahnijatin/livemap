@@ -60,20 +60,23 @@ function anchor(p: string, cwd?: string): string {
 }
 
 const REAL_CACHE_MAX = 2000;
-/** realpath per path tried, null when it does not resolve; cleared when full. */
-const realCache = new Map<string, string | null>();
+/** How long a lookup is reused: long enough for a burst of tool events, short enough to see a new symlink. */
+export const REAL_CACHE_MS = 5000;
+/** realpath per path tried (null when it does not resolve) and when it was looked up; cleared when full. */
+const realCache = new Map<string, { real: string | null; at: number }>();
 
 /**
- * The realpath of `p` in POSIX form, or null. Cached: labels are computed for every tool event on the
- * server's event loop, and agents name the same files outside the root over and over.
+ * The realpath of `p` in POSIX form, or null. Cached for a few seconds: labels are computed for every tool
+ * event on the server's event loop, and agents name the same files outside the root over and over.
  */
 function realPrefix(p: string): string | null {
+  const now = Date.now();
   const hit = realCache.get(p);
-  if (hit !== undefined) return hit;
+  if (hit && now - hit.at < REAL_CACHE_MS) return hit.real;
   let real: string | null;
   try { real = posix(fs.realpathSync(p)); } catch { real = null; }
   if (realCache.size >= REAL_CACHE_MAX) realCache.clear();
-  realCache.set(p, real);
+  realCache.set(p, { real, at: now });
   return real;
 }
 
