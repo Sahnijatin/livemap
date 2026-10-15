@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { DomainIndex } from '@shared/domain.js';
-import { useStore, MAX_CHANGES, MAX_EVENTS, CENTER_TABS, loadTab, depKey, tableKey, fieldKey, routeBaseKey } from './store';
+import { useStore, liveGeneration, MAX_CHANGES, MAX_EVENTS, CENTER_TABS, loadTab, depKey, tableKey, fieldKey, routeBaseKey } from './store';
 import { LARGE_PROJECT } from './map/mapModel';
 import { file, change, event, session, emptyDomain } from './fixtures';
 import { restHistorySource, setHistorySource, type HistorySource } from './history';
@@ -395,6 +395,12 @@ describe('history and rewind', () => {
     s.apply({ type: 'summaryStatus', status: { ...ready, state: 'working' } });
     s.apply({ type: 'fileSummary', path: 'a.ts', hash: 'h3', summary: 'Later' });
     expect(useStore.getState().summaries).toEqual({ status: { ...ready, state: 'working' }, files: {} });
+  });
+
+  it('backToLive bumps the live generation even when not rewound, dropping a queued seek', async () => {
+    const before = liveGeneration();
+    await useStore.getState().backToLive();
+    expect(liveGeneration()).toBeGreaterThan(before);
   });
 
   it('backToLive keeps a summarizer status that arrived while it waited', async () => {

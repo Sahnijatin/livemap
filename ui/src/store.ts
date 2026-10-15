@@ -538,7 +538,6 @@ export const useStore = create<StoreState>()((set, get) => ({
       return get().rewind(end);
     }
     const gen = ++viewGen;
-    liveGen++;
     liveBuffer = [];
     const statusAt = statusGen;
     set({ playing: false });
