@@ -122,48 +122,77 @@ async function sessionScope(store: HistoryStore, all: Rec[], id: string, firstSe
 export const CODE_REMOVED = '[code removed]';
 
 /**
- * Agent text with code replaced. A fence of three or more backticks or tildes (also one opened mid-line) runs
- * to a closing fence of the same character at least as long, so an inner shorter fence does not end it, and an
- * unclosed one runs to the end. An inline span ends at a backtick run of its own length; an unclosed one (as in
- * a truncated title) runs to the end of its line. Indented code blocks are not recognized.
+ * Agent text with code replaced, erring on the side of removing. A fence of three or more backticks or tildes
+ * (also one opened mid-line) runs to a line holding only a closing fence of the same character at least as
+ * long, so an inner shorter fence or a "```python" line does not end it, and an unclosed one runs to the end.
+ * An inline span ends at the next backtick run of its own length, on its line or a later one (a hard-wrapped
+ * prompt); an unclosed one (as in a truncated title) runs to the end of its line. Indented code blocks are not
+ * recognized.
  */
 export function stripCode(text: string): string {
   const out: string[] = [];
+  let prose: string[] = [];
+  const flush = () => {
+    if (prose.length) out.push(inlineCode(prose.join('\n')));
+    prose = [];
+  };
   let fence: string | null = null;
   for (const line of text.split('\n')) {
-    let rest = line;
     if (fence !== null) {
-      const close = /^\s*(`{3,}|~{3,})/.exec(line);
-      if (!close || close[1][0] !== fence[0] || close[1].length < fence.length) continue;
-      fence = null;
-      rest = line.slice(close[0].length);
-      if (rest.trim() === '') continue;
+      const close = /^\s*(`{3,}|~{3,})\s*$/.exec(line);
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
+      continue;
     }
-    const open = /^\s*(~{3,})/.exec(rest);
-    if (open) { fence = open[1]; out.push(CODE_REMOVED); continue; }
-    const r = inlineCode(rest);
-    fence = r.fence;
-    out.push(r.text);
+    const open = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (open) {
+      flush();
+      fence = open[1];
+      out.push(CODE_REMOVED);
+      continue;
+    }
+    // A run of three or more backticks later on the line that never closes opens a fence there.
+    const mid = unclosedFence(line);
+    if (mid) {
+      prose.push(line.slice(0, mid.at));
+      flush();
+      out[out.length - 1] += CODE_REMOVED;
+      fence = mid.run;
+      continue;
+    }
+    prose.push(line);
   }
+  flush();
   return out.join('\n');
 }
 
-/** One line with its backtick spans replaced; `fence` is set when a run of three or more opens a block. */
-function inlineCode(line: string): { text: string; fence: string | null } {
-  let text = '';
+/** Where a run of three or more backticks opens a block on `line`: the first such run with no match after it. */
+function unclosedFence(line: string): { at: number; run: string } | null {
+  for (const m of line.matchAll(/`{3,}/g)) {
+    const run = m[0];
+    const rest = line.slice(m.index + run.length);
+    if (!new RegExp(`(?<!\`)${run}(?!\`)`).test(rest)) return { at: m.index, run };
+  }
+  return null;
+}
+
+/** Text with its backtick spans replaced; a span may cross lines, and an unclosed one runs to its line's end. */
+function inlineCode(text: string): string {
+  let out = '';
   let i = 0;
   for (;;) {
-    const start = line.indexOf('`', i);
-    if (start < 0) return { text: text + line.slice(i), fence: null };
+    const start = text.indexOf('`', i);
+    if (start < 0) return out + text.slice(i);
     let n = start;
-    while (line[n] === '`') n++;
-    const run = line.slice(start, n);
+    while (text[n] === '`') n++;
+    const run = text.slice(start, n);
     const close = new RegExp(`(?<!\`)${run}(?!\`)`, 'g');
     close.lastIndex = n;
-    const m = close.exec(line);
-    text += line.slice(i, start) + CODE_REMOVED;
-    if (!m) return { text, fence: run.length >= 3 ? run : null };
-    i = m.index + run.length;
+    const m = close.exec(text);
+    out += text.slice(i, start) + CODE_REMOVED;
+    if (m) { i = m.index + run.length; continue; }
+    const eol = text.indexOf('\n', n);
+    if (eol < 0) return out;
+    i = eol;
   }
 }
 
