@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { AgentKind, AgentTool, RawAgentEvent } from '../shared/types.js';
 import { isBlockable } from '../shared/blockable.js';
-import { toolLabel, toolPaths, redactSecretInput, touchesSecret, outputMentionsSecret } from './labels.js';
+import { toolLabel, toolMeta, toolPaths, redactSecretInput, touchesSecret, outputMentionsSecret } from './labels.js';
 
 const MAX_OUTPUT = 4000;
 
@@ -52,7 +52,7 @@ function toolEvent(
   name: string, input: unknown, extra: { id?: string; output?: unknown; ok?: boolean },
 ): RawAgentEvent {
   const paths = toolPaths(name, input, root, cwd);
-  const tool: AgentTool = { ...(extra.id ? { id: extra.id } : {}), name, label: toolLabel(name, input, root, cwd), paths };
+  const tool: AgentTool = { ...(extra.id ? { id: extra.id } : {}), name, label: toolLabel(name, input, root, cwd), paths, ...toolMeta(name, input, extra.output) };
   if (type === 'tool_start') tool.input = redactSecretInput(name, input);
   else {
     const text = touchesSecret(name, input, paths) ? undefined : outputText(extra.output);

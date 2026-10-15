@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
-import type { AgentEvent, AgentSession, ChangeSummary } from '@shared/types.js';
+import type { AgentEvent, AgentSession, AgentTool, ChangeSummary } from '@shared/types.js';
+import { classifyTool } from '@shared/tools.js';
 import { useStore } from './store';
 import { useNow } from './recent';
 
@@ -9,19 +10,8 @@ export const TOOL_FRESH_MS = 60_000;
 export const CHANGE_FRESH_MS = 10_000;
 const SCAN = 400;
 
-/**
- * Tool names whose family writes files: write, edit, patch, notebook and shell (shell only counts
- * when it has paths). Duplicated from `toolFamily` in src/agents/labels.ts because the UI can only
- * import from @shared; keep in sync with that file's FAMILIES table.
- */
-const WRITE_TOOLS = new Set([
-  'write', 'write_file', 'create_file',
-  'edit', 'multiedit', 'replace', 'edit_file', 'str_replace',
-  'apply_patch',
-  'notebookedit',
-  'bash', 'shell', 'run_shell_command', 'exec_command',
-]);
-const isWriteTool = (name: string): boolean => WRITE_TOOLS.has(name.toLowerCase());
+/** A tool call that writes: a write-family built-in, or an MCP tool the shared classifier marks as a write. */
+const isWriteTool = (tool: AgentTool): boolean => (tool.access ?? classifyTool(tool.inner ?? tool.name).access) === 'write';
 
 export interface Target { path: string; since: number }
 
@@ -43,7 +33,7 @@ function runningWrite(events: AgentEvent[], sessions: Record<string, AgentSessio
       if (paired) continue;
       const s = sessions[e.sessionId];
       if (!s || s.status !== 'working' || now - s.lastAt > TOOL_FRESH_MS) continue;
-      if (isWriteTool(e.tool.name) && e.tool.paths?.length) return { path: e.tool.paths[0], since: e.at };
+      if (isWriteTool(e.tool) && e.tool.paths?.length) return { path: e.tool.paths[0], since: e.at };
       continue;
     }
     sawNewer.add(e.sessionId);

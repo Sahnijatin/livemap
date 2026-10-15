@@ -1,13 +1,14 @@
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { AgentEvent, AgentKind, AgentSession, RawAgentEvent } from '../shared/types.js';
+import type { AgentEvent, AgentKind, AgentSession, AgentTool, RawAgentEvent } from '../shared/types.js';
 import { ClaudeTailer } from './claude.js';
 import { lastCodexAssistantText } from './codex.js';
 import { normalizeHook } from './normalize.js';
 import { Control } from './control.js';
 import { findClaudeSessions } from './discovery.js';
 import { outputMentionsSecret, touchesSecret } from './labels.js';
+import { resultSysIds } from '../shared/tools.js';
 
 const MAX_INPUT_STRING = 4000;
 const MAX_TITLE = 80;
@@ -59,7 +60,7 @@ interface SessionState {
   /** When the session last went idle (event time): older transcript lines arriving late do not revive it. */
   idleAt?: number;
 }
-interface StartInfo { name: string; label: string; paths: string[]; secret: boolean }
+interface StartInfo { name: string; label: string; paths: string[]; secret: boolean; inner?: string; access?: AgentTool['access']; targets?: AgentTool['targets'] }
 
 /**
  * One key per transcript file. A hook may name it before Claude creates it (SessionStart), so a
@@ -385,7 +386,10 @@ export class AgentHub extends EventEmitter {
         if (raw.type === 'tool_start') st.open.add(tool.id);
         else if (raw.type === 'tool_end') st.open.delete(tool.id);
         if (raw.type === 'tool_start') {
-          this.starts.set(key, { name: tool.name, label: tool.label, paths: tool.paths, secret: touchesSecret(tool.name, tool.input, tool.paths) });
+          this.starts.set(key, {
+            name: tool.name, label: tool.label, paths: tool.paths, secret: touchesSecret(tool.name, tool.input, tool.paths),
+            ...(tool.inner ? { inner: tool.inner } : {}), ...(tool.access ? { access: tool.access } : {}), ...(tool.targets ? { targets: tool.targets } : {}),
+          });
           if (this.starts.size > MAX_STARTS) this.starts.delete(this.starts.keys().next().value as string);
         } else if (raw.type === 'tool_end') {
           const s = this.starts.get(key);
@@ -393,6 +397,16 @@ export class AgentHub extends EventEmitter {
             tool.name = s.name || tool.name;
             tool.label = s.label || tool.label;
             if (!tool.paths.length) tool.paths = s.paths;
+            // The end has no input, so the start's classification stands; a create's result may add sys_ids.
+            if (s.inner) tool.inner = s.inner;
+            if (s.access) tool.access = s.access;
+            const targets = [...(s.targets ?? []), ...(tool.targets ?? []).filter((t) => !s.targets?.some((x) => x.table === t.table && x.sysId === t.sysId && x.name === t.name))];
+            // A create names its new sys_id only in the result; the end's own input may be empty.
+            const first = s.targets?.[0];
+            if (first && tool.output !== undefined) {
+              for (const id of resultSysIds(tool.output)) if (!targets.some((t) => t.sysId === id)) targets.push({ ...first, sysId: id });
+            }
+            if (targets.length) tool.targets = targets;
             if (s.secret) delete tool.output;
           } else if (agent === 'claude-code') delete tool.output;
         }

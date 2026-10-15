@@ -200,9 +200,10 @@ describe('livemap CLI', () => {
     for (let i = 0; i < 1500; i++) fs.writeFileSync(path.join(root, 'src', `f${i}.ts`), `export function f${i}(x: number) { return x + ${i}; }\n`);
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-bin-'));
     const marker = path.join(bin, 'opened');
-    fs.writeFileSync(path.join(bin, 'xdg-open'), `#!/bin/sh\necho "$1" > "${marker}"\n`, { mode: 0o755 });
+    // openBrowser runs `open` on macOS and `xdg-open` elsewhere; fake both so no real browser starts.
+    for (const name of ['xdg-open', 'open']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "$1" > "${marker}"\n`, { mode: 0o755 });
     try {
-      run([root, '--port', '0'], { ...isolated(), PATH: `${bin}:${process.env.PATH}` });
+      run([root, '--port', '0'], { ...isolated(), PATH: `${bin}${path.delimiter}${process.env.PATH}` });
       await waitFor(() => URL_RE.test(out));
       const [, port, token] = out.match(URL_RE)!;
       const msgs: { type: string }[] = [];

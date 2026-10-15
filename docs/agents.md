@@ -81,7 +81,7 @@ Each change card says which agent made the change, with a confidence label.
 
 | Label | Meaning |
 |---|---|
-| exact | Matched to the tool call that wrote this file: a write, edit, patch, notebook or shell call that names the file, from 10 seconds before to 5 seconds after the change. A git commit that lists the file also counts. |
+| exact | Matched to the tool call that wrote this file: a write, edit, patch, notebook or shell call that names the file, from 10 seconds before to 5 seconds after the change. MCP tools count when their name says they write (for example `write_file`) and their paths are local files, which holds for local filesystem servers but not for GitHub. Gateway calls such as `tool_execute` are judged by the tool they run. A git commit that lists the file also counts. |
 | likely | No tool call named the file, but an agent was active in the 15 seconds before the change, for example when a shell command generated files. |
 | (none) | No agent was active. The Activity feed groups the change under "Outside an agent". |
 

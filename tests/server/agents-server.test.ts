@@ -245,6 +245,28 @@ describe('POST /hook', () => {
     expect(hub!.events()).toHaveLength(0);
     expect((await api(s, 'GET', '/api/health')).status).toBe(200);
   });
+
+  it('a 9 MB body is answered 413 while the client still sends, with no reset or broken pipe (macOS CI)', async () => {
+    const s = await boot();
+    const body = Buffer.alloc(9 * 1024 * 1024, 0x7a);
+    for (const chunked of [false, true]) {
+      const got = await new Promise<{ status: number; error?: string }>((resolve) => {
+        const headers: Record<string, string> = { host: `127.0.0.1:${s.port}`, 'x-livemap-token': s.token, ...JSON_CT };
+        if (!chunked) headers['content-length'] = String(body.length);
+        let status = 0;
+        let error: string | undefined;
+        const req = http.request({ host: '127.0.0.1', port: s.port, path: '/hook', method: 'POST', headers }, (res) => {
+          status = res.statusCode ?? 0;
+          res.resume();
+        });
+        // Wait for the upload itself to finish: a socket error after the response is what macOS turns into a lost 413.
+        req.on('error', (e: NodeJS.ErrnoException) => { error = e.code; resolve({ status, error }); });
+        req.on('close', () => resolve({ status, error }));
+        if (chunked) { for (let i = 0; i < body.length; i += 1024 * 1024) req.write(body.subarray(i, i + 1024 * 1024)); req.end(); } else req.end(body);
+      });
+      expect(got).toEqual({ status: 413 });
+    }
+  });
 });
 
 describe('/api control routes', () => {

@@ -6,6 +6,9 @@ import { ANALYZERS, analyzeFile } from '../../../src/engine/domain/index.js';
 import { schemaPy } from '../../../src/engine/domain/schema-py.js';
 import { langOf } from '../../../src/engine/languages.js';
 
+/** Wall-clock budgets are for a developer machine; CI sets a larger factor on slower macOS and Windows runners. */
+const TIME_SCALE = Number(process.env.LIVEMAP_TIME_SCALE) || 1;
+
 const DIR = fileURLToPath(new URL('../../fixtures/domain/schema/', import.meta.url));
 const run = (rel: string, text: string) => analyzeFile(rel, langOf(rel), text, [schemaPy]).entities;
 const names = (rel: string, text: string): string[] => run(rel, text).map(e => e.name);
@@ -154,7 +157,8 @@ describe('schema-py analyzer', () => {
     for (const [rel, t] of cases) {
       const start = performance.now();
       run(rel, t);
-      expect(performance.now() - start, `${rel} ${t.slice(0, 24)}`).toBeLessThan(1000);
+      // A backtracking regex takes seconds to minutes here; slower CI runners scale the budget (LIVEMAP_TIME_SCALE).
+      expect(performance.now() - start, `${rel} ${t.slice(0, 24)}`).toBeLessThan(1000 * TIME_SCALE);
     }
     expect(spy).not.toHaveBeenCalled();
   });
