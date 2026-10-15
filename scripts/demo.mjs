@@ -266,7 +266,8 @@ function records() {
 const changeSeq = (rel, after) => records().filter((r) => r.msg?.type === 'change' && r.msg.change?.path === rel && r.seq > after).at(-1)?.seq ?? 0;
 
 /** The seq of the newest agent event recorded after `after` that `match` accepts (0 while there is none). */
-const eventSeq = (after, match) => records().filter((r) => r.seq > after && r.msg?.type === 'agentEvent' && r.msg.event && match(r.msg.event)).at(-1)?.seq ?? 0;
+const eventsOf = (msg) => (msg?.type === 'agentEvent' && msg.event ? [msg.event] : msg?.type === 'agentEvents' ? msg.events ?? [] : []);
+const eventSeq = (after, match) => records().filter((r) => r.seq > after && eventsOf(r.msg).some(match)).at(-1)?.seq ?? 0;
 
 // ---------------------------------------------------------------- the fake Claude Code session
 
@@ -327,7 +328,7 @@ let toolNo = 0;
 
 /**
  * One tool call: the tool_use reaches the transcript, PreToolUse runs (and may block it with a flag), the
- * tool's effect happens, then its result is written and PostToolUse runs. Returns the PreToolUse result.
+ * tool's effect happens, then its result is written. Returns the PreToolUse result.
  */
 async function tool(name, input, { effect, output = '', label = name, onStart } = {}) {
   const id = `toolu_demo_${String(++toolNo).padStart(2, '0')}`;
@@ -343,7 +344,6 @@ async function tool(name, input, { effect, output = '', label = name, onStart } 
   if (effect) await effect();
   if (onStart) await onStart();
   await transcriptLine('user', [{ type: 'tool_result', tool_use_id: id, content: output }], `${label} result`, (e) => e.type === 'tool_end' && e.tool?.id === id);
-  await runHook('PostToolUse', { tool_name: name, tool_input: input, tool_use_id: id, tool_response: { success: true } });
   await sleep(GAP);
   return pre;
 }

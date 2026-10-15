@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { isSecretEnvPath, SECRET_NAME_ALT } from '../engine/languages.js';
-import { classifyTool, familyOf, unwrapTool, type RecordTarget, type ToolAccess, type ToolClass } from '../shared/tools.js';
+import { classifyTool, familyOf, takesLocalPaths, unwrapTool, type RecordTarget, type ToolAccess, type ToolClass } from '../shared/tools.js';
 
 const MAX_LABEL = 160;
 /** Stored in place of a shell command that names a secret env file. */
@@ -209,7 +209,12 @@ function callLabel(name: string, input: unknown): string {
   return [c.inner ?? c.name, str(a.action), table, target && shortId(target)].filter(Boolean).join(' ');
 }
 
+/**
+ * Root-relative local files a tool call names. MCP tools whose paths are not local files (a GitHub
+ * repo path, a nexus artifact path) name none, so a local edit is never matched to a remote write.
+ */
 export function toolPaths(name: string, input: unknown, root: string, cwd?: string): string[] {
+  if (!takesLocalPaths(name, input)) return [];
   const fam = familyOf(name);
   const raw = fam === 'patch' ? patchPaths(commandText(input) ?? '') : inputPaths(unwrapTool(name, input).args);
   const set = new Set<string>();

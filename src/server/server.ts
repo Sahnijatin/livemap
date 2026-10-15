@@ -479,17 +479,28 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   watcher.on('reset', onReset);
 
   // Before ready(), hello carries the agent state, so live agent messages wait for it.
-  const onEvent = (event: AgentEvent): void => { if (isReady) broadcast({ type: 'agentEvent', event }); };
+  // A batch (a transcript tailer's read) goes out as one message, so the UI updates once for it.
+  // Attributions a batch's events trigger wait for the batch, so history keeps cause before effect.
+  let afterBatch: ServerMessage[] = [];
+  const onEvents = (events: AgentEvent[]): void => {
+    if (isReady) broadcast(events.length === 1 ? { type: 'agentEvent', event: events[0] } : { type: 'agentEvents', events });
+    if (hub?.batching) return; // an outer batch is still open
+    const queued = afterBatch;
+    afterBatch = [];
+    if (isReady) for (const m of queued) broadcast(m);
+  };
   const onSession = (session: AgentSession): void => { if (isReady) broadcast({ type: 'session', session }); };
   const onControl = (control: ControlState): void => { if (isReady) broadcast({ type: 'control', control }); };
   const onLate = (changeId: number, attribution: Attribution): void => {
     const i = changes.findIndex(c => c.id === changeId);
     if (i !== -1) changes[i] = { ...changes[i], attribution };
-    if (isReady) broadcast({ type: 'attribution', changeId, attribution });
+    if (!isReady) return;
+    if (hub?.batching) afterBatch.push({ type: 'attribution', changeId, attribution });
+    else broadcast({ type: 'attribution', changeId, attribution });
   };
   const onSummaryStatus = (status: SummaryStatus): void => { if (isReady && !closed) broadcast({ type: 'summaryStatus', status }); };
   summarizer?.on('status', onSummaryStatus);
-  hub?.on('event', onEvent);
+  hub?.on('events', onEvents);
   hub?.on('session', onSession);
   hub?.control.on('change', onControl);
   attributor?.on('late', onLate);
@@ -626,7 +637,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
       closed = true;
       summarizer?.off('status', onSummaryStatus);
       watcher.off('change', onChange);
-      hub?.off('event', onEvent);
+      hub?.off('events', onEvents);
       hub?.off('session', onSession);
       hub?.control.off('change', onControl);
       attributor?.off('late', onLate);

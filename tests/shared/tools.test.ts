@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  baseToolName, classifyTool, isWriteCall, recordTargetsOf, registerToolRule, resultSysIds, sameRecord, toolServer, unwrapTool,
+  baseToolName, classifyTool, isWriteCall, recordTargetsOf, registerToolRule, resultSysIds, sameRecord, takesLocalPaths, toolServer, unwrapTool,
 } from '../../src/shared/tools.js';
 
 // The exact names SkyForge v4.4.2 sends to plugin hooks (verified 15 Oct 2026).
@@ -165,5 +165,80 @@ describe('helpers', () => {
     expect(sameRecord(t, { table: 'sys_script_include', sysId: SYS_ID })).toBe(false);
     expect(sameRecord({ kind: 'record', instance: '', table: 'sys_update_set', name: 'X' }, { table: 'sys_update_set', name: 'X', sysId: SYS_ID })).toBe(true);
     expect(sameRecord({ kind: 'record', instance: '', table: 't' }, { table: 't' })).toBe(false);
+  });
+});
+
+describe('review of #64', () => {
+  const ID2 = '9a8b7c6d5e4f30211203f4e5d6c7b8a9';
+
+  it('item 2: resultSysIds reads the nexus tool_execute wrapper and nested shapes', () => {
+    // Shape checked live with sn_get_instance_info: {success, tool, result: {success, data: {...}}}.
+    const wrapped = { success: true, tool: 'sn_record_manage', result: { success: true, data: { sys_id: SYS_ID, name: 'Set offer' } } };
+    expect(resultSysIds(wrapped)).toEqual([SYS_ID]);
+    expect(resultSysIds(JSON.stringify(wrapped))).toEqual([SYS_ID]);
+    expect(resultSysIds({ success: true, tool: 'x', result: { success: true, data: { record: { sys_id: SYS_ID } } } })).toEqual([SYS_ID]);
+    expect(resultSysIds({ success: true, data: { records: [{ sys_id: SYS_ID }, { sys_id: ID2 }], count: 2, has_more: false } })).toEqual([SYS_ID]);
+    expect(resultSysIds({ result: { data: { records: [{ sys_id: ID2 }] } } })).toEqual([ID2]);
+  });
+
+  it('item 2: a result cut off mid-JSON falls back to the first few sys_id pairs', () => {
+    const full = JSON.stringify({ success: true, tool: 'sn_record_manage', result: { success: true, data: { sys_id: SYS_ID, script: 'x'.repeat(5000) } } });
+    const cut = full.slice(0, 4000);
+    expect(() => JSON.parse(cut)).toThrow();
+    expect(resultSysIds(cut)).toEqual([SYS_ID]);
+    const many = '{"data":{"records":[' + Array.from({ length: 9 }, (_, i) => `{"sys_id" : "${String(i).repeat(32)}"}`).join(',');
+    expect(resultSysIds(many)).toHaveLength(5);
+    expect(resultSysIds('{"sys_id":"not-an-id"')).toEqual([]);
+  });
+
+  it('item 2: a create through tool_execute gets its new sys_id from the wrapped result', () => {
+    const output = JSON.stringify({ success: true, tool: 'sn_record_manage', result: { success: true, data: { sys_id: SYS_ID } } });
+    const c = classifyTool(EXEC, { tool: 'sn_record_manage', args: { table: 'sys_script_include', action: 'create', data: { name: 'OfferUtils', api_name: 'x_snc_cc_offering.OfferUtils' } } }, { output });
+    expect(c.targets).toEqual([
+      { kind: 'record', instance: '', table: 'sys_script_include', name: 'OfferUtils' },
+      { kind: 'record', instance: '', table: 'sys_script_include', sysId: SYS_ID, name: 'OfferUtils' },
+    ]);
+  });
+
+  it('item 3: sn_intermediate_flow reads on get, writes on every other action, and targets sys_hub_flow', () => {
+    expect(classifyTool(EXEC, { tool: 'sn_intermediate_flow', args: { action: 'get', sys_id: SYS_ID } })).toMatchObject({ access: 'read', targets: [] });
+    for (const action of ['create_flow', 'create_subflow', 'promote', 'populate_inputs', 'update_flow', 'delete_flow', 'add_component', 'delete_component', 'update_trigger']) {
+      expect(classifyTool(EXEC, { tool: 'sn_intermediate_flow', args: { action } }).access).toBe('write');
+    }
+    expect(classifyTool(EXEC, { tool: 'sn_intermediate_flow', args: { action: 'update_flow', sys_id: SYS_ID } }).targets).toEqual([
+      { kind: 'record', instance: '', table: 'sys_hub_flow', sysId: SYS_ID },
+    ]);
+    expect(classifyTool(EXEC, { tool: 'sn_intermediate_flow', args: { action: 'create_flow', name: 'Approve offer' } }).targets).toEqual([
+      { kind: 'record', instance: '', table: 'sys_hub_flow', name: 'Approve offer' },
+    ]);
+  });
+
+  it('item 4: an update set name is not a record name, except for sn_update_set_manage', () => {
+    const c = classifyTool('sn_record_manage', { table: 'sys_script', action: 'update', sys_id: SYS_ID, update_set: 'CC v2' });
+    expect(c.targets).toEqual([{ kind: 'record', instance: '', table: 'sys_script', sysId: SYS_ID }]);
+    expect(classifyTool('sn_record_manage', { table: 'sys_script', action: 'create', update_set_name: 'CC v2' }).targets).toEqual([
+      { kind: 'record', instance: '', table: 'sys_script' },
+    ]);
+    expect(classifyTool('sn_update_set_manage', { action: 'switch', update_set: 'CC v2' }).targets).toEqual([
+      { kind: 'record', instance: '', table: 'sys_update_set', name: 'CC v2' },
+    ]);
+  });
+
+  it('item 5: a create names its record inside data', () => {
+    expect(classifyTool('sn_record_manage', { table: 'sys_script_include', action: 'create', data: { api_name: 'x.Utils' } }).targets[0]).toMatchObject({ name: 'x.Utils' });
+    expect(classifyTool('sn_record_manage', { table: 'sys_script', action: 'create', data: { sys_name: 'Set offer' } }).targets[0]).toMatchObject({ name: 'Set offer' });
+    // A name at the top level wins over one in data.
+    expect(classifyTool('sn_record_manage', { table: 't', action: 'create', name: 'top', data: { name: 'inner' } }).targets[0]).toMatchObject({ name: 'top' });
+  });
+
+  it('item 6: only built-ins, local filesystem servers and sn_pull_artifact take local paths', () => {
+    expect(takesLocalPaths('Edit', { file_path: 'a' })).toBe(true);
+    expect(takesLocalPaths('mcp__filesystem__write_file', { path: 'a' })).toBe(true);
+    expect(takesLocalPaths('mcp__github__create_or_update_file', { path: 'a' })).toBe(false);
+    expect(takesLocalPaths(EXEC, { tool: 'sn_pull_artifact', args: { file_path: 'a' } })).toBe(true);
+    expect(takesLocalPaths('sn_pull_artifact', { file_path: 'a' })).toBe(true);
+    expect(takesLocalPaths(EXEC, { tool: 'sn_push_artifact', args: { file_path: 'a' } })).toBe(false);
+    expect(takesLocalPaths('sn_push_artifact', { file_path: 'a' })).toBe(false);
+    expect(takesLocalPaths(EXEC, { tool: 'write_file', args: { file_path: 'a' } })).toBe(false);
   });
 });

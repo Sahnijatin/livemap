@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { watch, type FSWatcher } from 'chokidar';
 import type { ChangeSummary, FileModel } from '../shared/types.js';
@@ -45,6 +46,11 @@ export class Watcher extends EventEmitter {
   private waiting = 0;
   private nextId = 1;
   private stopped = false;
+  /**
+   * Files a reload indexed under a directory it began watching, with the stat it saw. Any event
+   * job for the path consumes the entry; an `add` is skipped only if the file still matches it.
+   */
+  private skipAdd = new Map<string, { size: number; mtimeMs: number }>();
   /** chokidar finished its initial crawl. */
   private ready = false;
 
@@ -57,6 +63,7 @@ export class Watcher extends EventEmitter {
   }
 
   start(): Promise<void> {
+    if (this.fsw) throw new Error('watcher already started');
     this.stopped = false;
     this.ready = false;
     const fsw = watch(this.model.root, {
@@ -89,6 +96,7 @@ export class Watcher extends EventEmitter {
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();
     this.pendingSince.clear();
+    this.skipAdd.clear();
     this.gitignores.clear(); // their debounced job was just cancelled
     this.deferSince = null;
     const fsw = this.fsw;
@@ -124,7 +132,23 @@ export class Watcher extends EventEmitter {
       return;
     }
     if (this.model.ignored(rel)) return;
-    this.schedule(`f:${rel}`, deferRelink => this.model.update(rel, ev, { deferRelink }).then(r => (r ? [r] : [])));
+    this.schedule(`f:${rel}`, async deferRelink => {
+      // The reload already read this file; chokidar's crawl of its directory reports it again.
+      const seen = this.skipAdd.get(rel);
+      this.skipAdd.delete(rel);
+      if (ev === 'add' && seen && (await this.unchanged(rel, seen))) return [];
+      const r = await this.model.update(rel, ev, { deferRelink });
+      return r ? [r] : [];
+    });
+  }
+
+  private async unchanged(rel: string, seen: { size: number; mtimeMs: number }): Promise<boolean> {
+    try {
+      const st = await fsp.lstat(path.join(this.model.root, ...rel.split('/')));
+      return st.size === seen.size && st.mtimeMs === seen.mtimeMs;
+    } catch {
+      return false;
+    }
   }
 
   /** Reloads the rules for every pending .gitignore path in one debounced job. */
@@ -134,22 +158,26 @@ export class Watcher extends EventEmitter {
       this.gitignores.clear();
       if (paths.length === 0) return []; // an earlier queued job already took this batch
       let reloaded: Awaited<ReturnType<ProjectModel['reloadIgnores']>>;
+      let watched: string[] = [];
       try {
         reloaded = await this.model.reloadIgnores(paths, {
           // Directories that were ignored when chokidar crawled were never watched; watch them
           // before the reload reads them. chokidar's crawl of them reports every file it finds
           // (ignoreInitial is off), so files created meanwhile get their own add events.
-          onIncluded: dirs => this.watchIncluded(dirs),
+          onIncluded: dirs => { watched = dirs; this.watchIncluded(dirs); },
         });
       } catch (e) {
         // A reload that fails partway leaves the model inconsistent with the new rules; rebuild it
         // from disk and have clients start over from a fresh hello.
         this.fail(e);
-        await this.model.scan();
+        // If the rescan fails too, clients still get a reset from whatever the model holds (possibly empty); both errors are reported.
+        try { await this.model.scan(); } catch (err) { this.fail(err); }
         if (!this.stopped) this.emit('reset');
         return [];
       }
-      const { files, removed, created } = reloaded;
+      const { files, removed, created, indexed } = reloaded;
+      // Only files under a newly watched directory get a crawl add; others have none to skip.
+      for (const f of indexed) if (watched.some(d => f.path.startsWith(`${d}/`))) this.skipAdd.set(f.path, f);
       // A throwing listener must not lose the .gitignore files' own changes below.
       if (!this.stopped && (files.length || removed.length)) {
         try { this.emit('touched', files, removed); } catch (e) { this.fail(e); }

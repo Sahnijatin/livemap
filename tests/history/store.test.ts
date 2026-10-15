@@ -17,9 +17,16 @@ beforeEach(() => {
   home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hist-home-')));
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hist-root-')));
 });
+// A test may leave a nested dir read-only (write failure); non-root rm needs every dir writable again.
+function makeWritable(d: string): void {
+  try {
+    fs.chmodSync(d, 0o700);
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) if (e.isDirectory()) makeWritable(path.join(d, e.name));
+  } catch { /* gone or not a dir */ }
+}
 afterEach(() => {
   for (const d of [home, root]) {
-    try { fs.chmodSync(d, 0o700); } catch { /* gone */ }
+    makeWritable(d);
     fs.rmSync(d, { recursive: true, force: true });
   }
 });
@@ -70,7 +77,7 @@ describe('projectDir', () => {
 
 describe('RECORDED_TYPES', () => {
   it('records data messages and never hello or indexing', async () => {
-    expect([...RECORDED_TYPES].sort()).toEqual(['agentEvent', 'attribution', 'change', 'control', 'domain', 'fileSummary', 'files', 'session', 'summary', 'usedBy']);
+    expect([...RECORDED_TYPES].sort()).toEqual(['agentEvent', 'agentEvents', 'attribution', 'change', 'control', 'domain', 'fileSummary', 'files', 'session', 'summary', 'usedBy']);
     const store = await open();
     await store.startRun(startState());
     expect(store.append({ type: 'indexing', done: 1, total: 2 })).toBe(-1);
@@ -79,6 +86,26 @@ describe('RECORDED_TYPES', () => {
     await store.flush();
     expect(store.messages(1, 100).map(r => r.msg.type)).toEqual(['hello', 'agentEvent']);
     await store.close();
+  });
+
+  it('old single agentEvent records replay to the same state as agentEvents batches (Review Focus 2)', async () => {
+    const events = Array.from({ length: 30 }, (_, i) => agentEvent(i + 1, EVENT_TYPES[i % EVENT_TYPES.length], `e${i}`));
+    const old = await open();
+    await old.startRun(startState());
+    for (const e of events) old.append({ type: 'agentEvent', event: e });
+    await old.flush();
+    const { seq: _s1, at: _a1, ...fromOld } = await old.stateAt(old.info().last);
+    await old.close();
+    fs.rmSync(projectDir(root, home), { recursive: true, force: true });
+    const batched = await open();
+    await batched.startRun(startState());
+    for (let i = 0; i < events.length; i += 10) batched.append({ type: 'agentEvents', events: events.slice(i, i + 10) });
+    await batched.flush();
+    expect(batched.messages(1, 100).map(r => r.msg.type)).toEqual(['hello', 'agentEvents', 'agentEvents', 'agentEvents']);
+    const { seq: _s2, at: _a2, ...fromBatches } = await batched.stateAt(batched.info().last);
+    await batched.close();
+    expect(fromOld.events).toEqual(events);
+    expect(fromBatches).toEqual(fromOld);
   });
 
   it('append before startRun records nothing and returns -1', async () => {
@@ -189,6 +216,30 @@ describe('HistoryStore basics', () => {
     for (const f of fs.readdirSync(dir).filter(f => f !== 'snapshots')) expect(mode(path.join(dir, f))).toBe(0o600);
     for (const f of snaps) expect(mode(path.join(dir, 'snapshots', f))).toBe(0o600);
     expect(fs.existsSync(path.join(dir, 'index.json'))).toBe(true);
+  });
+
+  it('snapshots a 5,000-file state', async () => {
+    const store = await open({ snapshotEvery: 2 });
+    await store.startRun(startState());
+    const sync: number[] = [];
+    // The same paths each round, so the state stays at 5,000 files.
+    const files = Array.from({ length: 5000 }, (_, i) => file(`src/f${i}.ts`));
+    for (let run = 0; run < 6; run++) {
+      const msg: ServerMessage = { type: 'files', files, removed: [] };
+      const text = JSON.stringify(msg);
+      // The big record is over the flush threshold, so appending it flushes (and snapshots) at once.
+      const t0 = performance.now();
+      store.append(msg, 1, text);
+      sync.push(performance.now() - t0);
+      await store.flush();
+      store.append({ type: 'control', control: { paused: false, flags: [] } });
+    }
+    await store.close();
+    sync.shift(); // warm-up
+    sync.sort((a, b) => a - b);
+    const median = sync[Math.floor(sync.length / 2)];
+    expect(median).toBeLessThan(50);
+    expect(fs.readdirSync(path.join(projectDir(root, home), 'snapshots'))).toContain('2.json.gz');
   });
 
   it('reopens from index.json, and rebuilds when it is missing or garbage', async () => {
@@ -429,6 +480,16 @@ describe('ticks', () => {
     expect(t.buckets[0].counts).toEqual({ prompt: 1, message: 2, tool: 2, change: 1, commit: 1, other: 4 });
     expect(t.runStarts).toEqual([1, 11]);
     expect(store.ticks(4, 2, 11).runStarts).toEqual([11]);
+    await store.close();
+  });
+
+  it('an agentEvents batch counts as the first kind in tick order among its events', async () => {
+    const store = await open();
+    await store.startRun(startState());
+    store.append({ type: 'agentEvents', events: [agentEvent(1, 'tool_start'), agentEvent(2, 'prompt'), agentEvent(3, 'status')] });
+    store.append({ type: 'agentEvents', events: [agentEvent(4, 'status'), agentEvent(5, 'tool_end')] });
+    await store.flush();
+    expect(store.ticks(1).buckets[0].counts).toEqual({ prompt: 1, message: 0, tool: 1, change: 0, commit: 0, other: 1 });
     await store.close();
   });
 });

@@ -114,17 +114,36 @@ export class GitWatcher extends EventEmitter {
     await this.poll();
   }
 
-  /** Files the commit changed (a merge: against its first parent), relative to the root; undefined on failure. */
-  private async commitPaths(sha: string): Promise<string[] | undefined> {
-    const args = (merges: string[]) => ['diff-tree', '--no-commit-id', '--name-only', '-r', ...merges, '--root', '--relative', '-z', sha];
+  /**
+   * Files each commit in `range` changed (a merge: against its first parent), relative to the root, from one
+   * `git log`; undefined on failure. Renames count as a delete and an add, as `diff-tree` lists them.
+   */
+  private async rangePaths(range: string): Promise<Map<string, string[]> | undefined> {
+    const args = (merges: string[]) => ['log', `--max-count=${MAX_COMMITS}`, '--no-show-signature', '--name-only', '-z', '--root', '--relative', '--no-renames', ...merges, `--format=${RECORD}%H`, range];
     let out: string;
     try {
       out = await this.run(this.root, args(['--diff-merges=first-parent']));
     } catch {
-      // git before 2.31: `-m --first-parent` (a merge may then also list files from its other parents).
-      try { out = await this.run(this.root, args(['-m', '--first-parent'])); } catch { return undefined; }
+      // git before 2.31: `-m` lists a merge once per parent, first parent first; only that first list is kept.
+      try { out = await this.run(this.root, args(['-m'])); } catch { return undefined; }
     }
-    return [...new Set(out.split('\0').filter(Boolean))].slice(0, MAX_PATHS);
+    const paths = new Map<string, string[]>();
+    let list: string[] | null = null;
+    let first = false;
+    for (const tok of out.split('\0')) {
+      if (tok.startsWith(RECORD)) {
+        const sha = tok.slice(1);
+        list = paths.has(sha) ? null : [];
+        if (list) paths.set(sha, list);
+        first = true;
+        continue;
+      }
+      // The first path after a commit line starts with the newline that ends it.
+      const p = first ? tok.replace(/^\n/, '') : tok;
+      first = false;
+      if (p && list && list.length < MAX_PATHS && !list.includes(p)) list.push(p);
+    }
+    return paths;
   }
 
   private async poll(): Promise<void> {
@@ -147,11 +166,12 @@ export class GitWatcher extends EventEmitter {
       const out = await this.run(this.root, ['log', '--reverse', `--max-count=${MAX_COMMITS}`, '--no-show-signature', `--format=%H${FIELD}%ct${FIELD}%an${FIELD}%s${FIELD}%b${RECORD}`, range]);
       const seenAt = Date.now();
       const events: RawAgentEvent[] = [];
+      const pathsOf = await this.rangePaths(range);
       for (const rec of out.split(RECORD)) {
         if (!rec.trim()) continue;
         const [sha, at, author, subject, body = ''] = rec.replace(/^\n/, '').split(FIELD);
         const text = `${subject}\n\n${body}`.trim().slice(0, MAX_TEXT);
-        const paths = await this.commitPaths(sha);
+        const paths = pathsOf?.get(sha);
         events.push({ agent: 'git', sessionId: author, at: Number(at) * 1000, seenAt, type: 'commit', text, ...(paths ? { paths } : {}) });
       }
       this.head = next;

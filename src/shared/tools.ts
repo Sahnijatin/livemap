@@ -78,6 +78,8 @@ export interface ToolRule {
   family?: ToolFamily;
   /** Records the call targets, from its unwrapped args. */
   targets?: (args: Obj) => RecordTarget[];
+  /** Its path args name files on this machine (default: only for built-in tools and local filesystem servers). */
+  localPaths?: boolean;
 }
 
 const RECORD_READ_ACTIONS = new Set(['get', 'read', 'query', 'list', 'search', 'find', 'count', 'describe', 'fetch']);
@@ -86,12 +88,24 @@ const actionAccess = (a: Obj): ToolAccess => {
   return action && RECORD_READ_ACTIONS.has(action) ? 'read' : 'write';
 };
 
-/** `{table, sys_id}` or `{table, name}` from common arg spellings; none when the call names no table. */
-export function recordTargetsOf(args: Obj, defaults: { table?: string } = {}): RecordTarget[] {
+const NAME_KEYS = ['name', 'api_name', 'sys_name'];
+/** Update set names: only `sn_update_set_manage` reads them as the record name; other tools pass them as context. */
+const UPDATE_SET_KEYS = ['update_set', 'update_set_name'];
+const firstStr = (o: Obj, keys: string[]): string | undefined => {
+  for (const k of keys) { const v = str(o[k]); if (v) return v; }
+  return undefined;
+};
+
+/**
+ * `{table, sys_id}` or `{table, name}` from common arg spellings; none when the call names no table. A
+ * create sends the new record's fields in `data`, so its name is read from there too.
+ */
+export function recordTargetsOf(args: Obj, defaults: { table?: string; nameKeys?: string[] } = {}): RecordTarget[] {
   const table = str(args.table) ?? str(args.table_name) ?? str(args.tableName) ?? defaults.table;
   if (!table) return [];
   const sysId = str(args.sys_id) ?? str(args.sysId) ?? str(args.record_id) ?? str(args.recordId);
-  const name = str(args.name) ?? str(args.api_name) ?? str(args.sys_name) ?? str(args.update_set) ?? str(args.update_set_name);
+  const keys = defaults.nameKeys ?? NAME_KEYS;
+  const name = firstStr(args, keys) ?? firstStr(rec(args.data), keys);
   const out: RecordTarget = { kind: 'record', instance: str(args.instance) ?? '', table };
   if (sysId) out.sysId = sysId;
   if (name) out.name = name;
@@ -99,6 +113,7 @@ export function recordTargetsOf(args: Obj, defaults: { table?: string } = {}): R
 }
 
 const records = (a: Obj) => recordTargetsOf(a);
+const lowerAction = (a: Obj) => str(a.action)?.toLowerCase();
 
 /** ServiceNow (SkyForge nexus) tools. Rules are tried in order; the first match wins. */
 const SERVICENOW_RULES: ToolRule[] = [
@@ -110,14 +125,20 @@ const SERVICENOW_RULES: ToolRule[] = [
   { match: 'sn_aggregate_metrics', access: 'read' },
   { match: 'sn_load_skill', access: 'other' },
   { match: 'tool_search', access: 'other' },
-  // Pulls an instance record to local files: it reads the instance.
-  { match: 'sn_pull_artifact', access: 'read' },
+  // Pulls an instance record to local files: it reads the instance, and its path args are local files.
+  { match: 'sn_pull_artifact', access: 'read', localPaths: true },
   { match: 'sn_record_manage', access: actionAccess, targets: records },
   { match: 'sn_push_artifact', access: 'write', targets: records },
-  { match: 'sn_update_set_manage', access: (a) => (str(a.action)?.toLowerCase() === 'list' || str(a.action)?.toLowerCase() === 'get' ? 'read' : 'write'), targets: (a) => recordTargetsOf(a, { table: 'sys_update_set' }) },
+  {
+    match: 'sn_update_set_manage',
+    access: (a) => (lowerAction(a) === 'list' || lowerAction(a) === 'get' ? 'read' : 'write'),
+    targets: (a) => recordTargetsOf(a, { table: 'sys_update_set', nameKeys: [...NAME_KEYS, ...UPDATE_SET_KEYS] }),
+  },
   { match: 'sn_execute_background_script', access: 'write' },
   { match: 'sn_schedule_script_job', access: 'write' },
-  { match: 'sn_intermediate_flow', access: 'write', targets: records },
+  // Actions: get (read), and create_flow, create_subflow, update_flow, delete_flow, promote, populate_inputs, add_component,
+  // delete_component, update_trigger (writes). Its args name the flow by sys_id or name, never by table.
+  { match: 'sn_intermediate_flow', access: (a) => (lowerAction(a) === 'get' ? 'read' : 'write'), targets: (a) => recordTargetsOf(a, { table: 'sys_hub_flow' }) },
   { match: /^sn_(create|update|delete|add|remove|set|activate|deactivate|publish)_/, access: 'write', targets: records },
 ];
 
@@ -127,7 +148,11 @@ const WRITE_VERBS = new Set([
 ]);
 const READ_VERBS = new Set(['get', 'list', 'search', 'query', 'read', 'fetch', 'find', 'describe', 'view', 'show', 'lookup', 'download', 'count']);
 
-/** Fallback for unknown MCP tools (prefixed names and `sn_*`): the first verb in the name decides (`create_or_update_file` writes, `list_issues` reads). */
+/**
+ * Fallback for unknown MCP tools (prefixed names and `sn_*`): the first verb in the name decides
+ * (`create_or_update_file` writes, `list_issues` reads). A name with a read verb first, such as
+ * `get_or_create_x`, comes out as a read; that is accepted for a fallback, and a rule can say otherwise.
+ */
 function verbAccess(base: string): ToolAccess | undefined {
   for (const t of base.toLowerCase().split(/[_\-.]+/)) {
     if (WRITE_VERBS.has(t)) return 'write';
@@ -165,19 +190,43 @@ export interface ToolClass {
   targets: RecordTarget[];
 }
 
-/** sys_ids a write result names (`sys_id`, `data.sys_id`, `result.sys_id`, or the same inside JSON text). */
+const SYS_ID = /^[0-9a-f]{32}$/i;
+const SYS_ID_TEXT = /"sys_id"\s*:\s*"([0-9a-f]{32})"/gi;
+/** At most this many sys_ids are taken from text that does not parse. */
+const MAX_TEXT_IDS = 5;
+
+/** The objects a result may carry its record in: top level, `data`, `record`, `records[0]`, under `result` or not. */
+function resultObjects(top: Obj): Obj[] {
+  const out: Obj[] = [];
+  for (const base of [top, rec(top.result)]) {
+    const data = rec(base.data);
+    const list = Array.isArray(data.records) ? data.records : [];
+    out.push(base, data, rec(data.record), rec(list[0]));
+  }
+  return out;
+}
+
+/**
+ * sys_ids a write result names. Nexus wraps a `tool_execute` result as
+ * `{success, tool, result: {success, data: {...}}}`, so `result.data.sys_id` counts as well as `sys_id`,
+ * `data.sys_id`, `data.record.sys_id` and `data.records[0].sys_id`. Output is stored cut to 4,000
+ * characters, so text that does not parse falls back to the first few `"sys_id": "<32 hex>"` pairs.
+ */
 export function resultSysIds(output: unknown): string[] {
   let o: unknown = output;
   if (typeof o === 'string') {
     const t = o.trimStart();
     if (!t.startsWith('{')) return [];
-    try { o = JSON.parse(t); } catch { return []; }
+    try { o = JSON.parse(t); } catch {
+      const ids = new Set<string>();
+      for (const m of t.matchAll(SYS_ID_TEXT)) { ids.add(m[1]); if (ids.size >= MAX_TEXT_IDS) break; }
+      return [...ids];
+    }
   }
   const out = new Set<string>();
-  const top = rec(o);
-  for (const v of [top, rec(top.data), rec(top.result), rec(rec(top.data).record)]) {
+  for (const v of resultObjects(rec(o))) {
     const id = str(v.sys_id);
-    if (id && /^[0-9a-f]{32}$/i.test(id)) out.add(id);
+    if (id && SYS_ID.test(id)) out.add(id);
   }
   return [...out];
 }
@@ -222,6 +271,24 @@ export function classifyTool(name: string, input?: unknown, opts: { instance?: s
   }
   if (opts.instance) for (const t of out.targets) if (!t.instance) t.instance = opts.instance;
   return out;
+}
+
+/** MCP servers whose path args name files on this machine. Other servers (GitHub, for one) name remote paths. */
+export const LOCAL_FS_SERVERS = new Set(['filesystem', 'fs', 'desktop-commander']);
+
+/**
+ * Whether a call's path args are files on this machine: built-in agent tools and local filesystem MCP
+ * servers say yes; a rule can say so for its tool (`sn_pull_artifact`); other MCP and ServiceNow tools
+ * say no, since a GitHub `path` or a nexus `file_path` is not a local file the call wrote.
+ */
+export function takesLocalPaths(name: string, input?: unknown): boolean {
+  const { inner, name: base } = unwrapTool(name, input);
+  const real = inner ?? base;
+  const rule = ruleFor(real);
+  if (rule) return !!rule.localPaths;
+  const server = toolServer(name);
+  if (server) return LOCAL_FS_SERVERS.has(server.toLowerCase()) && !inner;
+  return !inner && !/^sn_/.test(real);
 }
 
 /** True when the call can change files or records. */

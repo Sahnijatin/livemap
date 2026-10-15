@@ -12,7 +12,7 @@ Dashed boxes are inputs. Everything runs on your machine; only the summarizer, w
 
 ## Parsers
 
-`src/engine/parser.ts` and `src/engine/symbols/` parse code with tree-sitter (WebAssembly grammars from `tree-sitter-wasms`) for TypeScript, JavaScript, Python, Go, Rust, Java, Kotlin, C#, PHP, Ruby, Swift, C, C++ and Dart. They extract functions, classes, methods and other symbols with their signatures and lines, and `src/engine/imports.ts` resolves imports into links between files. If a file stops parsing cleanly mid-edit, the model keeps its last clean symbols.
+`src/engine/parser.ts` and `src/engine/symbols/` parse code with tree-sitter (WebAssembly grammars from `tree-sitter-wasms`, of which the build copies the 15 it loads to `dist/grammars/`) for TypeScript, JavaScript, Python, Go, Rust, Java, Kotlin, C#, PHP, Ruby, Swift, C, C++ and Dart. They extract functions, classes, methods and other symbols with their signatures and lines, and `src/engine/imports.ts` resolves imports into links between files. If a file stops parsing cleanly mid-edit, the model keeps its last clean symbols.
 
 ## Project model
 
@@ -28,7 +28,7 @@ Dashed boxes are inputs. Everything runs on your machine; only the summarizer, w
 
 ## Server
 
-`src/server/server.ts` serves the UI and a small REST API on `127.0.0.1`, and pushes messages over a WebSocket. A client first gets `hello`, the whole project state, and then small messages: `files`, `change`, `domain`, `agentEvent`, `session`, `control`, `summary` and the like. REST covers file contents (`/api/file`), summaries, history (`/api/history/...`) and steering (`/api/flags`, `/api/pause`). Every API call and the WebSocket need the run's token; see [privacy.md](privacy.md#what-runs-where).
+`src/server/server.ts` serves the UI and a small REST API on `127.0.0.1`, and pushes messages over a WebSocket. A client first gets `hello`, the whole project state, and then small messages: `files`, `change`, `domain`, `agentEvent`, `agentEvents`, `session`, `control`, `summary` and the like. The events from one transcript read go out together as one `agentEvents` batch, so the UI updates once for them. REST covers file contents (`/api/file`), summaries, history (`/api/history/...`) and steering (`/api/flags`, `/api/pause`). Every API call and the WebSocket need the run's token; see [privacy.md](privacy.md#what-runs-where).
 
 ## History store
 

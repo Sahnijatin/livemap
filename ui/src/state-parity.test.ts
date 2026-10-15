@@ -59,6 +59,7 @@ describe('shared reducer parity with the UI store', () => {
   it('matches the store at the caps', () => {
     const msgs: ServerMessage[] = [hello()];
     for (let i = 0; i < 2050; i++) msgs.push({ type: 'agentEvent', event: event() });
+    msgs.push({ type: 'agentEvents', events: Array.from({ length: 300 }, () => event()) });
     for (let i = 0; i < 2050; i++) msgs.push({ type: 'change', change: change(`k${i % 7}.ts`), files: [], removed: [] });
     let state = emptyState('', '');
     for (const m of msgs) { useStore.getState().apply(m); state = applyMessage(state, m); }

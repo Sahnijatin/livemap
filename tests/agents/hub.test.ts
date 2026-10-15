@@ -558,14 +558,13 @@ describe('review fixes: transcript keys', () => {
   });
 });
 
-
 describe('#49: tool classification across start and end', () => {
   it('a codex MCP tool_execute keeps its inner tool, access and targets on the end, plus sys_ids from the result', async () => {
     const h = mk({ readTail: async () => '' });
     const base = { session_id: 'c9', transcript_path: '/t/r9', cwd: ROOT };
     const SYS_ID = '871f6b2a1b2c3d4e5f60718293a4b5c6';
     h.ingestHook('codex', 'PreToolUse', { ...base, tool_name: 'mcp__skyforge-nexus__tool_execute', tool_use_id: 'm1', tool_input: { tool: 'sn_record_manage', args: { table: 'sys_script', action: 'create', name: 'Set offer' } } }, 1000);
-    h.ingestHook('codex', 'PostToolUse', { ...base, tool_name: 'mcp__skyforge-nexus__tool_execute', tool_use_id: 'm1', tool_input: {}, tool_response: JSON.stringify({ success: true, data: { sys_id: SYS_ID } }) }, 1001);
+    h.ingestHook('codex', 'PostToolUse', { ...base, tool_name: 'mcp__skyforge-nexus__tool_execute', tool_use_id: 'm1', tool_input: {}, tool_response: JSON.stringify({ success: true, tool: 'sn_record_manage', result: { success: true, data: { sys_id: SYS_ID } } }) }, 1001);
     await h.flush();
     const [start, end] = h.events().filter((e) => e.tool);
     expect(start.tool).toMatchObject({ inner: 'sn_record_manage', access: 'write', label: 'sn_record_manage create sys_script Set offer' });
@@ -574,5 +573,31 @@ describe('#49: tool classification across start and end', () => {
       { kind: 'record', instance: '', table: 'sys_script', name: 'Set offer' },
       { kind: 'record', instance: '', table: 'sys_script', name: 'Set offer', sysId: SYS_ID },
     ]);
+  });
+});
+
+describe('AgentHub batches', () => {
+  const raw = (sessionId: string, at: number): RawAgentEvent => ({ agent: 'claude-code', sessionId, at, type: 'message', text: `m${at}` });
+  const hints = { agent: 'claude-code' as const, cwd: ROOT, hooks: false };
+
+  it('fires one events per ingestRaw, and one per event outside it', () => {
+    const h = mk();
+    const batches: number[][] = [];
+    h.on('events', (evs: AgentEvent[]) => batches.push(evs.map(e => e.at)));
+    h.ingestRaw([raw('a', 1), raw('a', 2), raw('a', 3)], hints);
+    h.ingestHook('codex', 'UserPromptSubmit', { session_id: 'c1', cwd: ROOT, prompt: 'hi' }, 9);
+    expect(batches).toEqual([[1, 2, 3], [9]]);
+    expect(h.batching).toBe(false);
+  });
+
+  it('a nested ingestRaw keeps the outer batch open', () => {
+    const h = mk();
+    const batches: number[][] = [];
+    const open: boolean[] = [];
+    h.on('events', (evs: AgentEvent[]) => { batches.push(evs.map(e => e.at)); open.push(h.batching); });
+    h.on('event', (e: AgentEvent) => { if (e.at === 1) h.ingestRaw([raw('b', 10), raw('b', 11)], hints); });
+    h.ingestRaw([raw('a', 1), raw('a', 2)], hints);
+    expect(batches).toEqual([[10, 11], [1, 2]]);
+    expect(open).toEqual([true, false]);
   });
 });

@@ -4,7 +4,9 @@
  * to block; every other path exits 0 and prints nothing on stdout.
  */
 import http from 'node:http';
+import type { AgentKind } from '../shared/types.js';
 import { findRuntime } from '../agents/runtime.js';
+import { isBlockable } from '../shared/blockable.js';
 
 const MAX_STDIN = 8 * 1024 * 1024;
 const STDIN_WAIT_MS = 1000;
@@ -21,11 +23,6 @@ const started = Date.now();
 process.stdout.on('error', () => {});
 process.stderr.on('error', () => {});
 const AGENTS = new Set(['claude-code', 'codex', 'cursor']);
-
-function blockable(agent: string, event: string): boolean {
-  if (agent === 'cursor') return event === 'preToolUse' || event === 'beforeShellExecution';
-  return event === 'PreToolUse';
-}
 
 /** Up to 8 MB of stdin (the rest is discarded); stops at end, or after 1 s, or at once for a TTY. */
 function readStdin(): Promise<string> {
@@ -116,7 +113,7 @@ async function main(): Promise<number> {
   const budget = Math.min(REQUEST_BUDGET_MS, TOTAL_BUDGET_MS - (Date.now() - started));
   if (budget <= 0) return 0;
   const reason = await post(rt.port, rt.token, JSON.stringify({ agent, event, payload }), budget);
-  if (!reason || !blockable(agent, event)) return 0;
+  if (!reason || !isBlockable(agent as AgentKind, event)) return 0;
   process.stderr.write(`${reason}\n`);
   if (agent === 'cursor') process.stdout.write(JSON.stringify({ permission: 'deny', agent_message: reason, user_message: 'Blocked by LiveMap' }));
   return 2;

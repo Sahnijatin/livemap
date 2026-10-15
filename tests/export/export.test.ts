@@ -1,19 +1,24 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { fileURLToPath } from 'node:url';
+import { buildOnce } from '../build.js';
 import { HistoryStore } from '../../src/history/store.js';
 import { projectDir } from '../../src/history/paths.js';
 import { buildExport, pathScrubber, stripCode } from '../../src/export/export.js';
 import { emptyState } from '../../src/shared/state.js';
 import type { ProjectState } from '../../src/shared/state.js';
-import type { ExportPayload } from '../../src/shared/export.js';
+import type { ExportGrammars, ExportPayload } from '../../src/shared/export.js';
+import { grammarId, HIGHLIGHTED } from '../../src/shared/grammars.js';
 import type { ServerMessage } from '../../src/shared/protocol.js';
 import type { AgentEvent, AgentSession, ChangeSummary, FileModel } from '../../src/shared/types.js';
 
 const UI = '<!doctype html><html><head><title>LiveMap</title></head><body><div id="root"></div><script type="module">boot()</script></body></html>';
 const DATA_RE = /<script type="application\/octet-stream" id="livemap-data">([^<]*)<\/script>/;
+const GRAMMARS_RE = /<script type="application\/json" id="livemap-grammars">([^<]*)<\/script>/;
+const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 let home: string;
 let root: string;
@@ -67,6 +72,21 @@ function decode(html: string): { text: string; payload: ExportPayload } {
 }
 
 const plain = (msgs: ExportPayload['messages']) => msgs.map(([, , msg]) => msg);
+
+function grammarsOf(html: string): ExportGrammars {
+  const m = GRAMMARS_RE.exec(html);
+  expect(m).not.toBeNull();
+  return JSON.parse(m![1]) as ExportGrammars;
+}
+
+const py = (p: string): FileModel => ({ ...file(p), lang: 'python' });
+const vue = (p: string): FileModel => ({ ...file(p), lang: 'vue' });
+
+/** Records a change to each file, written with a line of text. */
+async function recordFiles(files: FileModel[]): Promise<void> {
+  for (const f of files) write(f.path, `x = 1\n`);
+  await record(files, files.map((f, i) => ({ type: 'change', change: change(i + 1, f.path), files: [f], removed: [] })));
+}
 
 describe('buildExport', () => {
   it('embeds a gzip, base64 payload that round-trips the recorded history', async () => {
@@ -149,6 +169,35 @@ describe('buildExport', () => {
     for (const s of ['CODE_ARG', 'CODE_A', 'CODE_B', 'CODE_C', 'CODE_INLINE', 'CODE_TITLE', 'CODE_COMMIT', 'CODE_SUM', 'CODE_FILESUM', 'CODE_FLAG']) expect(withCode).toContain(s);
   });
 
+  it('code: false redacts every event in an agentEvents batch', async () => {
+    write('a.ts', 'const a = 1;\n');
+    const tool: AgentEvent = { ...event(1, 's1'), type: 'tool_end', tool: { name: 'Edit', label: 'Edit a.ts', input: { old_string: 'BATCH_IN' }, output: 'BATCH_OUT', paths: ['a.ts'] } };
+    const said: AgentEvent = { ...event(2, 's1'), text: 'Done:\n```ts\nconst BATCH_CODE = 1;\n```\nAll set.' };
+    await record([file('a.ts')], [{ type: 'agentEvents', events: [tool, said] }]);
+    const { text, payload } = decode((await buildExport(root, { home, code: false, uiHtml: UI })).html);
+    expect(text).not.toMatch(/BATCH_/);
+    const batch = plain(payload.messages).find(m => m.type === 'agentEvents') as Extract<ServerMessage, { type: 'agentEvents' }>;
+    expect(batch.events.map(e => e.tool?.label ?? e.text)).toEqual(['Edit a.ts', 'Done:\n[code removed]\nAll set.']);
+    const { text: withCode } = decode((await buildExport(root, { home, code: true, uiHtml: UI })).html);
+    for (const s of ['BATCH_IN', 'BATCH_OUT', 'BATCH_CODE']) expect(withCode).toContain(s);
+  });
+
+  it('with a session, keeps only that session\'s events from agentEvents batches', async () => {
+    write('a.ts', 'x\n');
+    await record([file('a.ts')], [
+      { type: 'agentEvents', events: [event(1, 's2'), event(2, 's2')] },
+      { type: 'agentEvents', events: [event(3, 's1'), event(4, 's2'), event(5, 's1')] },
+      { type: 'agentEvents', events: [event(6, 's2')] },
+      { type: 'agentEvent', event: event(7, 's1') },
+    ]);
+    const { payload } = decode((await buildExport(root, { home, session: 's1', code: true, uiHtml: UI })).html);
+    const msgs = plain(payload.messages);
+    expect(msgs.map(m => m.type)).toEqual(['agentEvents', 'agentEvent']);
+    const ids = msgs.flatMap(m => (m.type === 'agentEvents' ? m.events : m.type === 'agentEvent' ? [m.event] : [])).map(e => e.id);
+    expect(ids).toEqual([3, 5, 7]);
+    expect(payload.initial.events).toEqual([]);
+  });
+
   it('code: false removes code spans from labels of tools other than shell', async () => {
     write('a.ts', 'const a = 1;\n');
     const ev: AgentEvent = { ...event(1, 's1'), type: 'tool_start', tool: { name: 'Task', label: 'Subagent: add `LEAK_SPAN()` to a.ts', paths: [] } };
@@ -192,6 +241,18 @@ describe('buildExport', () => {
     expect(payload.initial.events).toEqual([]);
     expect(Object.keys(payload.code ?? {})).toEqual(['a.ts']);
     expect(res.events).toBe(payload.messages.length);
+  });
+
+  it('with a session, keeps a change attributed just before the session\'s first batch', async () => {
+    write('a.ts', 'x\n');
+    await record([file('a.ts')], [
+      { type: 'change', change: change(1, 'a.ts'), files: [file('a.ts')], removed: [] },
+      { type: 'attribution', changeId: 1, attribution: { agent: 'claude-code', sessionId: 's1', confidence: 'exact', eventId: 3 } },
+      { type: 'agentEvents', events: [event(2, 's1'), event(3, 's1')] },
+    ]);
+    const { payload } = decode((await buildExport(root, { home, session: 's1', code: true, uiHtml: UI })).html);
+    expect(payload.initial.changes.map(c => [c.id, c.attribution?.sessionId])).toEqual([[1, 's1']]);
+    expect(plain(payload.messages).map(m => m.type)).toEqual(['agentEvents']);
   });
 
   it('embeds a file holding a closing script tag safely', async () => {
@@ -352,6 +413,82 @@ describe('buildExport', () => {
     expect(ms).toBeLessThan(10_000);
     expect(mb).toBeLessThan(60);
   }, 120_000);
+});
+
+describe('buildExport grammars (#17)', () => {
+  let grammars: string;
+  beforeEach(() => {
+    grammars = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-exp-grammars-'));
+    const put = (id: string, langs: object[]) => fs.writeFileSync(path.join(grammars, `${id}.json`), JSON.stringify(langs));
+    put('typescript', [{ name: 'typescript', scopeName: 'source.ts' }]);
+    put('python', [{ name: 'python', scopeName: 'source.python' }]);
+    put('vue', [{ name: 'html', end: '(</)(script)>' }, { name: 'typescript', scopeName: 'source.ts' }, { name: 'vue', scopeName: 'source.vue' }]);
+    fs.writeFileSync(path.join(grammars, 'onig.wasm.b64'), 'AGFzbQ==\n');
+  });
+  afterEach(() => fs.rmSync(grammars, { recursive: true, force: true }));
+
+  it('embeds the grammars of the exported files and no others', async () => {
+    await recordFiles([file('a.ts'), py('b.py')]);
+    const res = await buildExport(root, { home, code: true, uiHtml: UI, grammars });
+    const g = grammarsOf(res.html);
+    expect(g.langs.map(l => l.name).sort()).toEqual(['python', 'typescript']);
+    expect(g.wasm).toBe('AGFzbQ==');
+    expect(res.html).not.toContain('source.vue');
+  });
+
+  it('embeds no grammars with code: false', async () => {
+    await recordFiles([file('a.ts'), py('b.py')]);
+    const res = await buildExport(root, { home, code: false, uiHtml: UI, grammars });
+    expect(res.html).not.toContain('livemap-grammars');
+  });
+
+  it('embeds each grammar once, with no closing script tag', async () => {
+    await recordFiles([file('a.ts'), vue('c.vue')]);
+    const res = await buildExport(root, { home, code: true, uiHtml: UI, grammars });
+    const g = grammarsOf(res.html);
+    expect(g.langs.map(l => l.name).sort()).toEqual(['html', 'typescript', 'vue']);
+    expect(g.langs.find(l => l.name === 'html')).toEqual({ name: 'html', end: '(</)(script)>' });
+    expect(res.html.match(/<\/script>/g)).toHaveLength(3); // the grammars', the data's and the app script's own
+  });
+
+  it('embeds no grammars, but still the code, when no exported file has a grammar', async () => {
+    await recordFiles([{ ...file('notes.txt'), lang: 'text' }]);
+    const res = await buildExport(root, { home, code: true, uiHtml: UI, grammars });
+    expect(res.html).not.toContain('livemap-grammars');
+    expect(res.files).toBe(1);
+    expect(decode(res.html).payload.code).toEqual({ 'notes.txt': 'x = 1\n' });
+  });
+});
+
+describe('the built export template (#17)', () => {
+  const dist = path.join(repo, 'dist', 'ui-export');
+  beforeAll(buildOnce, 180_000);
+
+  it('is under 3 MB and carries no grammar or engine wasm of its own', () => {
+    const html = fs.readFileSync(path.join(dist, 'index.html'), 'utf8');
+    console.log(`[export template] ${Buffer.byteLength(html)} bytes`);
+    expect(Buffer.byteLength(html)).toBeLessThan(3_000_000);
+    expect(html).not.toContain('source.python');
+    expect(html).not.toContain('source.ts');
+    const wasm = fs.readFileSync(path.join(dist, 'grammars', 'onig.wasm.b64'), 'utf8');
+    expect(html).not.toContain(wasm.slice(0, 200));
+  });
+
+  it('builds a grammar for every language the UI highlights', () => {
+    for (const id of [...HIGHLIGHTED.map(l => grammarId(l, '')), 'jsx']) {
+      const langs = JSON.parse(fs.readFileSync(path.join(dist, 'grammars', `${id}.json`), 'utf8')) as { name: string }[];
+      expect(langs.map(l => l.name)).toContain(id);
+    }
+  });
+
+  it('an export of a.ts and b.py embeds the built typescript and python grammars and no vue', async () => {
+    await recordFiles([file('a.ts'), py('b.py')]);
+    const res = await buildExport(root, { home, code: true, uiHtml: UI, grammars: path.join(dist, 'grammars') });
+    const names = grammarsOf(res.html).langs.map(l => l.name);
+    expect(names).toContain('typescript');
+    expect(names).toContain('python');
+    expect(names).not.toContain('vue');
+  });
 });
 
 describe('pathScrubber', () => {

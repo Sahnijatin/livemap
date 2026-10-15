@@ -196,9 +196,12 @@ describe('#49: MCP and SkyForge nexus calls', () => {
     expect(toolLabel(EXEC, { query: 'x' })).toBe(EXEC);
   });
 
-  it('reads paths from a gateway call\'s inner args', () => {
+  it('reads local paths from a gateway call\'s inner args, and from local filesystem servers only', () => {
     expect(toolPaths(EXEC, { tool: 'sn_pull_artifact', args: { file_path: '/p/src/w.html' } }, '/p')).toEqual(['src/w.html']);
-    expect(toolPaths('mcp__github__create_or_update_file', { path: 'src/a.ts' }, '/p', '/p')).toEqual(['src/a.ts']);
+    expect(toolPaths('mcp__filesystem__write_file', { path: '/p/src/a.ts' }, '/p')).toEqual(['src/a.ts']);
+    // A GitHub path is in the remote repo, and sn_push_artifact reads its local file: neither wrote a local file.
+    expect(toolPaths('mcp__github__create_or_update_file', { path: 'src/a.ts' }, '/p', '/p')).toEqual([]);
+    expect(toolPaths(EXEC, { tool: 'sn_push_artifact', args: { file_path: '/p/src/w.html' } }, '/p')).toEqual([]);
   });
 
   it('redacts secret paths inside a gateway call and keeps the wrapper', () => {

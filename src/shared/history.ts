@@ -15,11 +15,19 @@ export interface Ticks { from: number; to: number; buckets: TickBucket[]; runSta
 
 const OTHER = TICK_KINDS.indexOf('other');
 
-/** The tick kind code (an index into TICK_KINDS) for a message. */
-export function kindOf(msg: { type: string; event?: { type: string } }): number {
+/**
+ * The tick kind code (an index into TICK_KINDS) for a message. An `agentEvents` batch is one record, so it
+ * takes the first kind in TICK_KINDS order among its events (a batch holding a prompt ticks as a prompt).
+ */
+export function kindOf(msg: { type: string; event?: { type: string }; events?: { type: string }[] }): number {
   if (msg.type === 'change') return TICK_KINDS.indexOf('change');
+  if (msg.type === 'agentEvents') return (msg.events ?? []).reduce((k, e) => Math.min(k, eventKind(e)), OTHER);
   if (msg.type !== 'agentEvent') return OTHER;
-  switch (msg.event?.type) {
+  return eventKind(msg.event);
+}
+
+function eventKind(event: { type: string } | undefined): number {
+  switch (event?.type) {
     case 'prompt': return TICK_KINDS.indexOf('prompt');
     case 'message': case 'thinking': return TICK_KINDS.indexOf('message');
     case 'tool_start': case 'tool_end': return TICK_KINDS.indexOf('tool');

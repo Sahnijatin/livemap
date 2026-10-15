@@ -3,7 +3,7 @@ import clsx from 'clsx';
 import type { NodeProps } from '@xyflow/react';
 import { LAYERS } from '../layers';
 import { Chevron, LayerTile, layerVars } from '../components/icons';
-import { ARROWS, type FolderFlowNode } from './mapFlow';
+import { ARROWS, type FolderFlowNode, type FolderLabelFlowNode } from './mapFlow';
 import { useMapActions } from './MapContext';
 import { Anchors } from './FileNode';
 import { useStore } from '../store';
@@ -16,8 +16,8 @@ const slash = (label: string, path: string): string => (path === '' ? label : `$
 
 /**
  * A folder. At the folders level it is a `.folder` card with counts (double-click or Enter opens its
- * files). At the files and functions levels it is the tinted region behind its file cards, labeled
- * with the folder and its layer; in a large project its header opens or closes the folder.
+ * files). At the files and functions levels it is the tinted region behind its file cards and links;
+ * its label is a `FolderLabelNode` drawn above the links.
  */
 function FolderNodeView({ id, data }: NodeProps<FolderFlowNode>) {
   const { folder: f, level, large, expanded } = data;
@@ -68,12 +68,21 @@ function FolderNodeView({ id, data }: NodeProps<FolderFlowNode>) {
     );
   }
 
-  const open = !large || expanded;
+  return <div className={clsx('mgroup', large && !expanded && 'shut')} style={layerVars(f.layer)} data-folder={id} />;
+}
+
+/**
+ * A folder region's header (the folder, its layer and counts), a node of its own so it paints above
+ * the links that cross the region; in a large project it opens or closes the folder.
+ */
+function FolderLabelNodeView({ data }: NodeProps<FolderLabelFlowNode>) {
+  const { folder: f, large, expanded } = data;
+  const actions = useMapActions();
   return (
-    <div className={clsx('mgroup', !open && 'shut', large && 'large')} style={layerVars(f.layer)} data-folder={id}>
+    <div className={clsx('mglabel', large && 'large')} style={layerVars(f.layer)} data-folder={f.id}>
       <div className="mg-head" title={f.label}>
         <span className="gl">
-          {slash(f.label, f.path)} <small>{layer.name}</small>
+          {slash(f.label, f.path)} <small>{LAYERS[f.layer].name}</small>
         </span>
         <span className="mg-ct">{plural(f.counts.files, 'file', 'files')} · {plural(f.counts.symbols, 'symbol', 'symbols')}</span>
       </div>
@@ -83,7 +92,7 @@ function FolderNodeView({ id, data }: NodeProps<FolderFlowNode>) {
           className="mg-tog nodrag"
           aria-expanded={expanded}
           aria-label={`${expanded ? 'Close' : 'Open'} ${f.label}`}
-          onClick={e => { e.stopPropagation(); actions.toggleFolder(id); }}
+          onClick={e => { e.stopPropagation(); actions.toggleFolder(f.id); }}
         >
           <Chevron className="dchev" />
           {expanded ? 'Close' : 'Open'}
@@ -94,3 +103,4 @@ function FolderNodeView({ id, data }: NodeProps<FolderFlowNode>) {
 }
 
 export const FolderNode = memo(FolderNodeView);
+export const FolderLabelNode = memo(FolderLabelNodeView);

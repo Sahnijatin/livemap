@@ -11,14 +11,15 @@ import { useMapActions } from './MapContext';
 
 const handle: CSSProperties = { top: HANDLE_Y, opacity: 0, pointerEvents: 'none' };
 
-/** Hidden link anchors on both sides, at the middle of the header (links never move with rows). */
+/**
+ * Hidden link anchors on both sides, at the middle of the header (links never move with rows). Two per
+ * card: links start and end on either one (the map uses `ConnectionMode.Loose`).
+ */
 export function Anchors({ style = handle }: { style?: CSSProperties }) {
   return (
     <>
-      <Handle type="source" position={Position.Right} id="sr" isConnectable={false} style={style} />
-      <Handle type="source" position={Position.Left} id="sl" isConnectable={false} style={style} />
-      <Handle type="target" position={Position.Left} id="tl" isConnectable={false} style={style} />
-      <Handle type="target" position={Position.Right} id="tr" isConnectable={false} style={style} />
+      <Handle type="source" position={Position.Right} id="r" isConnectable={false} style={style} />
+      <Handle type="source" position={Position.Left} id="l" isConnectable={false} style={style} />
     </>
   );
 }

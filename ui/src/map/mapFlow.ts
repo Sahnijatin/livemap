@@ -20,7 +20,9 @@ export type FileNodeData = { file: MapFile; level: Level };
 export type FolderNodeData = { folder: MapFolder; level: Level; large: boolean; expanded: boolean };
 export type FileFlowNode = Node<FileNodeData, 'file'>;
 export type FolderFlowNode = Node<FolderNodeData, 'folder'>;
-export type MapFlowNode = FileFlowNode | FolderFlowNode;
+/** A folder region's header, drawn above the links at the files and functions levels. */
+export type FolderLabelFlowNode = Node<FolderNodeData, 'folderLabel'>;
+export type MapFlowNode = FileFlowNode | FolderFlowNode | FolderLabelFlowNode;
 export type LinkData = { fresh: boolean; weight: number };
 export type LinkFlowEdge = Edge<LinkData, 'link'>;
 
@@ -71,9 +73,18 @@ export function nextSettle(fresh: Set<string>, seen: Map<string, number>): numbe
  * right, and a target in the same column is reached by a loop around the right side.
  */
 export function edgeSides(a: Box, b: Box): { sourceHandle: string; targetHandle: string } {
-  if (b.x > a.x + a.w / 2) return { sourceHandle: 'sr', targetHandle: 'tl' };
-  if (b.x + b.w / 2 < a.x) return { sourceHandle: 'sl', targetHandle: 'tr' };
-  return { sourceHandle: 'sr', targetHandle: 'tr' };
+  if (b.x > a.x + a.w / 2) return { sourceHandle: 'r', targetHandle: 'l' };
+  if (b.x + b.w / 2 < a.x) return { sourceHandle: 'l', targetHandle: 'r' };
+  return { sourceHandle: 'r', targetHandle: 'r' };
+}
+
+/**
+ * Whether a drag that just ended saves a pin: not while a level switch or a reset waits for its
+ * layout (the cards on screen are not this level's), and not for a card that layout does not place.
+ */
+export function shouldSavePin(node: { id: string; type?: string }, placed: Positions, layoutPending: boolean): boolean {
+  if (layoutPending) return false;
+  return node.type === 'file' ? placed.files.has(node.id) : placed.folders.has(node.id);
 }
 
 /**

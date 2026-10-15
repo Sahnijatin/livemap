@@ -201,8 +201,8 @@ test('map: live glow and Follow, a 40-file burst, pins, levels, palette, screens
     await expect(node(page, p)).toBeVisible();
   }
   await expect(node(page, 'README.md')).toHaveCount(0);
-  await expect(page.locator('.mgroup[data-folder="dir:apps/api/src/services"] .mg-head')).toContainText('apps/api/src/services/');
-  await expect(page.locator('.mgroup .mg-head').first()).toContainText(/\S/);
+  await expect(page.locator('.mglabel[data-folder="dir:apps/api/src/services"] .mg-head')).toContainText('apps/api/src/services/');
+  await expect(page.locator('.mglabel .mg-head').first()).toContainText(/\S/);
 
   // 2. Live glow and Follow: a Claude session edits the service through the hook path.
   const transcript = path.join(claudeDir, 'projects', tmp.replace(/[^a-zA-Z0-9]/g, '-'), 's1.jsonl');

@@ -22,7 +22,7 @@ const gunzip = promisify(zlib.gunzip);
  * and `indexing`, `history` and `summaryStatus` are never recorded.
  */
 export const RECORDED_TYPES: ReadonlySet<ServerMessage['type']> = new Set<ServerMessage['type']>([
-  'files', 'change', 'usedBy', 'domain', 'agentEvent', 'session', 'control', 'attribution', 'summary', 'fileSummary',
+  'files', 'change', 'usedBy', 'domain', 'agentEvent', 'agentEvents', 'session', 'control', 'attribution', 'summary', 'fileSummary',
 ]);
 
 const FLUSH_MS = 250;

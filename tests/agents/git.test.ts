@@ -124,6 +124,50 @@ describe('GitWatcher', () => {
     expect(merge.paths).toEqual(['feature_file.txt']);
   });
 
+  it('reads the paths of every commit in a range with one git process', async () => {
+    const d = initRepo();
+    commit(d, 'seed');
+    git(d, 'checkout', '-q', '-b', 'feat');
+    commit(d, 'one');
+    fs.mkdirSync(path.join(d, 'sub'));
+    fs.writeFileSync(path.join(d, 'sub', 'x y.ts'), 'x');
+    fs.writeFileSync(path.join(d, 'two.ts'), '2');
+    git(d, 'add', '-A');
+    git(d, 'commit', '-q', '-m', 'two');
+    git(d, 'commit', '-q', '--allow-empty', '-m', 'three');
+    git(d, 'checkout', '-q', 'main');
+    const calls: string[][] = [];
+    const run = (cwd: string, args: string[]) => {
+      calls.push(args);
+      return new Promise<string>((res, rej) => execFile('git', args, { cwd }, (e, out, err) => (e ? rej(new Error(String(err))) : res(String(out)))));
+    };
+    const { w, got } = watch(d, { run });
+    await w.start();
+    git(d, 'merge', '-q', '--ff-only', 'feat');
+    await until(() => got.length >= 3);
+    expect(got.map(e => [e.text, [...e.paths!].sort()])).toEqual([['one', ['one.txt']], ['two', ['sub/x y.ts', 'two.ts']], ['three', []]]);
+    expect(calls.filter(a => a.includes('--name-only'))).toHaveLength(1);
+    expect(calls.some(a => a[0] === 'diff-tree')).toBe(false);
+  });
+
+  it('falls back to -m when git rejects --diff-merges, keeping first-parent paths for a merge', async () => {
+    const d = initRepo();
+    commit(d, 'seed');
+    git(d, 'checkout', '-q', '-b', 'feat');
+    commit(d, 'feature file');
+    git(d, 'checkout', '-q', 'main');
+    commit(d, 'main file');
+    const run = (cwd: string, args: string[]) => {
+      if (args.includes('--diff-merges=first-parent')) return Promise.reject(new Error('unknown option'));
+      return new Promise<string>((res, rej) => execFile('git', args, { cwd }, (e, out, err) => (e ? rej(new Error(String(err))) : res(String(out)))));
+    };
+    const { w, got } = watch(d, { run });
+    await w.start();
+    git(d, 'merge', '-q', '--no-ff', '--no-edit', 'feat');
+    await until(() => got.some((e) => e.text?.startsWith('Merge')));
+    expect(got.find((e) => e.text?.startsWith('Merge'))!.paths).toEqual(['feature_file.txt']);
+  });
+
   it('caps text at 2000 chars', async () => {
     const d = initRepo();
     commit(d, 'seed');

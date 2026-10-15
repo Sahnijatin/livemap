@@ -141,6 +141,27 @@ describe('placeMap: first layout', () => {
     expect(await placeMap(g, emptyPositions(), noPins(), run)).toEqual(pos);
   });
 
+  it('folders level: a large layout leaves no empty row or column (#15)', async () => {
+    // 120 unlinked folders pack into shelves 160 px apart (card plus PACK_GAP), more than the 152 px grid
+    // row: rounding alone skipped a row after ten shelves.
+    const spec: Record<string, string[]> = {};
+    for (let i = 0; i < 120; i++) spec[`f${String(i).padStart(3, '0')}`] = ['1.ts'];
+    const g = graph('folders', spec);
+    const column: ElkRun = async gr => ({ ...gr, children: gr.children!.map((c, i) => ({ ...c, x: 0, y: i * 160 })) });
+    const pos = await placeMap(g, emptyPositions(), noPins(), column);
+    expectSound(g, pos);
+    const rows = new Set<number>(), cols = new Set<number>();
+    for (const [id, r] of pos.folders) {
+      expect(r.y % FOLDER_GRID_Y, `${id} y on the grid`).toBe(0);
+      expect(r.x % FOLDER_GRID_X, `${id} x on the grid`).toBe(0);
+      rows.add(r.y / FOLDER_GRID_Y);
+      cols.add(r.x / FOLDER_GRID_X);
+    }
+    expect([...rows].sort((a, b) => a - b)).toEqual([...Array(rows.size).keys()]);
+    expect([...cols].sort((a, b) => a - b)).toEqual([...Array(cols.size).keys()]);
+    expect(rows.size).toBeGreaterThan(10);
+  });
+
   it('functions level: rows are as tall as their tallest card and the folder sizes to them', async () => {
     const g = graph('functions', { a: ['1.ts', '2.ts', '3.ts', '4.ts'] }, [], { 'a/2.ts': 3, 'a/4.ts': 1 });
     const pos = await placeMap(g, emptyPositions(), noPins(), run);

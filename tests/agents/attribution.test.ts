@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { AgentHub } from '../../src/agents/hub.js';
 import { Attributor } from '../../src/agents/attribution.js';
+import { toolMeta, toolPaths } from '../../src/agents/labels.js';
 import type { Attribution, ChangeSummary, RawAgentEvent } from '../../src/shared/types.js';
 
 const T0 = 1_000_000;
@@ -200,15 +201,25 @@ describe('#49: MCP writes and record targets', () => {
     return { hub, attr, feed: (...evs: RawAgentEvent[]) => hub.ingestRaw(evs, hints) };
   }
 
-  it('a GitHub MCP create_or_update_file naming the path is exact', () => {
+  it('a local filesystem MCP write naming the file is exact', () => {
     const { attr, feed } = setup();
-    feed(mcpTool('S', 'mcp__github__create_or_update_file', T0 - 1000, { paths: ['src/a.ts'], access: 'write' }));
+    const input = { path: '/proj/src/a.ts', content: 'x' };
+    feed(mcpTool('S', 'mcp__filesystem__write_file', T0 - 1000, { paths: toolPaths('mcp__filesystem__write_file', input, '/proj'), ...toolMeta('mcp__filesystem__write_file', input) }));
     expect(attr.attribute(change(), T0)).toMatchObject({ sessionId: 'S', confidence: 'exact' });
   });
 
-  it('the same call stored without access (older events) is still classified as a write', () => {
+  it('a GitHub MCP create_or_update_file is a remote write: a local edit of the same path is only likely', () => {
     const { attr, feed } = setup();
-    feed(mcpTool('S', 'mcp__github__create_or_update_file', T0 - 1000, { paths: ['src/a.ts'] }));
+    const input = { owner: 'o', repo: 'r', path: 'src/a.ts', content: 'x' };
+    const meta = toolMeta('mcp__github__create_or_update_file', input);
+    expect(meta.access).toBe('write');
+    feed(mcpTool('S', 'mcp__github__create_or_update_file', T0 - 1000, { paths: toolPaths('mcp__github__create_or_update_file', input, '/proj', '/proj'), ...meta }));
+    expect(attr.attribute(change(), T0)?.confidence).toBe('likely');
+  });
+
+  it('a write stored without access (older events) is still classified from its name', () => {
+    const { attr, feed } = setup();
+    feed(mcpTool('S', 'mcp__filesystem__write_file', T0 - 1000, { paths: ['src/a.ts'] }));
     expect(attr.attribute(change(), T0)?.confidence).toBe('exact');
   });
 

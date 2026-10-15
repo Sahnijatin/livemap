@@ -36,7 +36,7 @@ const docFiles = ['README.md', 'CONTRIBUTING.md', ...fs.readdirSync(path.join(ro
   .map(n => `docs/${n}`)]
   .filter(f => fs.existsSync(path.join(root, f)));
 
-const cliSource = fs.readFileSync(path.join(root, 'src/cli.ts'), 'utf8');
+const cliSource = ['src/cli.ts', 'src/cli-args.ts'].map(f => fs.readFileSync(path.join(root, f), 'utf8')).join('\n');
 const serverSource = fs.readFileSync(path.join(root, 'src/server/server.ts'), 'utf8');
 const constant = (src, name) => {
   const m = new RegExp(`const ${name} = (\\d+);`).exec(src);

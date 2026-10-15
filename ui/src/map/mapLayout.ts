@@ -319,10 +319,17 @@ function folderLinks(graph: MapGraph): { weight: Map<string, Map<string, number>
   return { weight, imports };
 }
 
+/** Each value's rank among the distinct values (0, 1, 2, ... with no gaps). */
+function denseRank(values: number[]): Map<number, number> {
+  return new Map([...new Set(values)].sort((a, b) => a - b).map((v, i) => [v, i]));
+}
+
 /**
  * Folder cards (all one size) on a regular grid: each goes to the cell nearest its suggested spot, in
  * reading order of those spots; a taken cell (or one next to a pinned card) passes it to the next free
- * cell to the right in that row. Keeps ELK's left-to-right flow, drops its ragged offsets. Deterministic.
+ * cell to the right in that row. Keeps ELK's left-to-right flow, drops its ragged offsets. The k-th
+ * distinct rounded row (and column) becomes row k: packed shelves step a little more than a grid row,
+ * so rounding alone would skip a row now and then. Deterministic.
  */
 function snapFolders(ids: string[], suggestedPos: Map<string, Pos>, size: Size, placed: Map<string, Rect>): Map<string, Rect> {
   const out = new Map<string, Rect>();
@@ -331,9 +338,11 @@ function snapFolders(ids: string[], suggestedPos: Map<string, Pos>, size: Size, 
   const order = ids
     .map(id => ({ id, p: suggestedPos.get(id) ?? { x: 0, y: 0 } }))
     .sort((a, b) => a.p.y - b.p.y || a.p.x - b.p.x || byId(a.id, b.id));
+  const rows = denseRank(order.map(o => Math.round(o.p.y / FOLDER_GRID_Y)));
+  const cols = denseRank(order.map(o => Math.round(o.p.x / FOLDER_GRID_X)));
   for (const { id, p } of order) {
-    const row = Math.round(p.y / FOLDER_GRID_Y);
-    let col = Math.round(p.x / FOLDER_GRID_X);
+    const row = rows.get(Math.round(p.y / FOLDER_GRID_Y))!;
+    let col = cols.get(Math.round(p.x / FOLDER_GRID_X))!;
     const at = (c: number): Rect => ({ x: c * FOLDER_GRID_X, y: row * FOLDER_GRID_Y, ...size });
     while (taken.has(`${col},${row}`) || others.some(o => near(at(col), o))) col++;
     taken.add(`${col},${row}`);

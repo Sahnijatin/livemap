@@ -6,7 +6,8 @@ import { SECRET_LABEL, toolFamily } from '../agents/labels.js';
 import { readForModel } from '../engine/files.js';
 import { HistoryStore } from '../history/store.js';
 import { projectDir } from '../history/paths.js';
-import { EXPORT_DATA_ID, type ExportPayload } from '../shared/export.js';
+import { EXPORT_DATA_ID, EXPORT_GRAMMARS_ID, type ExportGrammars, type ExportPayload } from '../shared/export.js';
+import { grammarId, HIGHLIGHTED } from '../shared/grammars.js';
 import type { ServerMessage } from '../shared/protocol.js';
 import { emptyState, type ProjectState } from '../shared/state.js';
 import type { SummariesState } from '../shared/summaries.js';
@@ -16,9 +17,13 @@ const gzip = promisify(zlib.gzip);
 
 export const NO_HISTORY = 'No history recorded for this project yet. Run livemap here first.';
 export const codeWarning = (n: number): string =>
-  `This export contains source code for ${n} files. Share it only with people who may see this code.`;
+  `This export contains source code for ${n} ${n === 1 ? 'file' : 'files'}. Share it only with people who may see this code.`;
 
-export interface ExportOptions { home?: string; session?: string; code: boolean; uiHtml: string }
+export interface ExportOptions {
+  home?: string; session?: string; code: boolean; uiHtml: string;
+  /** The export build's grammars directory (`ui-export/grammars`). Without it the code shows as plain text. */
+  grammars?: string;
+}
 export interface ExportResult { html: string; files: number; events: number }
 
 type Rec = [number, number, ServerMessage];
@@ -62,7 +67,8 @@ export async function buildExport(root: string, opts: ExportOptions): Promise<Ex
     const payload: ExportPayload = { ...scrubbed, ...(code ? { code } : {}) };
     const json = JSON.stringify(payload);
     const data = (await gzip(Buffer.from(json, 'utf8'))).toString('base64');
-    return { html: embed(opts.uiHtml, data), files: code ? Object.keys(code).length : 0, events: messages.length };
+    const grammars = code && opts.grammars ? readGrammars(opts.grammars, Object.keys(code), initial, messages) : null;
+    return { html: embed(opts.uiHtml, data, grammars), files: code ? Object.keys(code).length : 0, events: messages.length };
   } finally {
     await store.close();
   }
@@ -74,13 +80,15 @@ export async function buildExport(root: string, opts: ExportOptions): Promise<Ex
  * records between its first and last event. Starts from the state just before its first event.
  */
 async function sessionScope(store: HistoryStore, all: Rec[], id: string, firstSeq: number, name: string): Promise<{ initial: ProjectState; messages: Rec[] }> {
-  const mine = all.filter(([, , m]) => m.type === 'agentEvent' && m.event.sessionId === id);
+  const ownEvents = (m: ServerMessage): AgentEvent[] =>
+    (m.type === 'agentEvent' ? [m.event] : m.type === 'agentEvents' ? m.events : []).filter(e => e.sessionId === id);
+  const mine = all.filter(([, , m]) => ownEvents(m).length > 0);
   if (!mine.length) throw new Error(`No events recorded for session ${id}.`);
   const first = mine[0][0];
   const last = mine[mine.length - 1][0];
   const changeIds = new Set<number>();
-  for (const [seq, , m] of all) {
-    if (seq < first) continue;
+  // Records before the first event count too: an attribution can land just ahead of the batch that caused it.
+  for (const [, , m] of all) {
     if (m.type === 'attribution' && m.attribution.sessionId === id) changeIds.add(m.changeId);
     if (m.type === 'change' && m.change.attribution?.sessionId === id) changeIds.add(m.change.id);
   }
@@ -88,7 +96,7 @@ async function sessionScope(store: HistoryStore, all: Rec[], id: string, firstSe
     if (seq < first) return false;
     const inSpan = seq <= last;
     switch (m.type) {
-      case 'agentEvent': return m.event.sessionId === id;
+      case 'agentEvent': case 'agentEvents': return ownEvents(m).length > 0;
       case 'session': return m.session.id === id;
       case 'change': return changeIds.has(m.change.id);
       case 'attribution': case 'summary': return changeIds.has(m.changeId);
@@ -102,7 +110,9 @@ async function sessionScope(store: HistoryStore, all: Rec[], id: string, firstSe
     sessions: s.sessions.filter(x => x.id === id),
     changes: s.changes.filter(c => changeIds.has(c.id)),
   });
-  const messages = all.filter(([seq, , m]) => keep(seq, m)).map(([seq, at, m]): Rec => [seq, at, m.type === 'hello' ? { ...m, ...only(m), type: 'hello' } : m]);
+  const scoped = (m: ServerMessage): ServerMessage =>
+    m.type === 'hello' ? { ...m, ...only(m), type: 'hello' } : m.type === 'agentEvents' ? { ...m, events: ownEvents(m) } : m;
+  const messages = all.filter(([seq, , m]) => keep(seq, m)).map(([seq, at, m]): Rec => [seq, at, scoped(m)]);
   let initial: ProjectState;
   // The nearest record before the first event: seqs can have gaps where a corrupt line was skipped.
   const before = all.filter(([seq]) => seq < first).at(-1)?.[0];
@@ -112,9 +122,9 @@ async function sessionScope(store: HistoryStore, all: Rec[], id: string, firstSe
   } else {
     // The cap trimmed history to start at this event: the state there, without the event it replays next.
     const { seq: _s, at: _a, ...state } = await store.stateAt(first);
-    const ev = (mine[0][2] as Extract<ServerMessage, { type: 'agentEvent' }>).event;
+    const replayed = new Set(ownEvents(mine[0][2]).map(e => e.id));
     const o = only(state);
-    initial = { ...emptyState(name, name), ...o, events: o.events.filter(e => e.id !== ev.id) };
+    initial = { ...emptyState(name, name), ...o, events: o.events.filter(e => !replayed.has(e.id)) };
   }
   return { initial, messages };
 }
@@ -254,6 +264,7 @@ function withoutCode(initial: ProjectState, messages: Rec[]): { initial: Project
       case 'hello': return state(m);
       case 'change': return { ...m, change: change(m.change) };
       case 'agentEvent': return { ...m, event: event(m.event) };
+      case 'agentEvents': return { ...m, events: m.events.map(event) };
       case 'attribution': return { ...m, attribution: attribution(m.attribution) };
       case 'session': return { ...m, session: session(m.session) };
       case 'control': return { ...m, control: control(m.control) };
@@ -288,6 +299,30 @@ async function readCode(root: string, initial: ProjectState, messages: Rec[]): P
   await Promise.all(Array.from({ length: READ_CONCURRENCY }, worker));
   // Keys in path order, whatever order the reads finished in.
   return Object.fromEntries(paths.filter(p => p in code).map(p => [p, code[p]]));
+}
+
+/**
+ * The grammars that highlight the embedded files, by their languages (the last one recorded for a path),
+ * with the engine's wasm; null when none applies. Each grammar once, though several embed it (vue carries typescript).
+ */
+function readGrammars(dir: string, paths: string[], initial: ProjectState, messages: Rec[]): ExportGrammars | null {
+  const langs = new Map(initial.files.map(f => [f.path, f.lang]));
+  for (const [, , m] of messages) {
+    if (m.type === 'change' || m.type === 'files' || m.type === 'hello') for (const f of m.files) langs.set(f.path, f.lang);
+  }
+  const ids = new Set<string>();
+  for (const p of paths) {
+    const lang = langs.get(p);
+    if (lang && HIGHLIGHTED.includes(lang)) ids.add(grammarId(lang, p));
+  }
+  const byName = new Map<string, { name: string }>();
+  for (const id of [...ids].sort()) {
+    const file = path.join(dir, `${id}.json`);
+    if (!fs.existsSync(file)) continue;
+    for (const g of JSON.parse(fs.readFileSync(file, 'utf8')) as { name: string }[]) if (!byName.has(g.name)) byName.set(g.name, g);
+  }
+  if (!byName.size) return null;
+  return { langs: [...byName.values()], wasm: fs.readFileSync(path.join(dir, 'onig.wasm.b64'), 'utf8').trim() };
 }
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -383,9 +418,14 @@ function localSessions<P extends Omit<ExportPayload, 'code'>>(p: P, local: (p: s
   };
 }
 
-/** The page with the payload's script element inserted before its closing body tag. */
-function embed(html: string, base64: string): string {
-  const tag = `<script type="application/octet-stream" id="${EXPORT_DATA_ID}">${base64}</script>`;
+/**
+ * The page with the grammars' and the payload's script elements inserted before its closing body tag.
+ * `<` is escaped in the grammars' JSON, so a pattern such as `(</)(script)` cannot close its element.
+ */
+function embed(html: string, base64: string, grammars: ExportGrammars | null): string {
+  const json = grammars ? JSON.stringify(grammars).replace(/</g, '\\u003c') : '';
+  const tag = (grammars ? `<script type="application/json" id="${EXPORT_GRAMMARS_ID}">${json}</script>` : '')
+    + `<script type="application/octet-stream" id="${EXPORT_DATA_ID}">${base64}</script>`;
   const at = html.lastIndexOf('</body>');
   return at < 0 ? html + tag : html.slice(0, at) + tag + html.slice(at);
 }

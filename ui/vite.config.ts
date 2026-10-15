@@ -16,6 +16,8 @@ export default defineConfig(({ command }) => {
     build: {
       outDir: '../dist/ui',
       emptyOutDir: true,
+      // scripts/check-budget.mjs finds the entry chunk through dist/ui/.vite/manifest.json.
+      manifest: true,
       target: 'es2020',
       chunkSizeWarningLimit: 1200,
     },

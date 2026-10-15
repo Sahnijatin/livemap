@@ -32,6 +32,11 @@ describe('schema-js analyzer', () => {
     expect(schemaJs.applies('a.sql', 'sql')).toBe(false);
   });
 
+  it('records a Prisma @map column only when it differs from the field name', () => {
+    const [e] = run('schema.prisma', 'model A {\n  id Int @id\n  userId String @map("user_id")\n  same String @map(name: "same")\n}\n');
+    expect(e.fields.map(f => [f.name, f.column])).toEqual([['id', undefined], ['userId', 'user_id'], ['same', undefined]]);
+  });
+
   it('skips an unclosed Prisma model without throwing', () => {
     const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     expect(names('schema.prisma', 'model A {\n  id Int @id\n}\n\nmodel X {\n  id Int @id\n')).toEqual(['A']);

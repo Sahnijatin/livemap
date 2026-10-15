@@ -37,11 +37,11 @@ function bucketOf(t: Ticks, seq: number): number {
 }
 
 /** "Back to live": stops playback and returns to the live state. */
-export function BackToLive({ className }: { className?: string }) {
+export function BackToLive({ className, onClick }: { className?: string; onClick?: () => void }) {
   const backToLive = useStore(s => s.backToLive);
   const replay = useStore(s => s.replay);
   if (replay) return null;
-  return <button type="button" className={clsx('tl-back', className)} onClick={() => void backToLive()}>Back to live</button>;
+  return <button type="button" className={clsx('tl-back', className)} onClick={onClick ?? (() => void backToLive())}>Back to live</button>;
 }
 
 /** The note over the center pane while it shows the past. */
@@ -288,7 +288,7 @@ export function Timeline() {
           <span className="tl-face">
             <span className="tl-state past">REWOUND</span>
             <span className="tl-time">{clock(at)}</span>
-            <BackToLive className="tl-back-inline" />
+            <BackToLive className="tl-back-inline" onClick={goLive} />
           </span>
           <SideGhost back={!replay} />
         </span>

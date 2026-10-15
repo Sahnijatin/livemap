@@ -14,7 +14,7 @@ export interface Mount {
   /** Flask register_blueprint with an explicit url_prefix: it replaces the blueprint's own prefix. */
   replaces?: true;
 }
-export interface Field { name: string; type: string; line?: number; pk?: true; required?: true; unique?: true; fk?: { table: string; field: string }; relation?: { model: string; many: boolean } }
+export interface Field { name: string; type: string; /** Database column name when it differs from `name` (Prisma `@map`). */ column?: string; line?: number; pk?: true; required?: true; unique?: true; fk?: { table: string; field: string }; relation?: { model: string; many: boolean } }
 /**
  * `partial` marks an ALTER fragment that changes a table defined elsewhere: `fields` it adds, plus the
  * columns it drops and renames (`[from, to]`), applied in migration order when tables are merged.
