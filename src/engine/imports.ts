@@ -91,7 +91,7 @@ function indexOf(ctx: ImportCtx): FileIndex {
 const blank = (s: string): string => s.replace(/[^\n]/g, ' ');
 
 /** Code after which a `/` starts a regex literal rather than a division. */
-const REGEX_AFTER = new Set(['', '=', '(', ',', ':', '[', '!', '&', '|', '?', '{', '}', ';']);
+const REGEX_AFTER = new Set(['', '=', '(', ',', ':', '[', '!', '&', '|', '?', '{', '}', ';', '>', '<', '+', '-', '*', '%', '~', '^']);
 const REGEX_KEYWORD = /\b(?:return|typeof|case|void|yield|await|in|of|delete|instanceof)$/;
 
 /** End of the regex literal opening at `i` (past its closing `/`), or -1 when the line does not close one. */
@@ -300,37 +300,52 @@ function pyModule(base: string, ctx: ImportCtx): string | null {
   return null;
 }
 
-/** Common top-level standard library modules, which a project file of the same name only shadows from the root. */
+/** Top-level standard library modules (Python 3.13 `sys.stdlib_module_names`, private ones aside, plus
+ * modules removed since 3.12 that older projects still import). */
 const PY_STDLIB = new Set([
-  'os', 'sys', 're', 'json', 'logging', 'email', 'typing', 'collections', 'datetime', 'time', 'math', 'random',
-  'pathlib', 'subprocess', 'threading', 'asyncio', 'functools', 'itertools', 'http', 'urllib', 'socket', 'ssl',
-  'hashlib', 'base64', 'uuid', 'io', 'csv', 'sqlite3', 'unittest', 'argparse', 'dataclasses', 'enum', 'abc', 'copy',
-  'string', 'struct', 'shutil', 'tempfile', 'glob', 'pickle', 'queue', 'signal', 'traceback', 'types', 'warnings',
-  'inspect', 'contextlib', 'operator', 'decimal', 'fractions', 'statistics', 'secrets', 'html', 'xml', 'zipfile',
-  'tarfile', 'gzip', 'platform', 'locale', 'calendar', 'textwrap', 'pprint', 'heapq', 'bisect', 'weakref', 'gc',
-  'select', 'selectors', 'mimetypes', 'smtplib', 'configparser', 'getpass', 'ctypes', 'multiprocessing',
-  'concurrent', 'importlib', 'pkgutil', 'codecs', 'unicodedata', 'difflib', 'fnmatch', 'stat', 'errno', 'numbers',
-  'array', 'binascii', 'zlib', 'ipaddress', 'shlex', 'cmd', 'token', 'tokenize', 'ast', 'dis', 'site', 'sysconfig',
-  'builtins', '__future__',
+  'asynchat', 'asyncore', 'audioop', 'cgi', 'cgitb', 'chunk', 'crypt', 'distutils', 'imghdr', 'imp', 'lib2to3',
+  'mailcap', 'msilib', 'nis', 'nntplib', 'ossaudiodev', 'pipes', 'smtpd', 'sndhdr', 'spwd', 'sunau', 'telnetlib',
+  'uu', 'xdrlib',
+  'abc', 'antigravity', 'argparse', 'array', 'ast', 'asyncio', 'atexit', 'base64', 'bdb', 'binascii', 'bisect',
+  'builtins', 'bz2', 'cProfile', 'calendar', 'cmath', 'cmd', 'code', 'codecs', 'codeop', 'collections',
+  'colorsys', 'compileall', 'concurrent', 'configparser', 'contextlib', 'contextvars', 'copy', 'copyreg', 'csv',
+  'ctypes', 'curses', 'dataclasses', 'datetime', 'dbm', 'decimal', 'difflib', 'dis', 'doctest', 'email',
+  'encodings', 'ensurepip', 'enum', 'errno', 'faulthandler', 'fcntl', 'filecmp', 'fileinput', 'fnmatch',
+  'fractions', 'ftplib', 'functools', 'gc', 'genericpath', 'getopt', 'getpass', 'gettext', 'glob', 'graphlib',
+  'grp', 'gzip', 'hashlib', 'heapq', 'hmac', 'html', 'http', 'idlelib', 'imaplib', 'importlib', 'inspect', 'io',
+  'ipaddress', 'itertools', 'json', 'keyword', 'linecache', 'locale', 'logging', 'lzma', 'mailbox', 'marshal',
+  'math', 'mimetypes', 'mmap', 'modulefinder', 'msvcrt', 'multiprocessing', 'netrc', 'nt', 'ntpath',
+  'nturl2path', 'numbers', 'opcode', 'operator', 'optparse', 'os', 'pathlib', 'pdb', 'pickle', 'pickletools',
+  'pkgutil', 'platform', 'plistlib', 'poplib', 'posix', 'posixpath', 'pprint', 'profile', 'pstats', 'pty',
+  'pwd', 'py_compile', 'pyclbr', 'pydoc', 'pydoc_data', 'pyexpat', 'queue', 'quopri', 'random', 're',
+  'readline', 'reprlib', 'resource', 'rlcompleter', 'runpy', 'sched', 'secrets', 'select', 'selectors',
+  'shelve', 'shlex', 'shutil', 'signal', 'site', 'smtplib', 'socket', 'socketserver', 'sqlite3', 'sre_compile',
+  'sre_constants', 'sre_parse', 'ssl', 'stat', 'statistics', 'string', 'stringprep', 'struct', 'subprocess',
+  'symtable', 'sys', 'sysconfig', 'syslog', 'tabnanny', 'tarfile', 'tempfile', 'termios', 'textwrap', 'this',
+  'threading', 'time', 'timeit', 'tkinter', 'token', 'tokenize', 'tomllib', 'trace', 'traceback', 'tracemalloc',
+  'tty', 'turtle', 'turtledemo', 'types', 'typing', 'unicodedata', 'unittest', 'urllib', 'uuid', 'venv',
+  'warnings', 'wave', 'weakref', 'webbrowser', 'winreg', 'winsound', 'wsgiref', 'xml', 'xmlrpc', 'zipapp',
+  'zipfile', 'zipimport', 'zlib', 'zoneinfo', '__future__',
 ]);
 
 /**
  * Candidate directories for a dotted module, in order: relative to `dir` (rel leading dots), or, for an
  * absolute module, each ancestor of the importing file nearest first that is not itself a package (a
  * project nested under `backend/` or `services/ml/` runs with its own directory on the import path, while
- * inside a package Python 3 has no implicit relative imports), then the root and `src`. A standard library
- * name is only looked up at the root and `src`, so `app/logging.py` does not take `import logging`.
+ * inside a package Python 3 has no implicit relative imports), then the root and `src`. A bare standard
+ * library name is the standard library beside a same-named file (`app/logging.py` does not take
+ * `import logging`): at those ancestors only its imported submodules count (`subOnly`), so a local package
+ * of that name still resolves through them (`from email import services`, `email.services`).
  */
-function pyBases(dir: string, mod: string, rel: number, ctx: ImportCtx): string[] {
+function pyBases(dir: string, mod: string, rel: number, ctx: ImportCtx): { base: string; subOnly: boolean }[] {
   const p = mod.replace(/\./g, '/');
-  if (rel > 0) return [join(dir, ...Array(rel - 1).fill('..'), p)];
-  const out: string[] = [];
-  // A bare stdlib name (`import logging`) is the stdlib even beside a same-named file; a dotted path into a
-  // local package of that name (`email.services`) resolves only where that submodule exists.
-  if (mod && (!PY_STDLIB.has(mod.split('.')[0]) || mod.includes('.'))) {
-    for (let d = dir; d; d = parentDir(d)) if (!ctx.has(join(d, '__init__.py'))) out.push(join(d, p));
+  if (rel > 0) return [{ base: join(dir, ...Array(rel - 1).fill('..'), p), subOnly: false }];
+  const out: { base: string; subOnly: boolean }[] = [];
+  if (mod) {
+    const subOnly = PY_STDLIB.has(mod);
+    for (let d = dir; d; d = parentDir(d)) if (!ctx.has(join(d, '__init__.py'))) out.push({ base: join(d, p), subOnly });
   }
-  for (const r of ['', 'src']) out.push(join(r, p));
+  for (const r of ['', 'src']) out.push({ base: join(r, p), subOnly: false });
   return out;
 }
 
@@ -344,8 +359,8 @@ function pythonImports(path: string, src: string, ctx: ImportCtx, local: Set<str
   const dir = parentDir(path);
   // The first base holding the module or one of the imported submodules wins, as on Python's import path.
   const add = (mod: string, names: string[], rel: number): boolean => {
-    for (const b of pyBases(dir, mod, rel, ctx)) {
-      const hits = [pyTarget(b, mod, ctx), ...names.map(n => pyModule(join(b, n), ctx))].filter((h): h is string => !!h);
+    for (const { base: b, subOnly } of pyBases(dir, mod, rel, ctx)) {
+      const hits = [subOnly ? null : pyTarget(b, mod, ctx), ...names.map(n => pyModule(join(b, n), ctx))].filter((h): h is string => !!h);
       if (!hits.length) continue;
       for (const h of hits) local.add(h);
       return true;
@@ -525,8 +540,8 @@ export function resolveSpecifier(from: string, lang: Lang, spec: string, ctx: Im
     case 'python': {
       const m = /^(\.*)([\w.]*)$/.exec(spec);
       if (!m) return null;
-      for (const b of pyBases(dir, m[2], m[1].length, ctx)) {
-        const hit = pyTarget(b, m[2], ctx);
+      for (const { base: b, subOnly } of pyBases(dir, m[2], m[1].length, ctx)) {
+        const hit = subOnly ? null : pyTarget(b, m[2], ctx);
         if (hit) return hit;
       }
       return null;

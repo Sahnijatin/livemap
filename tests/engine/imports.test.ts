@@ -50,6 +50,14 @@ describe('extractImports', () => {
     expect(extractImports('backend/main.py', 'python', 'from email.services import send\nimport queue.tasks\nimport email\nfrom email.mime.text import MIMEText', ctx))
       .toEqual({ local: ['backend/email/services.py', 'backend/queue/tasks.py'], external: ['email'] });
     expect(resolveSpecifier('backend/main.py', 'python', 'email.services', ctx)).toBe('backend/email/services.py');
+    // The names imported from a stdlib-named package resolve through its local submodules too.
+    expect(extractImports('backend/main.py', 'python', 'from email import services', ctx).local).toEqual(['backend/email/services.py']);
+  });
+  it('python treats every standard library name alike, including ones removed from newer Pythons', () => {
+    const files = ['app/views.py', 'app/code.py', 'app/hmac.py', 'app/zoneinfo.py', 'app/imp.py'];
+    const has = new Set(files);
+    const ctx: ImportCtx = { has: p => has.has(p), files, aliases: [], goModule: null };
+    expect(extractImports('app/views.py', 'python', 'import code\nimport hmac\nimport zoneinfo\nimport imp', ctx).local).toEqual([]);
   });
   it('go', () => {
     expect(imp('cmd/main.go','go','import (\n "fmt"\n "shop/internal/db"\n)', { goModule: 'shop' }).local).toEqual(['internal/db/conn.go','internal/db/db.go']);
@@ -164,6 +172,7 @@ describe('indexing and fixes', () => {
     const after = "\nimport y from './lib';\nimport {\n  b,\n} from './lib/b';\nexport * from 'vue';\n";
     const want = { local: ['src/lib/b.ts', 'src/lib/index.ts'], external: ['vue'] };
     expect(imp('src/a.ts', 'typescript', "const re = /`/; const q = /[/'\"]/g; const half = a / 2 / b;" + after)).toEqual(want);
+    expect(imp('src/a.ts', 'typescript', "const tick = c => /`/.test(c);\nconst ok = x > /'/.source.length;" + after)).toEqual(want);
     // A raw backtick in JSX text opens a template to the next backtick; imports come first in a module.
     expect(imp('src/a.tsx', 'tsx', after + 'const P = () => <p>Don`t</p>;\nconst m = require("./lib");\n')).toEqual(want);
     expect(imp('src/a.tsx', 'tsx', "const P = () => <p>Don't</p>;" + after)).toEqual(want);
