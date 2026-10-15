@@ -72,8 +72,6 @@ export function FileTree() {
   // Open and closed folders by full path, remembered per project. Folders without an entry follow the defaults.
   const [dirs, setDirs] = useState(() => ({ root: projectRoot, open: loadDirs(projectRoot) }));
   if (dirs.root !== projectRoot) setDirs({ root: projectRoot, open: loadDirs(projectRoot) });
-  /** Folders shown open as part of a compact chain: they stay open when the chain splits. */
-  const seen = useRef(new Set<string>());
   /** Folders closed while a filter is on; forgotten with the filter. */
   const [filterClosed, setFilterClosed] = useState<{ q: string; byDir: Record<string, true> }>({ q: '', byDir: {} });
   const reduced = usePrefersReducedMotion();
@@ -89,17 +87,16 @@ export function FileTree() {
   const big = fileCount >= BIG_PROJECT;
   const state = dirs.open;
 
-  useEffect(() => { seen.current = new Set(); }, [projectRoot]);
   useEffect(() => {
     if (fromStorage.has(dirs.open)) return;
     saveTreeState(dirs.root, dirs.open);
   }, [dirs]);
-  const latest = useRef({ tree, big });
-  latest.current = { tree, big };
+  const latestBig = useRef(big);
+  latestBig.current = big;
   /** Opens the closed folders above `path` (the user's state, so it is remembered). */
   const openAbove = useCallback((path: string) => {
     setDirs(d => {
-      const need = closedAbove(latest.current.tree, path, d.open, latest.current.big, seen.current);
+      const need = closedAbove(path, d.open, latestBig.current);
       if (!need.length) return d;
       const open = { ...d.open };
       for (const a of need) open[a] = true;
@@ -109,10 +106,10 @@ export function FileTree() {
 
   const activity = useMemo(() => dirActivity(live, targetPath), [live, targetPath]);
   const selectedDirs = useMemo(() => new Set(selected === null ? [] : ancestors(selected)), [selected]);
-  const dirOpen = useCallback((paths: string[], level: number): boolean => {
+  const dirOpen = useCallback((paths: string[]): boolean => {
     // A filter shows every folder above a match, except those closed during it.
     if (q) return !closedNow[paths[paths.length - 1]];
-    return chainOpen(paths, level, state, big, seen.current);
+    return chainOpen(paths, state, big);
   }, [q, closedNow, state, big]);
 
   // Auto-reveal: open the target's folders, then scroll its row into view. Never selects or focuses.
@@ -145,10 +142,6 @@ export function FileTree() {
     () => visibleItems(tree, dirOpen, rowOpen, dirLimit, pins),
     [tree, dirOpen, rowOpen, dirLimit, pins],
   );
-  useEffect(() => {
-    if (q) return;
-    for (const it of openItems) if (it.kind === 'dir' && it.open && it.chain.length > 1) for (const p of it.chain) seen.current.add(p);
-  }, [openItems, q]);
   const dirItems = useMemo(() => {
     const m = new Map<string, Extract<Item, { kind: 'dir' }>>();
     for (const it of openItems) if (it.kind === 'dir') m.set(it.node.path, it);
@@ -159,7 +152,7 @@ export function FileTree() {
   const items = useMemo(() => {
     if (!folding.length) return openItems;
     const f = new Set(folding);
-    return visibleItems(tree, (paths, level) => dirOpen(paths, level) || f.has(paths[paths.length - 1]), rowOpen, dirLimit, pins).items;
+    return visibleItems(tree, paths => dirOpen(paths) || f.has(paths[paths.length - 1]), rowOpen, dirLimit, pins).items;
   }, [openItems, folding, tree, dirOpen, rowOpen, dirLimit, pins]);
   useEffect(() => {
     const ends = Object.values(moving).map(m => m.until);
@@ -318,7 +311,7 @@ export function FileTree() {
           onClick={() => toggleDir(dir)}
           title={`${dir} · ${node.count.toLocaleString()} ${node.count === 1 ? 'file' : 'files'}`}
         >
-          <Chevron className="dchev" /><i /><MidName name={label} />
+          <Chevron className="dchev" /><i /><MidName name={label} kind="dir" />
           {act && <em className={clsx('dlive', act, act !== 'new' && 'pulse')} role="img" aria-label={ACTIVITY[act].label} title={ACTIVITY[act].title} />}
           {!open && !act && selectedDirs.has(dir) && <em className="dlive" role="img" aria-label="contains the selected file" title="The selected file is in this folder" />}
           <b>{node.count.toLocaleString()}</b>

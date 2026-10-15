@@ -3,7 +3,7 @@ import { LAYER_ORDER, layerOf, type Layer } from './layers';
 import { countSymbols, flattenSymbols, symbolTags, type SymbolTag } from './changes';
 import { baseName, dirName, type LiveBadge } from './recent';
 
-/** At this many files and above, every folder starts collapsed. */
+/** At this many files and above, folders start collapsed (only the top level shows); below, all start open. */
 export const BIG_PROJECT = 2000;
 /** Rows (subfolders, then files) an open folder shows at first; each "Show more" adds this many. */
 export const DIR_BATCH = 200;
@@ -118,31 +118,18 @@ export function ancestors(path: string): string[] {
 
 /**
  * Whether a folder row is open. `paths` are the folders the row stands for (several for a compact chain): it is open
- * only when each is. A folder without a stored choice is open at the top level of a project under BIG_PROJECT files,
- * or when it was shown open as part of a chain that has since split (`seen`).
+ * only when each is. A folder without a stored choice is open in a project under BIG_PROJECT files and closed above.
  */
-export function chainOpen(paths: string[], level: number, state: Record<string, boolean>, big: boolean, seen?: Set<string>): boolean {
-  const dflt = !big && level === 1;
+export function chainOpen(paths: string[], state: Record<string, boolean>, big: boolean): boolean {
   return paths.every(p => {
     const v = state[p];
-    return typeof v === 'boolean' ? v : dflt || !!seen?.has(p);
+    return typeof v === 'boolean' ? v : !big;
   });
 }
 
-/** The folders above `path` that are closed now (so revealing it opens only those); folders not in the tree are skipped. */
-export function closedAbove(root: DirNode, path: string, state: Record<string, boolean>, big: boolean, seen?: Set<string>): string[] {
-  const out: string[] = [];
-  let node = root;
-  let level = 0;
-  for (const a of ancestors(path)) {
-    const child = node.dirs.find(d => d.path === a);
-    if (!child) break;
-    // A folder starts a new row unless its parent is compacted into it.
-    if (node === root || node.rows.length > 0 || node.dirs.length > 1) level++;
-    if (!chainOpen([a], level, state, big, seen)) out.push(a);
-    node = child;
-  }
-  return out;
+/** The folders above `path` that are closed now, so revealing it opens only those. */
+export function closedAbove(path: string, state: Record<string, boolean>, big: boolean): string[] {
+  return ancestors(path).filter(a => !chainOpen([a], state, big));
 }
 
 export type Activity = LiveBadge | 'now';
@@ -228,22 +215,35 @@ export function visibleItems(
   return { items, navKeys, rendered };
 }
 
-/** Longest end kept whole when a name is cut in the middle. */
+/** Names up to this long are not split; a split end is at most this long. */
 const TAIL_MAX = 14;
+/** The last folder of a chain up to this long is kept whole as the end. */
+const SEGMENT_MAX = 16;
 const LOWER = /\p{Ll}/u;
 const UPPER = /\p{Lu}/u;
 
 /**
- * A long name split for middle truncation: the start shrinks with an ellipsis, the end (the last folder of a chain,
- * or a word and the extension of a file) always shows. A short name comes back whole, with an empty end.
+ * A name split for middle truncation into a start (which ellipsizes) and an end (which always shows). A file keeps
+ * its last word and extension: the longest end of at most 14 chars that starts after `-`, `_`, `.`, a space or a
+ * lower-to-upper case change, else its last 10 chars. A folder row keeps its last folder when that is at most 16
+ * chars, else splits the last folder the same way. A short name comes back whole, with an empty end.
  */
-export function splitName(name: string): [string, string] {
+export function splitName(name: string, kind: 'file' | 'dir' = 'file'): [string, string] {
+  const slash = kind === 'dir' ? name.lastIndexOf('/') : -1;
+  if (slash >= 0) {
+    const last = name.slice(slash + 1);
+    if (last.length <= SEGMENT_MAX) return [name.slice(0, slash + 1), last];
+    const [head, tail] = splitWord(last);
+    return [name.slice(0, slash + 1) + head, tail];
+  }
+  return splitWord(name);
+}
+
+function splitWord(name: string): [string, string] {
   if (name.length <= TAIL_MAX) return [name, ''];
-  const slash = name.lastIndexOf('/');
-  if (slash > 0 && slash < name.length - 1 && name.length - slash - 1 <= TAIL_MAX) return [name.slice(0, slash + 1), name.slice(slash + 1)];
-  for (let i = Math.max(4, name.length - TAIL_MAX); i <= name.length - 4; i++) {
+  for (let i = name.length - TAIL_MAX; i <= name.length - 4; i++) {
     const a = name[i - 1];
-    if ('-_. /'.includes(a) || (LOWER.test(a) && UPPER.test(name[i]))) return [name.slice(0, i), name.slice(i)];
+    if ('-_. '.includes(a) || (LOWER.test(a) && UPPER.test(name[i]))) return [name.slice(0, i), name.slice(i)];
   }
   return [name.slice(0, -10), name.slice(-10)];
 }

@@ -126,8 +126,8 @@
   .dir b { margin-left:auto; font:500 11px var(--sans); color:var(--ink3); font-variant-numeric:tabular-nums; flex-shrink:0; }
   /* A name cut in the middle: the start ellipsizes, the end (a word and the extension, or the last folder) stays. */
   .frow .fn, .dir .fn { display:flex; flex:1 1 auto; min-width:7ch; overflow:hidden; white-space:pre; }
-  .fn > span:first-child { min-width:2ch; overflow:hidden; text-overflow:ellipsis; }
-  .fn > span + span { flex-shrink:0; }
+  .fn > span:first-child { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:pre; }
+  .fn > span + span { flex:0 0 auto; white-space:pre; }
   .more-rows { display:block; width:calc(100% - 16px - var(--d,0) * 12px); margin:8px 8px 8px calc(8px + var(--d,0) * 12px); padding:8px 10px; border:1px dashed var(--hair2); border-radius:10px; background:transparent; color:var(--blue); font-size:12.5px; font-weight:500; cursor:pointer; }
   .more-rows:hover { background:var(--hair); }
   .frow { display:flex; width:100%; text-align:left; border:0; background:transparent; align-items:center; gap:8px; padding:6px 8px 6px calc(8px + var(--d,0) * 12px); border-radius:10px; cursor:pointer; font-size:13.5px; transition:background .2s; }

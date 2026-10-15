@@ -10,8 +10,8 @@ import { Chevron, KindBadge, LayerTile } from './icons';
 const PARSE_ERROR_TIP = 'Parse error: showing the last good structure';
 
 /** A name cut in the middle when it does not fit: the start shrinks with an ellipsis, the end always shows. */
-export function MidName({ name }: { name: string }) {
-  const [head, tail] = splitName(name);
+export function MidName({ name, kind = 'file' }: { name: string; kind?: 'file' | 'dir' }) {
+  const [head, tail] = splitName(name, kind);
   return <span className="fn"><span>{head}</span>{tail && <span>{tail}</span>}</span>;
 }
 

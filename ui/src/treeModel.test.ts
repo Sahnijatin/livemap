@@ -88,19 +88,18 @@ describe('compact folders', () => {
     expect(items(after.root).map(label)).toEqual(['src/', '  app/', '    src/app/page.tsx', '  src/main.ts']);
     // The chain was opened as a whole, so both folders are open after the split, and closed again when it rejoins.
     const state = { src: true, 'src/app': true };
-    const open = (paths: string[], level: number) => chainOpen(paths, level, state, false);
+    const open = (paths: string[]) => chainOpen(paths, state, true);
     expect(items(after.root, open).map(label)).toContain('    src/app/page.tsx');
     expect(items(before.root, open).map(label)).toContain('  src/app/page.tsx');
   });
 
   it('a chain is open only when every folder in it is', () => {
-    expect(chainOpen(['a', 'a/b'], 1, {}, false)).toBe(true); // top level of a small project
-    expect(chainOpen(['a', 'a/b'], 1, {}, true)).toBe(false); // big project
-    expect(chainOpen(['a', 'a/b'], 1, { 'a/b': false }, false)).toBe(false);
-    expect(chainOpen(['a/b'], 2, {}, false)).toBe(false); // deeper folders start closed
-    expect(chainOpen(['a/b'], 2, { 'a/b': true }, true)).toBe(true);
-    expect(chainOpen(['a/b'], 2, {}, false, new Set(['a/b']))).toBe(true); // seen open as part of a chain
-    expect(chainOpen(['a/b'], 2, { 'a/b': false }, false, new Set(['a/b']))).toBe(false);
+    expect(chainOpen(['a', 'a/b'], {}, false)).toBe(true); // a small project starts fully open
+    expect(chainOpen(['a', 'a/b'], {}, true)).toBe(false); // a big one starts closed
+    expect(chainOpen(['a', 'a/b'], { 'a/b': false }, false)).toBe(false);
+    expect(chainOpen(['a', 'a/b'], { a: true }, true)).toBe(false);
+    expect(chainOpen(['a', 'a/b'], { a: true, 'a/b': true }, true)).toBe(true);
+    expect(chainOpen(['constructor'], {}, true)).toBe(false); // inherited object keys are not stored choices
   });
 });
 
@@ -172,16 +171,32 @@ describe('activity and ancestors', () => {
 describe('splitName', () => {
   it('keeps a short name whole', () => {
     expect(splitName('page.tsx')).toEqual(['page.tsx', '']);
+    expect(splitName('maintenance', 'dir')).toEqual(['maintenance', '']);
   });
 
-  it('splits a long name at a word boundary so the end and extension stay visible', () => {
+  it('keeps a file\'s last word and extension as the end', () => {
     expect(splitName('bounty-contract-route.test.ts')).toEqual(['bounty-contract-', 'route.test.ts']);
+    expect(splitName('payout_schedule_handler.ts')).toEqual(['payout_schedule_', 'handler.ts']);
     expect(splitName('orderService.ts')).toEqual(['order', 'Service.ts']);
-    expect(splitName('src/app/(admin)')).toEqual(['src/app/', '(admin)']);
-    const [head, tail] = splitName('averyveryverylongnamewithoutbreaks.ts');
-    expect(head + tail).toBe('averyveryverylongnamewithoutbreaks.ts');
-    expect(tail.length).toBeLessThanOrEqual(14);
-    expect(tail.endsWith('.ts')).toBe(true);
+    expect(splitName('averyveryverylongnamewithoutbreaks.ts')).toEqual(['averyveryverylongnamewithou', 'tbreaks.ts']);
+  });
+
+  it('keeps a folder row\'s last folder as the end, splitting a long one by word', () => {
+    expect(splitName('src/app/(admin)', 'dir')).toEqual(['src/app/', '(admin)']);
+    expect(splitName('scripts/maintenance', 'dir')).toEqual(['scripts/', 'maintenance']);
+    expect(splitName('.agents/skills/supabase-row-level-security', 'dir')).toEqual(['.agents/skills/supabase-row-', 'level-security']);
+    expect(splitName('supabase-auth-integration', 'dir')).toEqual(['supabase-auth-', 'integration']);
+    expect(splitName('a/averyveryverylongfoldername', 'dir')).toEqual(['a/averyveryverylong', 'foldername']);
+  });
+
+  it('never returns an empty start with a non-empty end', () => {
+    for (const n of ['x'.repeat(15), 'a/' + 'y'.repeat(30), '-'.repeat(20), 'ab-cd-ef-gh-ij-kl-mn']) {
+      for (const kind of ['file', 'dir'] as const) {
+        const [head, tail] = splitName(n, kind);
+        expect(head + tail).toBe(n);
+        if (tail) expect(head.length).toBeGreaterThan(0);
+      }
+    }
   });
 });
 
@@ -226,12 +241,10 @@ describe('tree performance', () => {
 });
 
 describe('closedAbove', () => {
-  it('lists only the closed folders above a path, by the same rules as the rows', () => {
-    const { root } = tree(['a/b/c/x.ts', 'a/y.ts', 'p/q/z.ts']);
-    expect(closedAbove(root, 'a/b/c/x.ts', {}, false)).toEqual(['a/b', 'a/b/c']); // b/c is one row at level 2
-    expect(closedAbove(root, 'p/q/z.ts', {}, false)).toEqual([]); // p/q is one row at the top level
-    expect(closedAbove(root, 'p/q/z.ts', {}, true)).toEqual(['p', 'p/q']);
-    expect(closedAbove(root, 'a/b/c/x.ts', { 'a/b': true, 'a/b/c': true }, false)).toEqual([]);
-    expect(closedAbove(root, 'gone/x.ts', {}, true)).toEqual([]);
+  it('lists only the closed folders above a path', () => {
+    expect(closedAbove('a/b/c/x.ts', {}, false)).toEqual([]);
+    expect(closedAbove('a/b/c/x.ts', {}, true)).toEqual(['a', 'a/b', 'a/b/c']);
+    expect(closedAbove('a/b/c/x.ts', { a: true, 'a/b/c': false }, true)).toEqual(['a/b', 'a/b/c']);
+    expect(closedAbove('x.ts', {}, true)).toEqual([]);
   });
 });

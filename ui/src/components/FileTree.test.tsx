@@ -361,20 +361,22 @@ describe('FileTree folders', () => {
     expect(dir('.agents/skills')!.querySelector('.fn')!.textContent).toBe('.agents/skills');
     expect(dir('.agents/skills')!.getAttribute('title')).toBe('.agents/skills · 2 files');
     expect(dir('Web')!.querySelector('b')!.textContent).toBe('2');
-    expect(dir('Web')!.getAttribute('aria-expanded')).toBe('true'); // top level of a small project
-    expect(dir('Web/lib')!.getAttribute('aria-expanded')).toBe('false'); // deeper folders start closed
+    expect(dir('Web')!.getAttribute('aria-expanded')).toBe('true'); // a small project starts fully open
+    expect(dir('Web/lib')!.getAttribute('aria-expanded')).toBe('true');
     expect(dir('Web/lib')!.getAttribute('aria-level')).toBe('2');
     expect(host.querySelector('[data-file="Web/App.tsx"]')!.getAttribute('aria-level')).toBe('2');
-    expect(host.querySelector('[data-file="Web/lib/util.ts"]')).toBeNull();
+    expect(host.querySelector('[data-file="Web/lib/util.ts"]')!.getAttribute('aria-level')).toBe('3');
   });
 
-  it('starts every folder closed at 2,000 files', () => {
+  it('shows only the top level at 2,000 files, and everything open below that', () => {
     const files = [];
-    for (let i = 0; i < 2000; i++) files.push(file(`d${i % 4}/f${i}.ts`));
+    for (let i = 0; i < 1999; i++) files.push(file(`d${i % 4}/sub/f${i}.ts`));
     useStore.getState().apply(hello(files));
     mount();
-    expect(host.querySelectorAll('.dir')).toHaveLength(4);
-    expect(rows()).toBe(0);
+    expect(host.querySelector('[data-file="d0/sub/f0.ts"]')).not.toBeNull();
+    act(() => useStore.getState().apply({ type: 'files', files: [file('top.ts')], removed: [] }));
+    expect([...host.querySelectorAll<HTMLElement>('[role=treeitem]')].map(e => e.dataset.nav)).toEqual(['dir:d0/sub', 'dir:d1/sub', 'dir:d2/sub', 'dir:d3/sub', 'top.ts']);
+    expect(rows()).toBe(1);
   });
 
   it('remembers opened and closed folders per project across remounts, ignoring folders that are gone', () => {
@@ -382,12 +384,14 @@ describe('FileTree folders', () => {
     mount();
     act(() => dir('a/b')!.click());
     act(() => dir('c')!.click());
-    expect(JSON.parse(localStorage.getItem('livemap:tree:/p/shop')!)).toEqual({ 'a/b': true, c: false });
+    act(() => dir('c')!.click());
+    expect(JSON.parse(localStorage.getItem('livemap:tree:/p/shop')!)).toEqual({ 'a/b': false, c: true });
     act(() => root.unmount());
     root = createRoot(host);
-    localStorage.setItem('livemap:tree:/p/shop', JSON.stringify({ 'a/b': true, c: false, gone: true, bad: 3 }));
+    localStorage.setItem('livemap:tree:/p/shop', JSON.stringify({ 'a/b': false, c: false, gone: true, bad: 3 }));
     mount();
-    expect(host.querySelector('[data-file="a/b/x.ts"]')).not.toBeNull();
+    expect(host.querySelector('[data-file="a/b/x.ts"]')).toBeNull();
+    expect(host.querySelector('[data-file="a/y.ts"]')).not.toBeNull();
     expect(host.querySelector('[data-file="c/z.ts"]')).toBeNull();
     localStorage.setItem('livemap:tree:/p/shop', '{not json');
     act(() => root.unmount());
@@ -432,6 +436,8 @@ describe('FileTree folders', () => {
   it('moves with the arrow keys: Right opens then enters, Left closes then goes up, Home and End', () => {
     useStore.getState().apply(hello([file('a/b/x.ts'), file('a/y.ts'), file('z.ts')]));
     mount();
+    act(() => dir('a/b')!.click()); // start with a/b closed
+    act(() => { vi.advanceTimersByTime(400); });
     const a = dir('a')!;
     act(() => a.focus());
     key('ArrowDown');
@@ -488,7 +494,7 @@ describe('FileTree folders', () => {
     act(() => useStore.getState().setFilter(''));
     expect(dir('docs')!.getAttribute('aria-expanded')).toBe('false');
     expect(dir('src')!.getAttribute('aria-expanded')).toBe('true');
-    expect(dir('src/app/(admin)')!.getAttribute('aria-expanded')).toBe('false');
+    expect(dir('src/app/(admin)')!.getAttribute('aria-expanded')).toBe('true');
     expect(JSON.parse(localStorage.getItem('livemap:tree:/p/shop')!)).toEqual({ docs: false });
   });
 

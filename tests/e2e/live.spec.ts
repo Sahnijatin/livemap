@@ -4,7 +4,6 @@ import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
-import { openFolders } from './tree';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../..');
@@ -59,9 +58,8 @@ test('live update flow: browse, inspect, edit, break, delete', async ({ page }) 
   // R11: the token is stripped from the address bar after load.
   await expect(page).not.toHaveURL(/[?&]t=/);
 
-  await openFolders(tree(page), SERVICE);
   await expect(fileRow(page, SERVICE)).toBeVisible({ timeout: 15_000 });
-  // A reload (no ?t= any more) keeps the folders open, and still connects: the tab keeps its key in sessionStorage, not a cookie.
+  // A reload (no ?t= any more) still connects: the tab keeps its key in sessionStorage, not a cookie.
   await page.reload();
   expect(await page.context().cookies()).toEqual([]);
   const row = fileRow(page, SERVICE);
