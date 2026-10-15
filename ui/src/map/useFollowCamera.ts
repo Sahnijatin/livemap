@@ -123,5 +123,10 @@ export function useFollowCamera(graph: MapGraph, boxes: Map<string, Box> | null,
     request(boxRef.current);
   }, [request]);
 
-  return { paused: follow && paused, userMoved, moved, hold, release };
+  /** A camera gesture ended without moving (a click that may have cut a Follow move short): ask for the target again. */
+  const nudge = useCallback(() => {
+    if (follow) request(boxRef.current);
+  }, [follow, request]);
+
+  return { paused: follow && paused, userMoved, moved, hold, release, nudge };
 }

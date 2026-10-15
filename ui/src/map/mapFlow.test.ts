@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { Position } from '@xyflow/react';
 import { linkPath } from './LinkEdge';
 import type { MapFile } from './mapModel';
-import { DataCache, FOCUS_ZOOM, READABLE_ZOOM, cameraPlan, nearestInDirection } from './mapFlow';
+import { emptyPositions } from './mapLayout';
+import { DataCache, FOCUS_ZOOM, READABLE_ZOOM, cameraPlan, edgeSides, nearestInDirection, shouldSavePin } from './mapFlow';
 
 const file = (id: string, extra: Partial<MapFile> = {}): MapFile => ({
   id, folder: 'dir:a', label: id, layer: 'core', symbols: 1, rows: [], isNew: false, isLive: false, isFlagged: false, ...extra,
@@ -64,5 +65,31 @@ describe('linkPath (F12)', () => {
     expect(c1x - sx).toBe(50);
     const [lx, , l1x] = nums(linkPath(0, 0, 900, 0, Position.Right, Position.Left));
     expect(l1x - lx).toBe(450);
+  });
+});
+
+describe('edgeSides (#15)', () => {
+  it('links use only the two handles l and r: rightward r to l, leftward l to r, same column r to r', () => {
+    const at = (x: number) => ({ x, y: 0, w: 250, h: 62 });
+    expect(edgeSides(at(0), at(400))).toEqual({ sourceHandle: 'r', targetHandle: 'l' });
+    expect(edgeSides(at(400), at(0))).toEqual({ sourceHandle: 'l', targetHandle: 'r' });
+    expect(edgeSides(at(0), at(50))).toEqual({ sourceHandle: 'r', targetHandle: 'r' });
+  });
+});
+
+describe('shouldSavePin (#15)', () => {
+  const placed = emptyPositions();
+  placed.files.set('a.ts', { x: 0, y: 0 });
+  placed.folders.set('dir:src', { x: 0, y: 0, w: 300, h: 200 });
+
+  it('saves a drag that ends on a card of the laid-out level', () => {
+    expect(shouldSavePin({ id: 'a.ts', type: 'file' }, placed, false)).toBe(true);
+    expect(shouldSavePin({ id: 'dir:src', type: 'folder' }, placed, false)).toBe(true);
+  });
+
+  it('saves nothing while a level switch or reset waits for its layout, or for a card that layout does not place', () => {
+    expect(shouldSavePin({ id: 'a.ts', type: 'file' }, placed, true)).toBe(false);
+    expect(shouldSavePin({ id: 'b.ts', type: 'file' }, placed, false)).toBe(false);
+    expect(shouldSavePin({ id: 'a.ts', type: 'folder' }, placed, false)).toBe(false);
   });
 });

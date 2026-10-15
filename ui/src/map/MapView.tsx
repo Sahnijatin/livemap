@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  ReactFlow, ReactFlowProvider, getViewportForBounds, useReactFlow, useStoreApi,
+  ConnectionMode, ReactFlow, ReactFlowProvider, getViewportForBounds, useReactFlow, useStore as useFlowStore, useStoreApi,
   type Node, type Viewport,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -17,7 +17,7 @@ import { emptyPositions, placeMap, type Positions } from './mapLayout';
 import { fileKind, filePins, type Pins } from './pins';
 import {
   FIT_MIN_ZOOM, boundsOf, cameraPlan, flowEdges, freshEdgeIds, highlightEdges, layoutBoxes, nearestInDirection, nextSettle,
-  prefersReducedMotion, type Box, type Dir, type LinkFlowEdge, type MapFlowNode,
+  prefersReducedMotion, shouldSavePin, type Box, type Dir, type LinkFlowEdge, type MapFlowNode,
 } from './mapFlow';
 import { MapContext, type MapActions } from './MapContext';
 import { FileNode } from './FileNode';
@@ -40,6 +40,8 @@ const FOCUS_MIN_ZOOM = 0.8;
 const FOCUS_MS = 600;
 /** A palette focus waiting for a layout (level switch, folder opening) is dropped after this long. */
 export const FOCUS_WAIT_MS = 3000;
+/** Below this zoom the map drops card shadows and sub-labels (`.mapv.far`), which cost frames and cannot be read anyway. */
+export const FAR_ZOOM = 0.45;
 
 /**
  * Session memory (not storage), per project: each level's layout, the viewport, when new links first
@@ -179,7 +181,7 @@ function Canvas({ run, tools }: { run: ElkRun; tools: HTMLElement | null }) {
   const camera = useRef<Camera | null>(mem.viewport ? null : { kind: 'first' });
   // While an overview waits for its layout, Follow holds off (it would move first, then cut the overview off).
   const {
-    paused: followPaused, userMoved: followUserMoved, moved: followMoved, hold: followHold, release: followRelease,
+    paused: followPaused, userMoved: followUserMoved, moved: followMoved, hold: followHold, release: followRelease, nudge: followNudge,
   } = useFollowCamera(graph, boxes, target, camera.current?.kind === 'first');
   const overviewNext = useCallback(() => { camera.current = { kind: 'overview' }; followHold(); }, [followHold]);
   /** The user moved the camera: Follow pauses, and a palette focus still waiting for its layout is dropped. */
@@ -315,9 +317,7 @@ function Canvas({ run, tools }: { run: ElkRun; tools: HTMLElement | null }) {
   const onNodeDragStop = useCallback((_: unknown, n: Node) => {
     dragEnd(n.id);
     const g = latest.current;
-    // While a level switch or a reset waits for its layout, the cards on screen are not this level's: no pin.
-    const was0 = mem.levels[g.level];
-    if (layoutRef.current?.level !== g.level || !(n.type === 'file' ? was0.files.has(n.id) : was0.folders.has(n.id))) return;
+    if (!shouldSavePin(n, mem.levels[g.level], layoutRef.current?.level !== g.level)) return;
     const p = { x: Math.round(n.position.x), y: Math.round(n.position.y) };
     if (n.type === 'file') pins.pin(fileKind(g.level), n.id, p);
     else if (g.level === 'folders') pins.pin('folders', n.id, p);
@@ -392,10 +392,12 @@ function Canvas({ run, tools }: { run: ElkRun; tools: HTMLElement | null }) {
   // A user pan or zoom pauses Follow; a press that leaves the camera where it was (a plain click) does not.
   const gesture = useRef<MoveGesture | null>(null);
   gesture.current ??= new MoveGesture();
+  // A boolean, so zooming re-renders the map only when it crosses the threshold.
+  const far = useFlowStore(s => s.transform[2] < FAR_ZOOM);
 
   return (
     <MapContext.Provider value={actions}>
-      <div className={['mapv', focus && 'focusing', switching && 'switching'].filter(Boolean).join(' ')} ref={wrap}>
+      <div className={['mapv', focus && 'focusing', switching && 'switching', far && 'far'].filter(Boolean).join(' ')} ref={wrap}>
         {/* Screen-space dot grid (prototype #gridbg): it stays crisp at every zoom. */}
         <div className="gridbg" aria-hidden="true" />
         <svg className="map-defs" width="0" height="0" aria-hidden="true" focusable="false">
@@ -412,6 +414,7 @@ function Canvas({ run, tools }: { run: ElkRun; tools: HTMLElement | null }) {
             edges={edges}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
+            connectionMode={ConnectionMode.Loose}
             onNodesChange={onNodesChange}
             onNodeDragStart={(_, n) => dragStart(n.id)}
             onNodeDragStop={onNodeDragStop}
@@ -421,7 +424,12 @@ function Canvas({ run, tools }: { run: ElkRun; tools: HTMLElement | null }) {
             // A real event and a changed viewport mean the user moved the camera (programmatic moves have no event).
             onMoveStart={(e, vp) => gesture.current!.begin(!!e, vp)}
             onMove={(e, vp) => { if (gesture.current!.step(!!e, vp)) userMoved(); }}
-            onMoveEnd={(e, vp) => { mem.viewport = vp; if (gesture.current!.end(!!e, vp)) userMoved(); }}
+            // A user press that moved nothing (a click) may have interrupted a Follow move: Follow asks again.
+            onMoveEnd={(e, vp) => {
+              mem.viewport = vp;
+              if (gesture.current!.end(!!e, vp)) userMoved();
+              else if (e) followNudge();
+            }}
             defaultViewport={mem.viewport ?? undefined}
             // Pins are live layout edits: off while the UI shows the past.
             nodesDraggable={!rewound}
