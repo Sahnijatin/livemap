@@ -156,10 +156,27 @@ describe('indexing and fixes', () => {
     const after = "\nimport y from './lib';\nimport {\n  b,\n} from './lib/b';\nexport * from 'vue';\n";
     const want = { local: ['src/lib/b.ts', 'src/lib/index.ts'], external: ['vue'] };
     expect(imp('src/a.ts', 'typescript', "const re = /`/; const q = /[/'\"]/g; const half = a / 2 / b;" + after)).toEqual(want);
-    expect(imp('src/a.tsx', 'tsx', 'const P = () => <p>Don`t</p>;' + after)).toEqual(want);
+    // A raw backtick in JSX text opens a template to the next backtick; imports come first in a module.
+    expect(imp('src/a.tsx', 'tsx', after + 'const P = () => <p>Don`t</p>;\nconst m = require("./lib");\n')).toEqual(want);
     expect(imp('src/a.tsx', 'tsx', "const P = () => <p>Don't</p>;" + after)).toEqual(want);
     // A regex body is not code, and a template still hides import-like text that does not start a line.
     expect(imp('src/a.ts', 'typescript', "const r = /import x from 'lodash'/;\nconst t = `a\n  b; import z from 'chalk'`;" + after)).toEqual(want);
+  });
+  it('reads no imports from a code-generation template, and keeps the code after it', () => {
+    const src = "const out = `import { x } from './generated';\nexport * from './gen2';\n`;\nconst a = require('./lib');\nconst b = await import('vue');\n";
+    expect(imp('src/a.ts', 'typescript', src)).toEqual({ local: ['src/lib/index.ts'], external: ['vue'] });
+  });
+  it('reads a specifier on its own line after from', () => {
+    expect(imp('src/a.ts', 'typescript', "import { b } from\n                              './lib/b';\nimport * as v from 'vue';\n")).toEqual({ local: ['src/lib/b.ts'], external: ['vue'] });
+  });
+  it('reads a named import of any length', () => {
+    const names = Array.from({ length: 400 }, (_, i) => `  Icon${i},`).join('\n');
+    expect(imp('src/a.ts', 'typescript', `import {\n${names}\n} from './lib/b';\n`).local).toEqual(['src/lib/b.ts']);
+  });
+  it('stays fast on a long run of import keywords with no quote', () => {
+    const t = Date.now();
+    imp('src/a.ts', 'typescript', 'import '.repeat(300_000) + "\nimport a from 'vue';\n");
+    expect(Date.now() - t).toBeLessThan(2000);
   });
   it('prefers the longest alias prefix', () => {
     expect(imp('src/a.ts','typescript',`import b from '@a/lib/b'`, { aliases: [['@a',['nowhere']],['@a/lib',['src/lib']]] }).local).toEqual(['src/lib/b.ts']);

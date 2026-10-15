@@ -90,8 +90,6 @@ function indexOf(ctx: ImportCtx): FileIndex {
 
 const blank = (s: string): string => s.replace(/[^\n]/g, ' ');
 
-/** A line inside a template that starts an import or export statement; the template is taken to end before it. */
-const STATEMENT_LINE = /\n[ \t]*(?:import[ \t]*['"]|(?:import|export)[ \t{*][^'"`;]{0,500}?\bfrom[ \t]*['"])/y;
 /** Code after which a `/` starts a regex literal rather than a division. */
 const REGEX_AFTER = new Set(['', '=', '(', ',', ':', '[', '!', '&', '|', '?', '{', '}', ';']);
 const REGEX_KEYWORD = /\b(?:return|typeof|case|void|yield|await|in|of|delete|instanceof)$/;
@@ -112,8 +110,8 @@ function regexEnd(src: string, i: number): number {
 /**
  * `src` with comments and the bodies of string, template and regex literals blanked (quotes and newlines
  * kept), so offsets still match `src`: statements are matched here and their specifiers read back from `src`.
- * A stray quote must not hide the imports after it: a quoted string ends at its line's end, and a template
- * ends early before a line that starts an import or export statement.
+ * A stray quote or backtick in a regex must not hide the imports after it: a quoted string ends at its line's
+ * end and regex literals are skipped. (A raw backtick in JSX text still opens a template to the next one.)
  */
 function blankJs(src: string): string {
   let out = '';
@@ -129,10 +127,7 @@ function blankJs(src: string): string {
       let closed = false;
       for (; j < src.length; j += src[j] === '\\' ? 2 : 1) {
         if (src[j] === c) { closed = true; break; }
-        if (src[j] !== '\n') continue;
-        if (c !== '`') break;
-        STATEMENT_LINE.lastIndex = j;
-        if (STATEMENT_LINE.test(src)) break;
+        if (src[j] === '\n' && c !== '`') break;
       }
       j = Math.min(j, src.length);
       out += c + blank(src.slice(i + 1, j)) + (closed ? c : '');
@@ -180,16 +175,53 @@ function jsSpecs(path: string, src: string, cache: ImportCtx['specCache']): stri
   return specs;
 }
 
+const STATIC_HEAD = /\b(?:import|export)\s+(?:type\s+)?/g;
+/** Whether `from` (after a space or `}`) ends the clause before `stop`, past any whitespace. */
+function endsWithFrom(bare: string, stop: number): boolean {
+  let j = stop - 1;
+  while (j >= 0 && /\s/.test(bare[j])) j--;
+  return j >= 4 && bare.slice(j - 3, j + 1) === 'from' && /[\s}*]/.test(bare[j - 4]);
+}
+
+/**
+ * Specifiers of static `import ... from 'x'`, `import 'x'` and `export ... from 'x'` statements, of any length
+ * (a barrel import may name hundreds of bindings). The clause runs to the first quote or `;`; that position
+ * is found once per stretch of text, so the scan stays linear even on a long run of `import` with no quote.
+ */
+function staticSpecs(src: string, bare: string, out: string[]): void {
+  let stop = -1;
+  let fromTail = false;
+  let skip = 0;
+  for (const m of bare.matchAll(STATIC_HEAD)) {
+    if (m.index < skip) continue;
+    const from = m.index + m[0].length;
+    if (stop < from) {
+      stop = from;
+      while (stop < bare.length && bare[stop] !== "'" && bare[stop] !== '"' && bare[stop] !== ';') stop++;
+      // Every head before this quote shares the clause's end, so its `from` is checked once.
+      fromTail = endsWithFrom(bare, stop);
+    }
+    if (stop >= bare.length || bare[stop] === ';') continue;
+    // `import 'x'` (nothing between) or `import ... from 'x'`.
+    if (from !== stop && !fromTail) continue;
+    const close = bare.indexOf(bare[stop], stop + 1);
+    if (close < 0) continue;
+    const spec = src.slice(stop + 1, close);
+    if (spec.trim() && !spec.includes('\n')) out.push(spec);
+    skip = close + 1;
+  }
+}
+
 function parseJsSpecs(src: string): string[] {
   indexStats.jsParses++;
   const out: string[] = [];
+  // Text inside other strings (`"import x from 'y'"`) is blank, so only real statements match.
+  const bare = blankJs(src);
+  staticSpecs(src, bare, out);
   const patterns = [
-    /\b(?:import|export)\s+(?:type\s+)?(?:[^'";]{0,2000}?\s+from\s+)?['"]([^'"\n]+)['"]/dg,
     /\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)/dg,
     /\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*\)/dg,
   ];
-  // Text inside other strings (`"import x from 'y'"`) is blank, so only real statements match.
-  const bare = blankJs(src);
   for (const re of patterns) {
     for (const m of bare.matchAll(re)) {
       const [start, end] = m.indices![1];
