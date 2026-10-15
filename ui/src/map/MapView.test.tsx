@@ -258,6 +258,21 @@ describe('MapView', () => {
     await vi.waitFor(() => expect(card(APP)!.dataset.x).not.toBe('5000'));
   });
 
+  it('while rewound, Reset layout is disabled and cards say why they cannot be dragged', async () => {
+    hello(baseFiles());
+    await mount();
+    act(() => {
+      const st = useStore.getState();
+      st.rewind({ root: st.root, name: st.name, files: Object.values(st.files), changes: [], usedBy: [], domain: st.domain, indexing: false, events: [], sessions: [], control: st.control, seq: 3, at: 1 });
+    });
+    await settle();
+    act(() => tools.querySelector<HTMLButtonElement>('button[aria-label="Map options"]')!.click());
+    const reset = [...document.querySelectorAll<HTMLButtonElement>('[role=menuitem]')].find(b => b.textContent === 'Reset layout')!;
+    expect(reset.disabled).toBe(true);
+    expect(reset.title).toBe('Back to live to make changes');
+    expect(card(APP)!.title).toBe('Back to live to make changes');
+  });
+
   it('clicking a card selects its file; Enter on a focused card does too', async () => {
     hello(baseFiles());
     await mount();
