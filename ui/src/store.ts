@@ -310,14 +310,13 @@ let statusGen = 0;
 let replaying = false;
 /** Bumped by every rewind and return to live, so a slow `backToLive` never overrides a later rewind. */
 let viewGen = 0;
-/** Bumped by every `backToLive`: a past state requested before it must not rewind the UI again. */
+const maxId = (events: AgentEvent[]): number => events.reduce((m, e) => Math.max(m, e.id), 0);
+
 /**
  * Whether a hello comes from a new LiveMap run rather than a reconnect to the same one: a new run restarts
  * event ids at 1, so an id it sends names a different event than before (another time or session), or it
  * has no events at all where the old run had some.
  */
-const maxId = (events: AgentEvent[]): number => events.reduce((m, e) => Math.max(m, e.id), 0);
-
 function newRun(before: AgentEvent[], after: AgentEvent[]): boolean {
   if (!before.length) return false;
   if (!after.length) return true;
@@ -328,6 +327,7 @@ function newRun(before: AgentEvent[], after: AgentEvent[]): boolean {
   }) || maxId(after) < maxId(before);
 }
 
+/** Bumped by every `backToLive`: a past state requested before it must not rewind the UI again. */
 let liveGen = 0;
 export const liveGeneration = (): number => liveGen;
 /**

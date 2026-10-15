@@ -284,6 +284,8 @@ describe('envKeys', () => {
     // Text after a closing quote still closes the value: nothing inside it is read as a key.
     expect(envKeys('CONFIG="{\ndb_password_hint=foo\n}" extra\nD=1\n')).toEqual(['CONFIG', 'D']);
     expect(envKeys('K="MIIB\nabc=="\nE=1\n')).toEqual(['K', 'E']);
+    // A later key whose value merely contains the quote is a key, not the unclosed value's end.
+    expect(envKeys('MSG="hello\nPORT=3000\nURL=http://x?a="b"\n')).toEqual(['MSG', 'PORT', 'URL']);
   });
 
   it('keeps a valid multi-line value, comment after the close included (#29)', () => {

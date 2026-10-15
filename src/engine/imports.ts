@@ -91,8 +91,14 @@ function indexOf(ctx: ImportCtx): FileIndex {
 const blank = (s: string): string => s.replace(/[^\n]/g, ' ');
 
 /** Code after which a `/` starts a regex literal rather than a division. */
-// `<` is left out: in JSX `</p>` its `/` closes a tag. `>` (an arrow or a comparison) is in.
-const REGEX_AFTER = new Set(['', '=', '(', ',', ':', '[', '!', '&', '|', '?', '{', '}', ';', '>', '+', '-', '*', '%', '~', '^']);
+// `<` is left out: in JSX `</p>` its `/` closes a tag. `>` counts only in `=>` or a spaced comparison (`x > /re/`),
+// not right after a JSX tag (`<span>/</span>`).
+const REGEX_AFTER = new Set(['', '=', '(', ',', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '~', '^']);
+function regexAfterGt(src: string, i: number): boolean {
+  let k = i - 1;
+  while (k >= 0 && (src[k] === ' ' || src[k] === '\t')) k--;
+  return src[k] === '>' && (src[k - 1] === '=' || (k < i - 1 && src[k - 1] === ' '));
+}
 const REGEX_KEYWORD = /\b(?:return|typeof|case|void|yield|await|in|of|delete|instanceof)$/;
 
 /** End of the regex literal opening at `i` (past its closing `/`), or -1 when the line does not close one. */
@@ -139,7 +145,7 @@ function blankJs(src: string): string {
       const stop = end === -1 ? src.length : src[i + 1] === '/' ? end : end + 2;
       out += blank(src.slice(i, stop));
       i = stop;
-    } else if (c === '/' && !divisions && (REGEX_AFTER.has(prev) || (/[\w$]/.test(prev) && REGEX_KEYWORD.test(src.slice(Math.max(0, i - 12), i).trimEnd())))) {
+    } else if (c === '/' && !divisions && (REGEX_AFTER.has(prev) || (prev === '>' && regexAfterGt(src, i)) || (/[\w$]/.test(prev) && REGEX_KEYWORD.test(src.slice(Math.max(0, i - 12), i).trimEnd())))) {
       const end = regexEnd(src, i);
       if (end < 0) { out += c; i++; prev = c; divisions = true; continue; }
       out += '/' + blank(src.slice(i + 1, end - 1)) + '/';
@@ -345,15 +351,21 @@ const PY_STDLIB = new Set([
  * project nested under `backend/` or `services/ml/` runs with its own directory on the import path, while
  * inside a package Python 3 has no implicit relative imports), then the root and `src`. A standard library
  * module is found in the standard library unless the importing script's own directory (`sys.path[0]`)
- * holds a file of that name, as Python does; one Python loads before any search (`PY_PRELOADED`) always is.
+ * holds a file of that name, as Python does, or the import names a submodule that exists in a local package
+ * of that name (`email.services`); one Python loads before any search (`PY_PRELOADED`) always is.
  */
 function pyBases(dir: string, mod: string, rel: number, ctx: ImportCtx): string[] {
   const p = mod.replace(/\./g, '/');
   if (rel > 0) return [join(dir, ...Array(rel - 1).fill('..'), p)];
   const top = mod.split('.')[0];
   if (PY_PRELOADED.has(top)) return [];
-  if (PY_STDLIB.has(top)) return ctx.has(join(dir, '__init__.py')) ? [] : [join(dir, p)];
   const out: string[] = [];
+  if (PY_STDLIB.has(top)) {
+    // The script's own directory may shadow it; elsewhere only a dotted path into a local package of that name
+    // (`email.services`, which the stdlib lacks) counts, since that file exists only in the project.
+    if (!ctx.has(join(dir, '__init__.py'))) out.push(join(dir, p));
+    if (!mod.includes('.')) return out;
+  }
   if (mod) for (let d = dir; d; d = parentDir(d)) if (!ctx.has(join(d, '__init__.py'))) out.push(join(d, p));
   for (const r of ['', 'src']) out.push(join(r, p));
   return out;

@@ -126,9 +126,9 @@ export const CODE_REMOVED = '[code removed]';
  * Agent text with code replaced, erring on the side of removing. A fence of three or more backticks or tildes
  * (also one opened mid-line) runs to a line holding only a closing fence of the same character at least as
  * long, so an inner shorter fence or a "```python" line does not end it, and an unclosed one runs to the end.
- * An inline span ends at the next backtick run of its own length, on its line or a later one (a hard-wrapped
- * prompt); an unclosed one (as in a truncated title) runs to the end of its line. Indented code blocks are not
- * recognized.
+ * An inline span ends at the next backtick run of its own length, on its line or a later one of the same
+ * paragraph (a hard-wrapped prompt); an unclosed one (as in a truncated title) runs to the end of its line.
+ * Indented code blocks are not recognized.
  */
 export function stripCode(text: string): string {
   const out: string[] = [];
@@ -144,8 +144,9 @@ export function stripCode(text: string): string {
       if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
       continue;
     }
+    // A line starting with a fence opens a block, unless a backtick run closes on it (```npm test``` fails).
     const open = /^\s*(`{3,}|~{3,})/.exec(line);
-    if (open) {
+    if (open && (open[1][0] === '~' || !new RegExp(`(?<!\`)${open[1]}(?!\`)`).test(line.slice(open[0].length)))) {
       flush();
       fence = open[1];
       out.push(CODE_REMOVED);
@@ -166,18 +167,30 @@ export function stripCode(text: string): string {
   return out.join('\n');
 }
 
-/** Where a run of three or more backticks opens a block on `line`: the first such run with no match after it. */
+/**
+ * Where a run of three or more backticks opens a block on `line`: runs are paired left to right as inline
+ * spans (a run closes at the next run of its own length), and the first one left without a match opens it.
+ */
 function unclosedFence(line: string): { at: number; run: string } | null {
-  for (const m of line.matchAll(/`{3,}/g)) {
+  const runs = /`+/g;
+  for (let m = runs.exec(line); m; m = runs.exec(line)) {
     const run = m[0];
-    const rest = line.slice(m.index + run.length);
-    if (!new RegExp(`(?<!\`)${run}(?!\`)`).test(rest)) return { at: m.index, run };
+    const close = new RegExp(`(?<!\`)${run}(?!\`)`, 'g');
+    close.lastIndex = m.index + run.length;
+    const c = close.exec(line);
+    if (c) { runs.lastIndex = c.index + run.length; continue; }
+    return run.length >= 3 ? { at: m.index, run } : null;
   }
   return null;
 }
 
-/** Text with its backtick spans replaced; a span may cross lines, and an unclosed one runs to its line's end. */
+/** Text with its backtick spans replaced, paragraph by paragraph: a span may cross lines but not a blank one. */
 function inlineCode(text: string): string {
+  return text.split(/(\n[ \t]*\n)/).map((part, i) => (i % 2 ? part : inlineSpans(part))).join('');
+}
+
+/** One paragraph with its backtick spans replaced; an unclosed span runs to its line's end. */
+function inlineSpans(text: string): string {
   let out = '';
   let i = 0;
   for (;;) {

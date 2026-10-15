@@ -232,10 +232,16 @@ export function envKeys(src: string): string[] {
   return keys;
 }
 
-/** Whether the first `q` on `line` is the opening quote of a `KEY=` assignment (`B="y"`), not a closing one. */
+/**
+ * Whether `line` is the next assignment (`B="y"`, `URL=http://x?a="b"`, `B="y`) rather than the line that ends
+ * the open value (`two=3'`, `}" extra`, a base64 `abc=="` or `Zm9v="`): it starts `KEY=` and its quotes either
+ * balance or open right after the `=`, and it is not just `KEY=` and the quote.
+ */
 function opensAssignment(line: string, q: string): boolean {
-  const m = /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_.-]*\s*=\s*/.exec(line);
-  return !!m && line[m[0].length] === q && closeIndex(line, 0, q) === m[0].length;
+  const m = /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_.-]*\s*=(?!=)\s*/.exec(line);
+  if (!m || line.slice(m[0].length).trim() === q) return false;
+  const quotes = line.split(q).length - 1;
+  return quotes % 2 === 0 || line[m[0].length] === q;
 }
 
 function closeIndex(line: string, from: number, q: string): number {

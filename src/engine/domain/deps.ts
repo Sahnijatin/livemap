@@ -248,7 +248,7 @@ const rubyDsl = (word: string, eco: string): Parser => text => {
  * annotation processors (`kapt`, `ksp` and their variants) and a few common others. A word such as
  * `println` or `mainClassName` before a `"a:b"` string is not one.
  */
-const GRADLE_CONF = '((?:[a-z][A-Za-z0-9]*)?(?:[Ii]mplementation|[Aa]pi|[Cc]ompileOnly(?:Api)?|[Rr]untimeOnly|[Aa]nnotationProcessor|[Cc]ompile|[Rr]untime)|kapt[A-Za-z0-9]*|ksp[A-Za-z0-9]*|classpath|coreLibraryDesugaring|developmentOnly|lintChecks|detektPlugins)';
+const GRADLE_CONF = '((?:[a-z][A-Za-z0-9]*)?(?:[Ii]mplementation|[Aa]pi|[Cc]ompileOnly(?:Api)?|[Rr]untimeOnly|[Aa]nnotationProcessor|[Cc]ompile|[Rr]untime)|kapt[A-Za-z0-9]*|ksp[A-Za-z0-9]*|classpath|coreLibraryDesugaring|developmentOnly|lintChecks|detektPlugins|shadow|antlr|errorprone|jmh|provided(?:Compile|Runtime)?|agent|spotbugsPlugins)';
 /** Words that start a dependency-shaped line without being a configuration. */
 const NOT_CONF = new Set(['id', 'platform', 'enforcedPlatform', 'project', 'files', 'fileTree', 'kotlin', 'alias']);
 /** Test and debug-only configurations (`testImplementation`, `androidTestImplementation`, `kaptTest`, `debugImplementation`). */

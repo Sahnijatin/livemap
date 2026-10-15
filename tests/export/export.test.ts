@@ -409,6 +409,10 @@ describe('stripCode', () => {
     expect(stripCode('  ```\nLEAK3\n  ```  trailing LEAK4\nmore')).toBe(R);
     expect(stripCode('a `foo\nLEAK2` b')).toBe(`a ${R} b`);
   });
+  it('keeps a one-line triple-backtick span inline, and pairs spans only within a paragraph', () => {
+    expect(stripCode('```npm test``` fails, please fix\n\nKeep the API stable.')).toBe(`${R} fails, please fix\n\nKeep the API stable.`);
+    expect(stripCode('Press the ` key to toggle.\n\nThen call `parseConfig`.')).toBe(`Press the ${R}\n\nThen call ${R}.`);
+  });
   it('leaves text without code alone', () => {
     expect(stripCode('Adds a cancel route.\nNo code here.')).toBe('Adds a cancel route.\nNo code here.');
   });

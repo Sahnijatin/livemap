@@ -65,6 +65,11 @@ describe('extractImports', () => {
     expect(extractImports('backend/main.py', 'python', 'from email.services import send\nimport queue.tasks\nfrom email import services', ctx).local)
       .toEqual(['backend/email/__init__.py', 'backend/email/services.py', 'backend/queue/tasks.py']);
     expect(resolveSpecifier('backend/main.py', 'python', 'email.services', ctx)).toBe('backend/email/services.py');
+    // From inside a package (a Django app), a dotted path into the project's email package still resolves.
+    const dj = ['backend/manage.py', 'backend/email/__init__.py', 'backend/email/services.py', 'backend/users/__init__.py', 'backend/users/views.py'];
+    const djHas = new Set(dj);
+    expect(extractImports('backend/users/views.py', 'python', 'from email.services import send\nimport email', { has: p => djHas.has(p), files: dj, aliases: [], goModule: null }))
+      .toEqual({ local: ['backend/email/services.py'], external: ['email'] });
   });
   it('go', () => {
     expect(imp('cmd/main.go','go','import (\n "fmt"\n "shop/internal/db"\n)', { goModule: 'shop' }).local).toEqual(['internal/db/conn.go','internal/db/db.go']);
@@ -180,6 +185,9 @@ describe('indexing and fixes', () => {
     const want = { local: ['src/lib/b.ts', 'src/lib/index.ts'], external: ['vue'] };
     expect(imp('src/a.ts', 'typescript', "const re = /`/; const q = /[/'\"]/g; const half = a / 2 / b;" + after)).toEqual(want);
     expect(imp('src/a.ts', 'typescript', "const tick = c => /`/.test(c);\nconst ok = x > /`/.source.length;" + after)).toEqual(want);
+    // Right after a JSX tag, `/` is text, not a regex: the template after it is read as one.
+    expect(imp('src/a.tsx', 'tsx', after + "const P = () => <span>/`x`</span>;\nconst m = require('./ui/c');\n"))
+      .toEqual({ ...want, local: [...want.local, 'src/ui/c.tsx'] });
     // A JSX closing tag is not a regex: the template after it is read as one.
     expect(imp('src/a.tsx', 'tsx', after + "const P = () => <div><p>x</p>{`a/b`}</div>;\nconst m = require('./ui/c');\nconst v = `ok`;\n"))
       .toEqual({ ...want, local: [...want.local, 'src/ui/c.tsx'] });
