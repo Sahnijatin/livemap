@@ -9,7 +9,7 @@ import {
   ensureDir, eventsName, FILE_MODE, indexPath, parseEventsName, parseSnapshotName, projectDir, runIdFor,
   snapshotPath, snapshotsDir, writeFileAtomic,
 } from './paths.js';
-import { EventIndex, kindOf, peekFirstSeq, readSpans, readSpansSync, scanEvents, spansAfter, spansOf } from './records.js';
+import { EventIndex, kindOf, peekFirstSeq, readSpans, readSpansSync, scanEvents, spansOf } from './records.js';
 import type { ReadRecord, TickKind } from './records.js';
 import { bucketTicks } from '../shared/history.js';
 import type { HistoryInfo, HistoryRun, TickBucket, Ticks } from '../shared/history.js';
@@ -165,9 +165,6 @@ export class HistoryStore {
     const idx = this.index;
     const n = idx.length;
     const tail = this.pending[this.pending.length - 1];
-    let bytes = this.pendingBytes;
-    for (const r of this.runs) bytes += r.size;
-    for (const b of this.snapshots.values()) bytes += b;
     const info: HistoryInfo = {
       enabled: !this.disabled,
       first: n ? idx.seq[0] : tail ? this.pending[0].seq : 0,
@@ -175,7 +172,7 @@ export class HistoryStore {
       firstAt: n ? idx.at[0] : tail ? this.pending[0].at : 0,
       lastAt: tail ? tail.at : n ? idx.at[n - 1] : 0,
       runs: this.runs.filter(r => r.lastSeq >= r.firstSeq).map(r => ({ id: r.id, firstSeq: r.firstSeq, lastSeq: r.lastSeq, startAt: r.startAt })),
-      bytes,
+      bytes: this.pendingBytes + this.diskBytes(),
     };
     if (this.error) info.error = this.error;
     return info;
@@ -218,7 +215,8 @@ export class HistoryStore {
     if (!run) throw new Error(`no run holds seq ${seq}`);
     const at = idx.at[i];
     const candidates = this.snapSeqs.filter(s => s >= run.firstSeq && s <= seq).reverse();
-    const spans = spansOf(idx, idx.indexOf(run.firstSeq), i + 1, no => this.fileOf(no));
+    // While a reader is active the cap (the only thing that moves index entries or deletes run files) waits,
+    // so the spans can be cut after the snapshot is chosen: only the records after it are copied.
     this.readers++;
     try {
       let state: ProjectState | null = null;
@@ -227,7 +225,7 @@ export class HistoryStore {
         state = await this.readSnapshot(s);
         if (state) { after = s; break; }
       }
-      const records = await readSpans(spansAfter(spans, after));
+      const records = await readSpans(spansOf(idx, Math.max(idx.lowerBound(after + 1), idx.indexOf(run.firstSeq)), i + 1, no => this.fileOf(no)));
       if (!state) {
         if (records[0]?.msg.type !== 'hello') throw new Error(`no readable snapshot for seq ${seq}`);
         state = emptyState('', '');

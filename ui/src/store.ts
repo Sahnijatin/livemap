@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { ApiRoute, DomainIndex, Table } from '@shared/domain.js';
 import type { HistoryStatus, UsedByEntry, WireMessage } from '@shared/protocol.js';
-import { withFileSummary, type ProjectState } from '@shared/state.js';
+import { patchChanges, withFileSummary, type ProjectState } from '@shared/state.js';
 import { emptySummaries, type SummariesState } from '@shared/summaries.js';
 import type { AgentEvent, AgentSession, ChangeSummary, ControlState, Dep, FileModel } from '@shared/types.js';
 import { LARGE_PROJECT, codeFileCount, edgeBaseline, type Level } from './map/mapModel';
@@ -330,16 +330,6 @@ let liveBuffer: WireMessage[] | null = null;
 export const isAfter = (msg: WireMessage, stateSeq: number | undefined): boolean =>
   msg.seq === undefined ? stateSeq === undefined : stateSeq === undefined || msg.seq > stateSeq;
 
-/** The changes with `patch` merged into the newest one with `id`; null when it is gone. */
-function patchChange(prev: ChangeSummary[], id: number, patch: Partial<ChangeSummary>): ChangeSummary[] | null {
-  for (let i = prev.length - 1; i >= 0; i--) {
-    if (prev[i].id !== id) continue;
-    const changes = prev.slice();
-    changes[i] = { ...prev[i], ...patch };
-    return changes;
-  }
-  return null;
-}
 
 export const useStore = create<StoreState>()((set, get) => ({
   ...initial,
@@ -408,7 +398,7 @@ export const useStore = create<StoreState>()((set, get) => ({
         return;
       case 'attribution':
       case 'summary': {
-        const changes = patchChange(get().changes, msg.changeId, msg.type === 'summary' ? { summary: msg.summary } : { attribution: msg.attribution });
+        const changes = patchChanges(get().changes, msg.changeId, msg.type === 'summary' ? { summary: msg.summary } : { attribution: msg.attribution });
         if (changes) set({ changes });
         return;
       }

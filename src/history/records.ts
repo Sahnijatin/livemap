@@ -157,18 +157,6 @@ export function spansOf(index: EventIndex, i0: number, i1: number, fileOf: (runN
   return spans;
 }
 
-/** The spans limited to records with seq greater than `afterSeq`; empty spans are dropped. */
-export function spansAfter(spans: Span[], afterSeq: number): Span[] {
-  const out: Span[] = [];
-  for (const s of spans) {
-    let k = 0;
-    while (k < s.seq.length && s.seq[k] <= afterSeq) k++;
-    if (k === s.seq.length) continue;
-    out.push(k === 0 ? s : { file: s.file, seq: s.seq.subarray(k), at: s.at.subarray(k), off: s.off.subarray(k), len: s.len.subarray(k) });
-  }
-  return out;
-}
-
 export interface ReadRecord { seq: number; at: number; msg: ServerMessage }
 
 function decode(span: Span, buf: Buffer, out: ReadRecord[]): void {

@@ -18,7 +18,8 @@ export function runtimeDir(): string {
   return path.join(livemapHome(), 'run');
 }
 
-function real(p: string): string {
+/** The canonical project root: its realpath, or the resolved path when it does not exist. History hashes it the same way. */
+export function real(p: string): string {
   try {
     return fs.realpathSync(p);
   } catch {

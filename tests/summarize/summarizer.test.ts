@@ -113,6 +113,17 @@ describe('Summarizer', () => {
     expect(JSON.parse(fs.readFileSync(usage, 'utf8'))).toEqual({ month: '2026-11', tokens: 15 });
   });
 
+  it('adds its spend to what another process wrote during the request, so no spend is lost', async () => {
+    const usage = path.join(home, 'usage.json');
+    fs.writeFileSync(usage, JSON.stringify({ month: '2026-10', tokens: 100 }));
+    const f = vi.fn(async () => {
+      fs.writeFileSync(usage, JSON.stringify({ month: '2026-10', tokens: 150 })); // the other process spent 50
+      return reply('S.', 10, 5);
+    });
+    await mkSum(f).summarizeFile(file('a.ts'), 'one');
+    expect(JSON.parse(fs.readFileSync(usage, 'utf8'))).toEqual({ month: '2026-10', tokens: 165 });
+  });
+
   it('loads existing usage for the current month and ignores a stale month', () => {
     fs.writeFileSync(path.join(home, 'usage.json'), JSON.stringify({ month: '2026-10', tokens: 400 }));
     expect(mkSum(vi.fn()).status().usedTokens).toBe(400);

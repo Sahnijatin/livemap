@@ -19,11 +19,22 @@ export function emptyState(root: string, name: string): ProjectState {
 }
 
 /** Files after removing then upserting; an existing path keeps its position, a new one is appended. */
+/**
+ * Files after removing and upserting: replaced files keep their place, new ones go last. One pass with
+ * maps of only the (few) changed paths, since it runs per change, and in the history store too.
+ */
 function upsertFiles(files: FileModel[], upserts: FileModel[], removed: string[]): FileModel[] {
-  const byPath = new Map(files.map(f => [f.path, f]));
-  for (const p of removed) byPath.delete(p);
-  for (const f of upserts) byPath.set(f.path, f);
-  return [...byPath.values()];
+  const gone = new Set(removed);
+  const up = new Map(upserts.map(f => [f.path, f]));
+  const out: FileModel[] = [];
+  for (const f of files) {
+    if (gone.has(f.path)) continue;
+    const u = up.get(f.path);
+    if (u) up.delete(f.path);
+    out.push(u ?? f);
+  }
+  for (const f of up.values()) out.push(f);
+  return out;
 }
 
 function appendCapped<T>(list: T[], item: T, max: number): T[] {
@@ -94,15 +105,21 @@ export function withFileSummary(files: Record<string, FileSummary>, msg: { path:
   return out;
 }
 
+/** The changes with `patch` merged into the newest one with `id`; null when none has that id. Shared with the UI store. */
+export function patchChanges(prev: ChangeSummary[], id: number, patch: Partial<ChangeSummary>): ChangeSummary[] | null {
+  for (let i = prev.length - 1; i >= 0; i--) {
+    if (prev[i].id !== id) continue;
+    const changes = prev.slice();
+    changes[i] = { ...prev[i], ...patch };
+    return changes;
+  }
+  return null;
+}
+
 /** The change with `id` (newest first) merged with `patch`; the state itself when no change has that id. */
 function patchChange(state: ProjectState, id: number, patch: Partial<ChangeSummary>): ProjectState {
-  for (let i = state.changes.length - 1; i >= 0; i--) {
-    if (state.changes[i].id !== id) continue;
-    const changes = state.changes.slice();
-    changes[i] = { ...state.changes[i], ...patch };
-    return { ...state, changes };
-  }
-  return state;
+  const changes = patchChanges(state.changes, id, patch);
+  return changes ? { ...state, changes } : state;
 }
 
 /** A hello's sessions keyed by id, last one winning, as the UI store's record does. */

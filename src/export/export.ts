@@ -8,7 +8,7 @@ import { projectDir } from '../history/paths.js';
 import { EXPORT_DATA_ID, type ExportPayload } from '../shared/export.js';
 import type { ServerMessage } from '../shared/protocol.js';
 import { emptyState, type ProjectState } from '../shared/state.js';
-import type { AgentSession } from '../shared/types.js';
+import type { AgentEvent, AgentSession, ChangeSummary } from '../shared/types.js';
 
 const gzip = promisify(zlib.gzip);
 
@@ -51,6 +51,7 @@ export async function buildExport(root: string, opts: ExportOptions): Promise<Ex
       ({ initial, messages } = await sessionScope(store, all, opts.session, info.first, name));
     }
 
+    if (!opts.code) ({ initial, messages } = withoutCode(initial, messages));
     const code = opts.code ? await readCode(realRoot, initial, messages) : undefined;
     // Paths are scrubbed everywhere but in the code map: that is file content, shown as it is.
     const scrub = pathScrubber([root, realRoot], name);
@@ -93,11 +94,18 @@ async function sessionScope(store: HistoryStore, all: Rec[], id: string, firstSe
       default: return false;
     }
   };
-  const only = (s: ProjectState): ProjectState => ({ ...s, events: s.events.filter(e => e.sessionId === id), sessions: s.sessions.filter(x => x.id === id) });
+  const only = (s: ProjectState): ProjectState => ({
+    ...s,
+    events: s.events.filter(e => e.sessionId === id),
+    sessions: s.sessions.filter(x => x.id === id),
+    changes: s.changes.filter(c => changeIds.has(c.id)),
+  });
   const messages = all.filter(([seq, , m]) => keep(seq, m)).map(([seq, at, m]): Rec => [seq, at, m.type === 'hello' ? { ...m, ...only(m), type: 'hello' } : m]);
   let initial: ProjectState;
-  if (first - 1 >= firstSeq) {
-    const { seq: _s, at: _a, ...state } = await store.stateAt(first - 1);
+  // The nearest record before the first event: seqs can have gaps where a corrupt line was skipped.
+  const before = all.filter(([seq]) => seq < first).at(-1)?.[0];
+  if (before !== undefined && before >= firstSeq) {
+    const { seq: _s, at: _a, ...state } = await store.stateAt(before);
     initial = only(state);
   } else {
     // The cap trimmed history to start at this event: the state there, without the event it replays next.
@@ -107,6 +115,26 @@ async function sessionScope(store: HistoryStore, all: Rec[], id: string, firstSe
     initial = { ...emptyState(name, name), ...o, events: o.events.filter(e => e.id !== ev.id) };
   }
   return { initial, messages };
+}
+
+/**
+ * `--no-code`: the code map is not all of the source an export can carry. Diff hunks in change cards and
+ * tool inputs and outputs in agent events (an Edit's old and new text) are code too. Symbol names and
+ * signatures stay: they are the structure the Map and the cards show.
+ */
+function withoutCode(initial: ProjectState, messages: Rec[]): { initial: ProjectState; messages: Rec[] } {
+  const change = (c: ChangeSummary): ChangeSummary => ({ ...c, hunks: [] });
+  const event = (e: AgentEvent): AgentEvent => (e.tool ? { ...e, tool: (({ input: _i, output: _o, ...t }) => t)(e.tool) } : e);
+  const state = <T extends Pick<ProjectState, 'changes' | 'events'>>(s: T): T => ({ ...s, changes: s.changes.map(change), events: s.events.map(event) });
+  const msg = (m: ServerMessage): ServerMessage => {
+    switch (m.type) {
+      case 'hello': return state(m);
+      case 'change': return { ...m, change: change(m.change) };
+      case 'agentEvent': return { ...m, event: event(m.event) };
+      default: return m;
+    }
+  };
+  return { initial: state(initial), messages: messages.map(([seq, at, m]): Rec => [seq, at, msg(m)]) };
 }
 
 /** Current text of the files the exported messages create or change, through the engine's reader: never secret, binary or over 1 MB. */

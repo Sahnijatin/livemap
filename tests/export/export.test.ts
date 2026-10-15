@@ -103,6 +103,18 @@ describe('buildExport', () => {
     expect(res.files).toBe(0);
   });
 
+  it('code: false leaves out diff hunks and tool inputs and outputs too', async () => {
+    write('a.ts', 'const a = 1;\n');
+    const c = { ...change(1, 'a.ts'), hunks: [{ oldStart: 1, newStart: 1, lines: ['-SECRET_OLD', '+SECRET_NEW'] }] };
+    const ev: AgentEvent = { ...event(1, 's1'), type: 'tool_start', tool: { name: 'Edit', label: 'Edit a.ts', input: { old_string: 'SECRET_IN' }, output: 'SECRET_OUT', paths: ['a.ts'] } };
+    await record([file('a.ts')], [{ type: 'agentEvent', event: ev }, { type: 'change', change: c, files: [file('a.ts')], removed: [] }]);
+    const { text } = decode((await buildExport(root, { home, code: false, uiHtml: UI })).html);
+    expect(text).not.toMatch(/SECRET_/);
+    expect(text).toContain('Edit a.ts');
+    const { text: withCode } = decode((await buildExport(root, { home, code: true, uiHtml: UI })).html);
+    expect(withCode).toContain('SECRET_NEW');
+  });
+
   it('with a session, keeps that session\'s events, its attributed changes, and context within its span', async () => {
     for (const f of ['a.ts', 'b.ts', 'c.ts']) write(f, `// ${f}\n`);
     const msgs: ServerMessage[] = [
@@ -133,7 +145,7 @@ describe('buildExport', () => {
     expect(types).toContain('attribution');
     // The initial state is the state just before the session's first event, without other sessions' events.
     expect(payload.messages[0][0]).toBe(6);
-    expect(payload.initial.changes.map(c => c.id)).toEqual([1]);
+    expect(payload.initial.changes).toEqual([]); // s2's earlier change is not this session's
     expect(payload.initial.events).toEqual([]);
     expect(Object.keys(payload.code ?? {})).toEqual(['a.ts']);
     expect(res.events).toBe(payload.messages.length);
@@ -229,6 +241,27 @@ describe('buildExport', () => {
     expect(payload.initial.name).toBe(path.basename(root));
     expect(payload.initial.files.map(f => f.path)).toEqual(['a.ts']);
     expect(payload.messages[0][0]).toBe(2);
+  });
+
+  it('a session export starts from the nearest earlier record when the one just before it was corrupt', async () => {
+    write('a.ts', 'x\n');
+    await record([file('a.ts')], [
+      { type: 'agentEvent', event: event(1, 's2') },
+      { type: 'usedBy', usedBy: [] },
+      { type: 'agentEvent', event: event(2, 's1') },
+    ]);
+    // Corrupt the record just before s1's first event (seq 3), and drop the stale index.
+    const dir = projectDir(root, home);
+    const events = fs.readdirSync(dir).find(f => f.startsWith('events-'))!;
+    const lines = fs.readFileSync(path.join(dir, events), 'utf8').split('\n');
+    const at = lines.findIndex(l => l.includes('"type":"usedBy"'));
+    expect(at).toBeGreaterThan(0);
+    lines[at] = '{"torn';
+    fs.writeFileSync(path.join(dir, events), lines.join('\n'));
+    fs.rmSync(path.join(dir, 'index.json'), { force: true });
+    const { payload } = decode((await buildExport(root, { home, session: 's1', code: false, uiHtml: UI })).html);
+    expect(plain(payload.messages).filter(m => m.type === 'agentEvent').map(m => (m as { event: AgentEvent }).event.sessionId)).toEqual(['s1']);
+    expect(payload.initial.files.map(f => f.path)).toEqual(['a.ts']);
   });
 
   it('reports a store that cannot be read instead of "no history"', async () => {

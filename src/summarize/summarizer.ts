@@ -161,7 +161,8 @@ export class Summarizer extends EventEmitter {
       for (let attempt = 0; ; attempt++) {
         try {
           const r = await this.attempt(p);
-          this.used += r.inputTokens + r.outputTokens;
+          // Add to what the file holds now: another LiveMap process may have spent tokens during the request.
+          this.used = Math.max(this.used, this.readUsage()) + r.inputTokens + r.outputTokens;
           this.writeUsage();
           this.error = undefined;
           const text = r.text.trim().slice(0, MAX_RESULT);

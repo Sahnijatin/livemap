@@ -72,7 +72,7 @@ livemap export --session <id> --no-code
 
 - `dir` is the project folder (the current one by default).
 - `--session ID` exports only one agent session: its prompts, messages and tool calls and the changes attributed to it. By default the whole history is exported.
-- `--no-code` leaves source code out. Without it the file embeds the current contents of every file the history touches, so the code view works offline, and LiveMap prints: "This export contains source code for <n> files. Share it only with people who may see this code."
+- `--no-code` leaves source code out: file contents, diff lines and agent tool inputs and outputs. File, function and route names and signatures stay. Without it the file embeds the current contents of every file the history touches, so the code view works offline, and LiveMap prints: "This export contains source code for <n> files. Share it only with people who may see this code."
 - `--out FILE` sets the file name. The default is `livemap-<project>-<YYYYMMDD-HHMM>.html` in the current folder.
 
 The export loads nothing from the network. Secret, binary and over-1 MB files are never embedded, and your absolute project path is replaced with the project name everywhere outside the embedded code.

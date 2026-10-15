@@ -12,7 +12,7 @@ import { buildDomainIndex, newDataRefCache } from '../engine/domain/build-index.
 import type { DomainIndex } from '../shared/domain.js';
 import type { HistoryStatus, ServerMessage, UsedByEntry } from '../shared/protocol.js';
 import type { ProjectState } from '../shared/state.js';
-import type { HistoryStore } from '../history/store.js';
+import { RECORDED_TYPES, type HistoryStore } from '../history/store.js';
 import type { AgentEvent, AgentSession, Attribution, ChangeSummary, CodeSymbol, ControlState, FileModel, Lang } from '../shared/types.js';
 import { offStatus, type FileSummary, type SummariesState, type SummaryStatus } from '../shared/summaries.js';
 import { changeQualifies } from '../summarize/summarizer.js';
@@ -216,6 +216,8 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   let statusAt = 0;
   let statusTimer: NodeJS.Timeout | null = null;
   let closed = false;
+  /** Set when the history store stopped itself after a write error. */
+  let recordingFailed = false;
   /** File summaries by path, and the symbol-set hash of each summary being written. */
   const fileSummaries = new Map<string, FileSummary>();
   const fileJobs = new Map<string, string>();
@@ -258,6 +260,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   if (history) {
     // Recording failed: the store already stopped itself; say so once and tell every client now.
     history.onError = (e: Error) => {
+      recordingFailed = true;
       process.stderr.write(`livemap: history is unavailable: ${history.info().error ?? e.message}\n`);
       if (isReady) sendStatus();
     };
@@ -272,6 +275,10 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     if (s > 0) {
       seq = s;
       scheduleStatus();
+    } else if (recordingFailed && RECORDED_TYPES.has(msg.type)) {
+      // Recording failed mid-run: keep stamping live messages with seqs past the last record, so a client
+      // returning to live can still tell which buffered messages its fetched state already includes.
+      return ++seq;
     }
     return s;
   };

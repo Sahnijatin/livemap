@@ -317,6 +317,11 @@ describe('server: history recording', () => {
       put('src/b.ts', 'export function beta() { return 8; }\n');
       await waitFor(() => ofType(c, 'change').some(m => m.change.path === 'src/b.ts'));
       expect(errors.filter(e => e.includes('history')).length).toBe(1);
+      // Live messages still carry increasing seqs, and the live state includes them (for Back to live).
+      const b = ofType(c, 'change').find(m => m.change.path === 'src/b.ts') as unknown as { seq?: number };
+      const a = ofType(c, 'change').find(m => m.change.path === 'src/a.ts') as unknown as { seq?: number };
+      expect(b.seq).toBeGreaterThan(a.seq!);
+      expect((await get('/api/state')).body.seq).toBeGreaterThanOrEqual(b.seq!);
     } finally {
       process.stderr.write = write;
       fs.chmodSync(projectDir(root), 0o700);

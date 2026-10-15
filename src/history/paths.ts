@@ -1,19 +1,11 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { livemapHome } from '../agents/runtime.js';
+import { livemapHome, real } from '../agents/runtime.js';
 
 /** History directories are 0700 and files 0600: they hold source the UI received. */
 export const DIR_MODE = 0o700;
 export const FILE_MODE = 0o600;
-
-function real(p: string): string {
-  try {
-    return fs.realpathSync(p);
-  } catch {
-    return path.resolve(p);
-  }
-}
 
 /** `<home>/projects/<sha1(realpath root)>`, home resolved as `src/agents/runtime.ts` does. */
 export function projectDir(root: string, home: string = livemapHome()): string {
