@@ -24,8 +24,10 @@ export function PanelHandle({ panel }: { panel: Panel }) {
   };
   /** Draws the panel at `d`, within reach; nothing happens (or is saved) when that is the width drawn now. */
   const draw = (d: number, save = true) => {
-    const t = Math.max(min, Math.min(max, Math.round(d)));
-    if (t !== now) set(t, save);
+    // The drawn width now, not at this render: several moves can arrive before React renders.
+    const { fit: f, reach: r } = drawn(useStore.getState());
+    const t = Math.max(min, Math.min(r[panel], Math.round(d)));
+    if (t !== f[panel]) set(t, save);
   };
   const end = () => {
     const d = g.current;

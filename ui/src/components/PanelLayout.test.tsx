@@ -464,20 +464,86 @@ describe('docked panels at 1080 px and wider', () => {
     expect(stored().collapsed.inspector).toBe(true);
   });
 
-  it('a selection at narrow width never peeks, so the inspector stays hidden back at wide width', async () => {
+  it('a selection at narrow width peeks too: widening with the file selected shows the collapsed inspector', async () => {
     await mount();
     act(() => btn('Hide inspector').click());
     act(() => resize(900));
     act(() => useStore.getState().select('src/a.ts'));
     act(() => resize(1440));
-    expect(app().classList.contains('right-collapsed')).toBe(true);
-    // And a narrow selection ends an earlier peek.
-    act(() => useStore.getState().select('src/b.ts'));
     expect(app().classList.contains('right-collapsed')).toBe(false);
-    act(() => resize(900));
+    expect(stored().collapsed.inspector).toBe(true);
+  });
+
+  it('when a peek ends with focus in the inspector, focus goes to the toolbar Inspector button', async () => {
+    await mount();
+    act(() => btn('Hide inspector').click());
     act(() => useStore.getState().select('src/a.ts'));
-    act(() => resize(1440));
+    const back = host.querySelector<HTMLButtonElement>('aside.insp .backbtn')!;
+    back.focus();
+    act(() => back.click());
     expect(app().classList.contains('right-collapsed')).toBe(true);
+    expect(document.activeElement).toBe(btn('Inspector'));
+
+    // The selected file is deleted while focus is in the inspector.
+    act(() => useStore.getState().select('src/b.ts'));
+    host.querySelector<HTMLButtonElement>('aside.insp .backbtn')!.focus();
+    act(() => useStore.getState().apply({ type: 'files', files: [], removed: ['src/b.ts'] }));
+    expect(app().classList.contains('right-collapsed')).toBe(true);
+    expect(document.activeElement).toBe(btn('Inspector'));
+
+    // Focus elsewhere stays put.
+    act(() => useStore.getState().select('src/a.ts'));
+    const filter = host.querySelector<HTMLInputElement>('input[aria-label="Filter files and functions"]')!;
+    filter.focus();
+    act(() => useStore.getState().select(null));
+    expect(document.activeElement).toBe(filter);
+  });
+
+  it('two pointer moves before a render: the second (back to the start) still applies', async () => {
+    await mount();
+    const files = sep('Resize project panel');
+    pointer(files, 'pointerdown', 300);
+    act(() => {
+      files.dispatchEvent(new MouseEvent('pointermove', { clientX: 320, button: 0, bubbles: true }));
+      files.dispatchEvent(new MouseEvent('pointermove', { clientX: 300, button: 0, bubbles: true }));
+    });
+    expect(now('Resize project panel')).toBe(272);
+    pointer(files, 'pointerup', 300);
+  });
+
+  it('[ and ] ignore modifiers, the Gate, and every form control', async () => {
+    await mount();
+    const collapsed = () => app().className.includes('collapsed');
+    for (const mod of [{ shiftKey: true }, { altKey: true }, { ctrlKey: true }, { metaKey: true }, { ctrlKey: true, altKey: true }]) {
+      key(document.body, '[', mod);
+      key(document.body, ']', mod);
+    }
+    expect(collapsed()).toBe(false);
+
+    act(() => useStore.getState().setConnection('unauthorized'));
+    key(document.body, '[');
+    expect(collapsed()).toBe(false);
+    act(() => useStore.getState().setConnection('open'));
+
+    const controls = [
+      Object.assign(document.createElement('input'), { type: 'checkbox' }),
+      document.createElement('select'),
+      document.createElement('textarea'),
+      Object.assign(document.createElement('div'), { tabIndex: 0 }),
+      Object.assign(document.createElement('div'), { tabIndex: 0 }),
+    ];
+    // jsdom does not reflect the contentEditable property; the attribute is what the check reads.
+    controls[3].setAttribute('contenteditable', 'true');
+    controls[4].setAttribute('role', 'combobox');
+    for (const el of controls) {
+      host.appendChild(el);
+      el.focus();
+      key(el, '[');
+      expect(collapsed()).toBe(false);
+      el.remove();
+    }
+    key(document.body, '[');
+    expect(collapsed()).toBe(true);
   });
 });
 

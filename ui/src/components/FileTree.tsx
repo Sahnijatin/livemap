@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import clsx from 'clsx';
 import { useStore } from '../store';
 import { NARROW_QUERY, isNarrow, useMedia } from '../media';
-import { INERT, afterSelect } from '../panels';
+import { INERT, afterSelect, shownLayout } from '../panels';
 import { prefersReducedMotion } from '../scroll';
 import { useCurrentTarget } from '../live';
 import { LAYERS } from '../layers';
@@ -36,7 +36,7 @@ export function FileTree() {
   const changes = useStore(s => s.changes);
   const helloAt = useStore(s => s.helloAt);
   const panel = useStore(s => s.panel);
-  const collapsed = useStore(s => s.layout.collapsed.files);
+  const collapsed = useStore(s => shownLayout(s).collapsed.files);
   // Below 1080 px a closed slide-over is off screen, and wider a collapsed panel is hidden: keep it out of the tab order.
   const narrow = useMedia(NARROW_QUERY);
   const live = useLiveRecent(recent);

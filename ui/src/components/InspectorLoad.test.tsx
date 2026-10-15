@@ -62,6 +62,26 @@ describe('the file view fails to load', () => {
     detailLoader.load = real;
   });
 
+  it('a file selected while the view is still loading renders when it arrives', async () => {
+    vi.resetModules();
+    const fresh = await import('./Inspector');
+    const { useStore: store } = await import('../store');
+    store.getState().apply({
+      type: 'hello', root: '/p/shop', name: 'shop', files: [file('src/a.ts')], changes: [], usedBy: [], domain: emptyDomain(), indexing: false,
+      events: [], sessions: [], control: { paused: false, flags: [] },
+    });
+    const real = await import('./FileDetail');
+    let arrive!: () => void;
+    fresh.detailLoader.load = () => new Promise(r => { arrive = () => r(real); });
+    await act(async () => { root.render(<fresh.Inspector />); });
+    act(() => store.getState().select('src/a.ts'));
+    await flush();
+    expect(host.querySelector('.ins-scroll:not(.leave) h3')).toBeNull();
+    await act(async () => { arrive(); await fresh.loadDetail(); });
+    await flush();
+    expect(host.querySelector('.ins-scroll:not(.leave) h3')?.textContent).toBe('a.ts');
+  });
+
   it('the Retry button tries again', async () => {
     // The module already loaded the view in the test above; a fresh state needs a fresh module.
     vi.resetModules();

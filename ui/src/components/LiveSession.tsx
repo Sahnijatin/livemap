@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import { useStore } from '../store';
-import { agentName, latestMessage } from '../agents';
+import { activeSession, agentName, latestMessage } from '../agents';
 import { layerOf } from '../layers';
 import { baseName, isRecent, useNow } from '../recent';
 import { removeFlag } from '../api';
@@ -46,7 +46,12 @@ function YourFlags() {
 export function LiveHead() {
   // Showing the past: no Live tag (the center's banner says what is on show).
   const rewound = useStore(s => s.rewound !== null);
-  const { working, paused } = useLiveState();
+  // Narrow selectors (no event scans): the active session's status, and pause as useLiveState counts it.
+  const working = useStore(s => activeSession(s.sessions)?.status === 'working');
+  const paused = useStore(s => {
+    const a = activeSession(s.sessions);
+    return s.control.paused && (!a || !!a.hooks);
+  });
   return (
     <div className="live-h"><h3>Live session</h3>{working && !paused && !rewound && <span className="livetag"><i />Live</span>}{paused && <span className="livetag paused"><i />Paused</span>}</div>
   );

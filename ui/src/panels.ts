@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useStore, type StoreState } from './store';
 import { NARROW_QUERY, isNarrow, isPhone } from './media';
-import { typingElsewhere } from './keys';
+import { inFormControl } from './keys';
 import { fitLayout, reach, type Panel as Side, type PanelLayout } from './panelLayout';
 
 type Panel = NonNullable<StoreState['panel']>;
@@ -36,6 +36,8 @@ export function drawn(s: StoreState): Drawn {
 /** Spread on a closed slide-over below 1080 px: off screen, so out of the tab order and the accessibility tree (React 18 has no `inert` prop). */
 export const INERT = { inert: '' } as Record<string, unknown>;
 
+/** Moves focus to a panel's toolbar button (when a panel that held focus hides). */
+export const focusOpener = (p: Panel): void => opener(p)?.focus();
 const opener = (p: Panel) => document.querySelector<HTMLElement>(`[data-panel-opener="${p}"]`);
 const host = (p: Panel) => document.querySelector<HTMLElement>(`[data-panel="${p}"]`);
 
@@ -113,9 +115,10 @@ export function useSlideOvers(): void {
     const onKey = (e: KeyboardEvent) => {
       const s = useStore.getState();
       if (e.key === 'Escape' && s.panel && !s.paletteOpen && !e.defaultPrevented) closePanel();
-      // Ctrl without Alt or Meta is a shortcut, not a bracket (AltGr reports Ctrl and Alt).
-      if ((e.key === '[' || e.key === ']') && !e.metaKey && !(e.ctrlKey && !e.altKey) && !e.repeat && !e.defaultPrevented && !s.paletteOpen && s.loaded
-        && s.connection !== 'unauthorized' && !typingElsewhere(e.target instanceof Element ? e.target : document.activeElement)) {
+      // Plain [ and ] only: no modifier at all; not while the Gate covers the workspace (App's `gated`), the palette is
+      // open, or focus is in a form control.
+      if ((e.key === '[' || e.key === ']') && !(e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) && !e.repeat && !e.defaultPrevented && !s.paletteOpen
+        && s.loaded && s.connection !== 'unauthorized' && !inFormControl(e.target instanceof Element ? e.target : document.activeElement)) {
         e.preventDefault();
         togglePanel(e.key === '[' ? 'files' : 'inspector');
       }

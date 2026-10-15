@@ -5,3 +5,7 @@ export function typingElsewhere(el: Element | null): boolean {
   if (!(el instanceof HTMLInputElement)) return false;
   return !['button', 'checkbox', 'radio', 'range', 'color', 'file', 'submit', 'reset', 'image'].includes(el.type);
 }
+
+/** Focus in a form control of any kind (or an editable or text-entry widget): single-key shortcuts stay out of it. */
+export const inFormControl = (el: Element | null): boolean =>
+  !!el && ((el as HTMLElement).isContentEditable || !!el.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role=textbox], [role=combobox]'));

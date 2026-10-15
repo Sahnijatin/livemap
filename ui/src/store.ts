@@ -7,7 +7,6 @@ import type { AgentEvent, AgentSession, ChangeSummary, ControlState, Dep, FileMo
 import { LARGE_PROJECT, codeFileCount, edgeBaseline, type Level } from './map/mapModel';
 import { historySource, type HistoryRecord, type HistoryState, type LiveState } from './history';
 import { loadLayout, saveLayout, type Panel, type PanelLayout } from './panelLayout';
-import { isNarrow } from './media';
 
 export const MAX_CHANGES = 2000;
 export const MAX_EVENTS = 2000;
@@ -119,8 +118,8 @@ export interface StoreState {
   /** Wide layouts: docked panel widths and collapsed state as the user set them, remembered across reloads. */
   layout: PanelLayout;
   /**
-   * A file selected at 1080 px or wider shows a collapsed inspector (not saved). It counts only while the selected
-   * file exists (see shownLayout); toggling the inspector or a narrow-width selection ends it.
+   * A selected file shows a collapsed docked inspector (not saved). It counts only while the selected file exists
+   * (see shownLayout); toggling the inspector ends it. Below 1080 px the docked layout is not used, so it does nothing there.
    */
   peek: boolean;
   /** Bumped by every file selection, even of the selected file (the Inspector retries a failed file view load on it). */
@@ -473,7 +472,7 @@ export const useStore = create<StoreState>()((set, get) => ({
   },
 
   select(path) {
-    set(path ? { selected: path, history: pushHistory(get().history, path), peek: !isNarrow(), selects: get().selects + 1 } : { selected: null, peek: false });
+    set(path ? { selected: path, history: pushHistory(get().history, path), peek: true, selects: get().selects + 1 } : { selected: null, peek: false });
   },
 
   toggle(path) {
@@ -491,7 +490,7 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   revealLine(path, line) {
     const seq = (get().reveal?.seq ?? 0) + 1;
-    set({ selected: path, reveal: { path, line, seq }, history: pushHistory(get().history, path), peek: !isNarrow(), selects: get().selects + 1 });
+    set({ selected: path, reveal: { path, line, seq }, history: pushHistory(get().history, path), peek: true, selects: get().selects + 1 });
   },
 
   clearReveal() {
