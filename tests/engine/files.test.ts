@@ -119,6 +119,14 @@ describe('walk', () => {
 });
 
 describe('readForModel', () => {
+  it('strips a leading UTF-8 BOM from text and env files (#25)', async () => {
+    put('a.json', '\uFEFF{"a":1}');
+    put('.env', '\uFEFFFOO=1\n');
+    expect(await readForModel(root, 'a.json')).toEqual({ kind: 'text', text: '{"a":1}', size: 10 });
+    expect(await readForModel(root, '.env')).toMatchObject({ kind: 'secret', envKeys: ['FOO'] });
+    put('.gitignore', '\uFEFFsecret.ts\n');
+    expect(createIgnore(root)('secret.ts', false)).toBe(true);
+  });
   it('sizes its read buffer to the file, not the 1 MB cap', async () => {
     put('small.ts', 'export const a = 1;\n');
     const alloc = vi.spyOn(Buffer, 'alloc');

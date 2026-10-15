@@ -138,7 +138,12 @@ function readGitignore(dir: string): string {
   ignoreStats.reads++;
   const file = path.join(dir, '.gitignore');
   if (lstatSync(file).isSymbolicLink()) throw new Error('symlinked .gitignore');
-  return readFileSync(file, 'utf8');
+  return stripBom(readFileSync(file, 'utf8'));
+}
+
+/** Drops a leading UTF-8 byte order mark, which JSON.parse and line-anchored patterns trip over. */
+export function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
 /**
@@ -281,7 +286,7 @@ export async function readForModel(root: string, rel: string, realRoot?: string)
     const buf = await readCapped(abs, size);
     if (!buf) return null;
     if (buf.length > MAX_PARSE_BYTES) return { kind: 'secret', size: buf.length, envKeys: [] };
-    return { kind: 'secret', size, envKeys: envKeys(buf.toString('utf8')) };
+    return { kind: 'secret', size, envKeys: envKeys(stripBom(buf.toString('utf8'))) };
   }
   if (isBinaryPath(rel)) return { kind: 'binary', size };
   if (size > MAX_PARSE_BYTES) return { kind: 'tooLarge', size };
@@ -289,5 +294,5 @@ export async function readForModel(root: string, rel: string, realRoot?: string)
   if (!buf) return null;
   if (buf.length > MAX_PARSE_BYTES) return { kind: 'tooLarge', size: buf.length };
   if (buf.includes(0)) return { kind: 'binary', size };
-  return { kind: 'text', text: buf.toString('utf8'), size };
+  return { kind: 'text', text: stripBom(buf.toString('utf8')), size };
 }

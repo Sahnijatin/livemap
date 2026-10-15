@@ -182,6 +182,17 @@ describe('ProjectModel', () => {
     expect(m.get('src/f.ts')!.imports.local).toEqual(['src/lib/util.ts']);
   });
 
+  it('reads BOM-prefixed package.json and tsconfig.json (#25)', async () => {
+    put('package.json', '\uFEFF{ "dependencies": { "react": "^18.0.0" } }\n');
+    put('tsconfig.json', '\uFEFF{ "compilerOptions": { "paths": { "@lib/*": ["src/lib/*"] } } }');
+    put('src/lib/util.ts', 'export const u = 1;\n');
+    put('src/f.ts', "import { u } from '@lib/util';\n");
+    const m = await scanned();
+    expect(m.get('package.json')!.deps?.deps.map(d => d.name)).toEqual(['react']);
+    expect(m.get('src/f.ts')!.imports.local).toEqual(['src/lib/util.ts']);
+    expect(m.content('package.json')!.startsWith('{')).toBe(true);
+  });
+
   it('uses the go module path from go.mod', async () => {
     put('go.mod', 'module example.com/app\n\ngo 1.22\n');
     put('pkg/util/util.go', 'package util\n\nfunc U() {}\n');
