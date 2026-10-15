@@ -3,7 +3,7 @@ import { getParser } from '../parser.js';
 import { extractJs } from './js.js';
 import { extractGeneric } from './generic.js';
 import { newBudget, hashText } from './helpers.js';
-import { markdownOutline, scriptBlock, shiftLines } from './markup.js';
+import { markdownOutline, scriptBlocks, shiftLines } from './markup.js';
 import { posix } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 
@@ -60,13 +60,12 @@ export async function fileSymbols(lang: Lang, src: string, path?: string): Promi
     const base = posix.basename(path ?? `Component.${lang}`);
     const dot = base.lastIndexOf('.');
     const name = dot > 0 ? base.slice(0, dot) : base;
-    const block = scriptBlock(src);
-    let children: CodeSymbol[] = [];
+    const children: CodeSymbol[] = [];
     let ok = true;
-    if (block) {
+    for (const block of scriptBlocks(src)) {
       const r = await extractSymbols('typescript', block.code);
-      children = shiftLines(r.symbols, block.lineOffset);
-      ok = r.ok;
+      children.push(...shiftLines(r.symbols, block.lineOffset));
+      ok &&= r.ok;
     }
     const lines = src.split('\n').length;
     const comp: CodeSymbol = {

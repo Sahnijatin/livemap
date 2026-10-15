@@ -193,6 +193,14 @@ describe('ProjectModel', () => {
     expect(m.content('package.json')!.startsWith('{')).toBe(true);
   });
 
+  it('collects imports from every script block of a vue file (#26)', async () => {
+    put('src/types.ts', 'export interface T {}\n');
+    put('src/use.ts', 'export const use = 1;\n');
+    put('src/W.vue', "<script lang=\"ts\">\nimport type { T } from './types';\n</script>\n<script setup lang=\"ts\">\nimport { use } from './use';\n</script>\n");
+    const m = await scanned();
+    expect(m.get('src/W.vue')!.imports.local).toEqual(['src/types.ts', 'src/use.ts']);
+  });
+
   it('uses the go module path from go.mod', async () => {
     put('go.mod', 'module example.com/app\n\ngo 1.22\n');
     put('pkg/util/util.go', 'package util\n\nfunc U() {}\n');

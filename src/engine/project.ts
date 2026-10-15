@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { CodeSymbol, FileModel, Mount } from '../shared/types.js';
 import { langOf } from './languages.js';
 import { fileSymbols } from './symbols/index.js';
-import { scriptBlock } from './symbols/markup.js';
+import { scriptBlocks } from './symbols/markup.js';
 import { buildIndex, extractImports, indexUpdate, readTsconfigAliases, resolveSpecifier, type FileIndex, type ImportCtx } from './imports.js';
 import { ANALYZERS, analyzeFile, type Analyzer } from './domain/index.js';
 import { createIgnore, insideRoot, parentDir, walk, readForModel, type IgnoreFn, type ReadResult } from './files.js';
@@ -395,7 +395,8 @@ export class ProjectModel {
   }
 
   private importsFor(rel: string, lang: FileModel['lang'], text: string): FileModel['imports'] {
-    const code = lang === 'vue' || lang === 'svelte' ? scriptBlock(text)?.code ?? '' : text;
+    // Every script block counts (Vue `<script>` + `<script setup>`, Svelte module + instance).
+    const code = lang === 'vue' || lang === 'svelte' ? scriptBlocks(text).map(b => b.code).join('\n;\n') : text;
     return extractImports(rel, lang, code, this.ctx);
   }
 
