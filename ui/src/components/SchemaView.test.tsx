@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { DomainIndex, Table } from '@shared/domain.js';
 import { useStore } from '../store';
 import { emptyDomain } from '../fixtures';
-import { LAYOUT_TIMEOUT, relationLinks, type ElkRun } from '../layout/schemaLayout';
+import { LAYOUT_TIMEOUT, NODE_W, relationLinks, type ElkRun } from '../layout/schemaLayout';
 import { CAP, SchemaView, pickTables } from './SchemaView';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -263,5 +263,43 @@ describe('relationLinks', () => {
     const lonely = { ...user, relations: [{ field: 'posts', to: 'posts', many: true, via: 'relation' as const }, { field: 'x', to: 'nowhere', many: false, via: 'fk' as const }] };
     const bare = { ...post, relations: [] };
     expect(relationLinks([lonely, bare]).map(l => [l.from, l.to, l.many])).toEqual([['users', 'posts', true]]);
+  });
+});
+
+describe('SchemaView palette focus (tableFocus)', () => {
+  const reduced = () => vi.stubGlobal('matchMedia', (q: string) => ({
+    matches: q.includes('prefers-reduced-motion'), media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {},
+  }));
+  const wrap = (k: string) => host.querySelector<HTMLElement>(`.react-flow__node[data-id="${k}"]`);
+  /** The card's horizontal center on screen relative to the canvas center (React Flow's unmeasured canvas is 500 wide in jsdom). */
+  const centerX = (k: string) => {
+    const m = /translate\(([-\d.e]+)px,\s*([-\d.e]+)px\)\s*scale\(([-\d.e]+)\)/.exec(host.querySelector<HTMLElement>('.react-flow__viewport')!.style.transform)!;
+    return (posOf(k)!.x + NODE_W / 2) * Number(m[3]) + Number(m[1]) - 250;
+  };
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+  it('centers the table and highlights it briefly', async () => {
+    reduced();
+    await mount([bare('FocA'), bare('FocB'), bare('FocC')]);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    act(() => useStore.getState().focusTable('focc'));
+    expect(Math.abs(centerX('focc'))).toBeLessThan(1);
+    expect(wrap('focc')!.classList.contains('pulse')).toBe(true);
+    expect(wrap('foca')!.classList.contains('pulse')).toBe(false);
+    act(() => { vi.advanceTimersByTime(2000); });
+    expect(wrap('focc')!.classList.contains('pulse')).toBe(false);
+  });
+
+  it('a table beyond the cap turns on "Show all" first, then is focused', async () => {
+    reduced();
+    const many: Table[] = Array.from({ length: CAP + 5 }, (_, i) => ({ ...user, name: `Cap${i}`, table: `cap${i}`, fields: [user.fields[0]], relations: [] }));
+    await mount(many);
+    expect(wrap(`cap${CAP + 4}`)).toBeNull();
+    await act(async () => useStore.getState().focusTable(`cap${CAP + 4}`));
+    await settleLayout();
+    await settleLayout();
+    expect(wrap(`cap${CAP + 4}`)).not.toBeNull();
+    expect(wrap(`cap${CAP + 4}`)!.classList.contains('pulse')).toBe(true);
+    expect(Math.abs(centerX(`cap${CAP + 4}`))).toBeLessThan(1);
   });
 });

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, applyNodeChanges, useNodesInitialized, useReactFlow,
+  ReactFlow, ReactFlowProvider, applyNodeChanges, useNodesInitialized, useReactFlow,
   type NodeChange, type BuiltInEdge, type Viewport,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -68,10 +68,8 @@ function ZoomControls() {
   return (
     <div className="zoomctl glass" role="group" aria-label="Zoom">
       <button type="button" aria-label="Zoom out" onClick={() => rf.zoomOut({ duration: motion(250) })}>−</button>
+      <button type="button" className="zfit" aria-label="Fit to screen" onClick={() => rf.fitView({ duration: motion(450), padding: 0.12, maxZoom: 1 })}>Fit</button>
       <button type="button" aria-label="Zoom in" onClick={() => rf.zoomIn({ duration: motion(250) })}>+</button>
-      <button type="button" aria-label="Fit to view" onClick={() => rf.fitView({ duration: motion(450), padding: 0.12, maxZoom: 1 })}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4" /></svg>
-      </button>
     </div>
   );
 }
@@ -124,7 +122,12 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
     for (const l of links) if (l.from === hover || l.to === hover) { s.add(l.from); s.add(l.to); }
     return s;
   }, [hover, links]);
-  const focusClass = useCallback((k: string): string | undefined => (near ? (near.has(k) ? 'hl' : 'dim') : undefined), [near]);
+  // A table the palette focused pulses for a moment.
+  const [pulse, setPulse] = useState<string | null>(null);
+  const focusClass = useCallback((k: string): string | undefined => {
+    const hoverClass = near ? (near.has(k) ? 'hl' : 'dim') : undefined;
+    return k === pulse ? (hoverClass ? `pulse ${hoverClass}` : 'pulse') : hoverClass;
+  }, [near, pulse]);
   const focusRef = useRef(focusClass);
   focusRef.current = focusClass;
 
@@ -214,6 +217,35 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
     });
   }, [links, pos, visible, expanded, base, hover]);
 
+  // Palette focus: center the table and pulse it; one beyond the cap turns on "Show all" first.
+  // Requests made before this mount (another tab) are not replayed.
+  const tableFocus = useStore(s => s.tableFocus);
+  const focusSeq = useRef(tableFocus?.seq ?? 0);
+  const pending = useRef<string | null>(null);
+  useEffect(() => {
+    if (tableFocus && tableFocus.seq > focusSeq.current) {
+      focusSeq.current = tableFocus.seq;
+      const k = tableFocus.key;
+      if (tables.some(t => tableKey(t) === k)) {
+        pending.current = k;
+        if (!all && !latest.current.some(t => tableKey(t) === k)) setAll(true);
+      }
+    }
+    const k = pending.current;
+    const p = k ? pos.get(k) : undefined;
+    if (!k || !p) return;
+    pending.current = null;
+    const h = rf.getNode(k)?.measured?.height ?? 160;
+    const zoom = Math.min(1.5, Math.max(0.8, rf.getViewport().zoom));
+    void rf.setCenter(p.x + NODE_W / 2, p.y + h / 2, { zoom, duration: motion(500) });
+    setPulse(k);
+  }, [tableFocus, pos, tables, all, rf]);
+  useEffect(() => {
+    if (!pulse) return;
+    const t = window.setTimeout(() => setPulse(null), 1600);
+    return () => window.clearTimeout(t);
+  }, [pulse]);
+
   // Fit once, when the first cards have been measured; afterwards the user's pan and zoom are kept.
   useEffect(() => {
     if (fitted.current || !initialized || !nodes.length) return;
@@ -233,6 +265,8 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
   return (
     <>
       <div className="sv-canvas">
+        {/* Screen-space dot grid (prototype #gridbg): it stays crisp at every zoom. */}
+        <div className="gridbg" aria-hidden="true" />
         <ReactFlow<TableFlowNode, BuiltInEdge>
           nodes={nodes}
           edges={edges}
@@ -251,7 +285,6 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
           maxZoom={2}
           proOptions={{ hideAttribution: true }}
         >
-          <Background variant={BackgroundVariant.Dots} gap={24} size={1.6} color="var(--grid)" />
           <ZoomControls />
         </ReactFlow>
       </div>

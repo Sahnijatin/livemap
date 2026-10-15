@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import clsx from 'clsx';
 import type { ChangeSummary, FileModel } from '@shared/types.js';
 import { useStore } from '../store';
@@ -12,6 +12,9 @@ import { LiveSession } from './LiveSession';
 import { Avatar } from './Avatar';
 import { KindBadge, LayerTile, layerVars } from './icons';
 import { MethodPill } from './MethodPill';
+import { LEAVING, useGlide, useLeaving } from '../motion';
+import { NARROW_QUERY, useMedia } from '../media';
+import { INERT } from '../panels';
 
 function FileChip({ path, note }: { path: string; note?: string }) {
   const file = useStore(s => s.files[path]);
@@ -241,15 +244,40 @@ function FileDetail({ file }: { file: FileModel }) {
   );
 }
 
-export function Inspector() {
-  const selected = useStore(s => s.selected);
-  const file = useStore(s => (s.selected ? s.files[s.selected] : undefined));
-  const panel = useStore(s => s.panel);
+const OVERVIEW = '__overview';
+/** Content cross-fade when switching between the Live session and a file, or between files. Matches `.ins-scroll.in/.leave`. */
+const SWAP_MS = 180;
+
+/** One inspector page: a file's details, or the Live session. Section height changes animate (useGlide). */
+function Pane({ id, entering, leaving }: { id: string; entering: boolean; leaving: boolean }) {
+  const file = useStore(s => (id === OVERVIEW ? undefined : s.files[id]));
+  const box = useRef<HTMLDivElement>(null);
+  useGlide(box);
   return (
-    <aside className={clsx('insp glass', panel === 'inspector' && 'open')} aria-label="Inspector">
-      <div className="ins-scroll ins-swap" key={selected ?? '__overview'}>
-        {file ? <FileDetail file={file} /> : <LiveSession />}
-      </div>
+    <div className={clsx('ins-scroll', leaving ? 'leave' : entering && 'in')} ref={box} {...(leaving ? LEAVING : {})}>
+      {file ? <FileDetail file={file} /> : <LiveSession />}
+    </div>
+  );
+}
+
+export function Inspector() {
+  const id = useStore(s => s.selected ?? OVERVIEW);
+  const panel = useStore(s => s.panel);
+  // Below 1080 px a closed slide-over is off screen: keep it out of the tab order.
+  const narrow = useMedia(NARROW_QUERY);
+  // The old page stays mounted (keyed by id, so never rebuilt) while it fades out over the new one.
+  const { prev, from } = useLeaving(id, SWAP_MS);
+  const ids = prev !== null ? [prev, id] : [id];
+  return (
+    <aside
+      id="inspector"
+      className={clsx('insp glass', panel === 'inspector' && 'open')}
+      aria-label="Inspector"
+      data-panel="inspector"
+      tabIndex={-1}
+      {...(narrow && panel !== 'inspector' ? INERT : {})}
+    >
+      {ids.map(k => <Pane key={k} id={k} entering={from !== null && k === id} leaving={k === prev} />)}
     </aside>
   );
 }

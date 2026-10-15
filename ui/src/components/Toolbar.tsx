@@ -1,11 +1,13 @@
-import { useState } from 'react';
+import { useState, type MouseEvent } from 'react';
 import clsx from 'clsx';
 import { useStore } from '../store';
 import { useTheme } from '../theme';
 import { setPaused } from '../api';
 import { AgentChips } from './AgentChips';
 import { useLiveState } from './Activity';
-import { MenuIcon, MoonIcon, PanelIcon, PauseIcon, PlayIcon, SunIcon } from './icons';
+import { preloadPalette } from '../palette/PaletteHost';
+import { togglePanel } from '../panels';
+import { MenuIcon, MoonIcon, PanelIcon, PauseIcon, PlayIcon, SearchIcon, SunIcon } from './icons';
 
 function StatusChip() {
   const connection = useStore(s => s.connection);
@@ -81,44 +83,112 @@ export function PauseButton() {
   );
 }
 
-export function Toolbar() {
+const isMac = (): boolean => /Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? '');
+
+/** "Search everything ⌘K": opens the palette (also while focus is in a text field); icon-only on phones. */
+export function SearchButton() {
+  const setPalette = useStore(s => s.setPalette);
+  const mac = isMac();
+  return (
+    <button
+      type="button"
+      className="pillbtn search"
+      aria-label="Search everything"
+      aria-keyshortcuts={mac ? 'Meta+K' : 'Control+K'}
+      title={`Search everything (${mac ? '⌘K' : 'Ctrl+K'})`}
+      onClick={() => setPalette(true)}
+      onMouseEnter={preloadPalette}
+      onFocus={preloadPalette}
+    >
+      <SearchIcon />
+      <span className="sl">Search everything</span>
+      <span className="kbd" aria-hidden="true">{mac ? '⌘K' : 'Ctrl K'}</span>
+    </button>
+  );
+}
+
+/** Copies text: the Clipboard API, else a selected off-screen field and execCommand (focus then returns to `back`). Resolves to whether it worked. */
+async function copyText(text: string, back: HTMLElement): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Denied or unavailable (for example over plain http): fall through.
+  }
+  const field = document.createElement('textarea');
+  field.value = text;
+  field.setAttribute('readonly', '');
+  field.setAttribute('aria-hidden', 'true');
+  field.style.cssText = 'position:fixed;top:0;left:-9999px;opacity:0';
+  document.body.appendChild(field);
+  try {
+    field.focus();
+    field.select();
+    return document.execCommand('copy');
+  } catch {
+    return false;
+  } finally {
+    field.remove();
+    back.focus();
+  }
+}
+
+/** The project chip (prototype `.projsel`): name and folder. One project per run, so no menu: a click copies the root path. */
+export function ProjectChip() {
   const name = useStore(s => s.name);
   const root = useStore(s => s.root);
-  const panel = useStore(s => s.panel);
-  const setPanel = useStore(s => s.setPanel);
-  const { theme, toggle } = useTheme();
+  const showToast = useStore(s => s.showToast);
+  if (!name) return null;
   const home = root.replace(/^\/(Users|home)\/[^/]+/, '~');
   const parent = home.includes('/') ? home.slice(0, home.lastIndexOf('/')) || '/' : '';
+  const copy = async (e: MouseEvent<HTMLButtonElement>) => {
+    const ok = await copyText(root, e.currentTarget);
+    if (ok) showToast('Path copied');
+    else showToast("Couldn't copy path", 'error');
+  };
+  return (
+    <button type="button" className="projsel" title={`${root} · click to copy`} aria-label={`${name}, copy project path`} onClick={copy}>
+      <span className="pn">{name}</span>
+      {parent && <small>{parent}</small>}
+    </button>
+  );
+}
+
+export function Toolbar() {
+  const panel = useStore(s => s.panel);
+  const { theme, toggle } = useTheme();
 
   return (
     <header className="toolbar glass">
       <button
         className="iconbtn only-narrow"
         aria-label="Files"
+        aria-controls="sidebar"
+        data-panel-opener="files"
         aria-expanded={panel === 'files'}
-        onClick={() => setPanel(panel === 'files' ? null : 'files')}
+        onClick={() => togglePanel('files')}
       >
         <MenuIcon />
       </button>
       <span className="brand"><i className="mark" aria-hidden="true" /><span>LiveMap</span></span>
       <span className="sep" aria-hidden="true" />
-      {name && (
-        <span className="projname" title={root}>
-          <span className="truncate">{name}</span>
-          {parent && <small>{parent}</small>}
-        </span>
-      )}
+      <ProjectChip />
       <StatusChip />
       <AgentChips />
       <span className="grow"><NowLine /></span>
-      <button className="iconbtn" aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} onClick={toggle}>
+      <SearchButton />
+      <button type="button" className="iconbtn theme" aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} onClick={toggle}>
         {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
       </button>
       <button
         className="iconbtn only-narrow"
         aria-label="Inspector"
+        aria-controls="inspector"
+        data-panel-opener="inspector"
         aria-expanded={panel === 'inspector'}
-        onClick={() => setPanel(panel === 'inspector' ? null : 'inspector')}
+        onClick={() => togglePanel('inspector')}
       >
         <PanelIcon />
       </button>

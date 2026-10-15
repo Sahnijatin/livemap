@@ -21,6 +21,8 @@ export interface FileRowProps {
   open: boolean;
   selected: boolean;
   badge: LiveBadge | undefined;
+  /** The file the agent is working on right now: shows NOW instead of New or Edited. */
+  target: boolean;
   pop: boolean;
   tags: Map<string, SymbolTag>;
   /** The roving-focus key when it is this row or one of its symbols, else null. */
@@ -31,8 +33,9 @@ export interface FileRowProps {
 }
 
 export const FileRow = memo(function FileRow(props: FileRowProps) {
-  const { file, layer, total, symbols, open, selected, badge, pop, tags, activeKey } = props;
+  const { file, layer, total, symbols, open, selected, badge: liveBadge, target, pop, tags, activeKey } = props;
   rowRenderProbe.fn?.(file.path);
+  const badge = target ? 'now' : liveBadge;
   const mounted = useRef(open);
   if (open) mounted.current = true;
   const hasSyms = symbols.length > 0;
@@ -64,6 +67,7 @@ export const FileRow = memo(function FileRow(props: FileRowProps) {
           // Next to a live badge the parse error is a compact dot so the name keeps its room.
           ? <span className="badge b-err b-dot" role="img" aria-label="parse error" title={PARSE_ERROR_TIP} />
           : <span className="badge b-err" title={PARSE_ERROR_TIP}>parse error</span>)}
+        {badge === 'now' && <span className="badge b-now">Now</span>}
         {badge === 'new' && <span className="badge b-new">New</span>}
         {badge === 'edited' && <span className="badge b-edit">Edited</span>}
         {!badge && !file.flags.parseError && <span className="fmeta" aria-label={`${total} symbols`}>{total || ''}</span>}

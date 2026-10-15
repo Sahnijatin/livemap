@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { DomainIndex } from '@shared/domain.js';
-import { useStore, MAX_CHANGES, MAX_EVENTS, loadTab, depKey, tableKey, fieldKey, routeBaseKey } from './store';
+import { useStore, MAX_CHANGES, MAX_EVENTS, CENTER_TABS, loadTab, depKey, tableKey, fieldKey, routeBaseKey } from './store';
+import { LARGE_PROJECT } from './map/mapModel';
 import { file, change, event, session, emptyDomain } from './fixtures';
 
 const hello = (files = [file('a.ts'), file('b.ts'), file('c.ts')]) => ({
@@ -243,11 +244,95 @@ describe('store tab', () => {
     expect(loadTab()).toBe('activity');
   });
 
+  it('accepts and persists the map tab; tabs are ordered activity, map, schema, api, stack', () => {
+    const mem = new Map<string, string>();
+    vi.stubGlobal('localStorage', { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v) });
+    expect(CENTER_TABS).toEqual(['activity', 'map', 'schema', 'api', 'stack']);
+    useStore.getState().setTab('map');
+    expect(useStore.getState().tab).toBe('map');
+    expect(mem.get('livemap-tab')).toBe('map');
+    expect(loadTab()).toBe('map');
+  });
+
   it('survives a localStorage that throws', () => {
     const boom = () => { throw new Error('denied'); };
     vi.stubGlobal('localStorage', { getItem: boom, setItem: boom });
     expect(loadTab()).toBe('activity');
     useStore.getState().setTab('schema');
     expect(useStore.getState().tab).toBe('schema');
+  });
+});
+
+describe('store map state', () => {
+  const imp = (path: string, local: string[]) => file(path, [], { imports: { local, external: [] } });
+
+  it('captures the hello edge baseline at file and folder level, with buildMap ids', () => {
+    useStore.getState().apply(hello([
+      imp('src/web/App.tsx', ['src/web/Page.tsx', 'src/api/orders.ts', 'README.md', 'src/web/App.tsx']),
+      imp('src/web/Page.tsx', ['src/api/orders.ts']),
+      imp('src/api/orders.ts', []),
+      file('README.md', [], { lang: 'markdown' }),
+    ]));
+    const base = useStore.getState().helloEdges;
+    expect([...base].sort()).toEqual([
+      'dir:src/web->dir:src/api',
+      'src/web/App.tsx->src/api/orders.ts',
+      'src/web/App.tsx->src/web/Page.tsx',
+      'src/web/Page.tsx->src/api/orders.ts',
+    ]);
+    // Later file updates leave the baseline alone.
+    useStore.getState().apply({ type: 'files', files: [imp('src/api/orders.ts', ['src/web/Page.tsx'])], removed: [] });
+    expect(useStore.getState().helloEdges).toBe(base);
+  });
+
+  it('level defaults to files, switches, and opens at folders above the large-project threshold', () => {
+    expect(useStore.getState().mapLevel).toBe('files');
+    useStore.getState().setMapLevel('functions');
+    expect(useStore.getState().mapLevel).toBe('functions');
+    useStore.getState().reset();
+    const many = Array.from({ length: LARGE_PROJECT + 1 }, (_, i) => file(`d${i % 7}/f${i}.ts`));
+    useStore.getState().apply(hello(many));
+    expect(useStore.getState().mapLevel).toBe('folders');
+    // A reconnect keeps the level the user chose.
+    useStore.getState().setMapLevel('files');
+    useStore.getState().apply(hello(many));
+    expect(useStore.getState().mapLevel).toBe('files');
+  });
+
+  it('expands and collapses map folders', () => {
+    const s = useStore.getState();
+    s.toggleMapFolder('dir:src');
+    expect(useStore.getState().mapExpanded).toEqual({ 'dir:src': true });
+    s.toggleMapFolder('dir:src');
+    expect(useStore.getState().mapExpanded).toEqual({});
+    s.expandMapFolder('dir:lib');
+    s.expandMapFolder('dir:lib');
+    expect(useStore.getState().mapExpanded).toEqual({ 'dir:lib': true });
+  });
+});
+
+describe('store history and focus requests', () => {
+  it('history keeps the last 8 distinct selected files, most recent first', () => {
+    const s = useStore.getState();
+    for (const p of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']) s.select(`${p}.ts`);
+    s.select('c.ts');
+    s.revealLine('z.ts', 4);
+    s.select(null);
+    expect(useStore.getState().history).toEqual(['z.ts', 'c.ts', 'i.ts', 'h.ts', 'g.ts', 'f.ts', 'e.ts', 'd.ts']);
+  });
+
+  it('focus requests carry a sequence so repeats fire', () => {
+    const s = useStore.getState();
+    s.focusMap('a.ts');
+    const first = useStore.getState().mapFocus!;
+    s.focusMap('a.ts');
+    expect(useStore.getState().mapFocus).toEqual({ path: 'a.ts', seq: first.seq + 1 });
+    s.focusTable('orders');
+    expect(useStore.getState().tableFocus).toMatchObject({ key: 'orders' });
+    s.traceRoute('POST /api/orders src/r.ts:3');
+    expect(useStore.getState().routeTrace).toMatchObject({ id: 'POST /api/orders src/r.ts:3' });
+    s.reset();
+    const st = useStore.getState();
+    expect([st.mapFocus, st.tableFocus, st.routeTrace, st.history]).toEqual([null, null, null, []]);
   });
 });
