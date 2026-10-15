@@ -5,7 +5,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { HistoryStore } from '../../src/history/store.js';
 import { projectDir } from '../../src/history/paths.js';
-import { buildExport, pathScrubber } from '../../src/export/export.js';
+import { buildExport, pathScrubber, stripCode } from '../../src/export/export.js';
 import { emptyState } from '../../src/shared/state.js';
 import type { ProjectState } from '../../src/shared/state.js';
 import type { ExportPayload } from '../../src/shared/export.js';
@@ -142,6 +142,15 @@ describe('buildExport', () => {
     expect(attributions).toEqual(['Adds [code removed] to a.ts', 'Adds [code removed] to a.ts']);
     const { text: withCode } = decode((await buildExport(root, { home, code: true, uiHtml: UI })).html);
     for (const s of ['CODE_ARG', 'CODE_A', 'CODE_B', 'CODE_C', 'CODE_INLINE', 'CODE_TITLE']) expect(withCode).toContain(s);
+  });
+
+  it('code: false removes code spans from labels of tools other than shell', async () => {
+    write('a.ts', 'const a = 1;\n');
+    const ev: AgentEvent = { ...event(1, 's1'), type: 'tool_start', tool: { name: 'Task', label: 'Subagent: add `LEAK_SPAN()` to a.ts', paths: [] } };
+    await record([file('a.ts')], [{ type: 'agentEvent', event: ev }]);
+    const { text } = decode((await buildExport(root, { home, code: false, uiHtml: UI })).html);
+    expect(text).not.toMatch(/LEAK_/);
+    expect(text).toContain('Subagent: add [code removed] to a.ts');
   });
 
   it('with a session, keeps that session\'s events, its attributed changes, and context within its span', async () => {
@@ -367,5 +376,28 @@ describe('pathScrubber', () => {
 
   it('scrubs keys and nested values', () => {
     expect(posix.value({ '/home/u/app/a.ts': ['/home/u/app', { p: '/home/u/b' }], n: 1 })).toEqual({ 'a.ts': ['app', { p: 'b' }], n: 1 });
+  });
+});
+
+describe('stripCode', () => {
+  const R = '[code removed]';
+  it('removes a fence that contains a shorter inner fence, up to its own closing fence', () => {
+    expect(stripCode('README:\n````md\n```js\nconst LEAK = 1;\n```\n````\nDone.')).toBe(`README:\n${R}\nDone.`);
+  });
+  it('removes tilde fences', () => {
+    expect(stripCode('Try:\n~~~\nLEAK()\n~~~\nok')).toBe(`Try:\n${R}\nok`);
+  });
+  it('removes inline spans of any backtick length', () => {
+    expect(stripCode('Use ``a `LEAK` c`` and `b`.')).toBe(`Use ${R} and ${R}.`);
+  });
+  it('removes an unclosed span to the end of its line, as in a truncated title', () => {
+    expect(stripCode('fix `foo(LEAK')).toBe(`fix ${R}`);
+  });
+  it('removes a fence opened mid-line, and an unclosed one to the end', () => {
+    expect(stripCode('Run ```\nLEAK\n``` then go')).toBe(`Run ${R}\n then go`);
+    expect(stripCode('Maybe ```\nLEAK unclosed')).toBe(`Maybe ${R}`);
+  });
+  it('leaves text without code alone', () => {
+    expect(stripCode('Adds a cancel route.\nNo code here.')).toBe('Adds a cancel route.\nNo code here.');
   });
 });
