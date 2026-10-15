@@ -90,27 +90,71 @@ function indexOf(ctx: ImportCtx): FileIndex {
 
 const blank = (s: string): string => s.replace(/[^\n]/g, ' ');
 
+/** A line inside a template that starts an import or export statement; the template is taken to end before it. */
+const STATEMENT_LINE = /\n[ \t]*(?:import[ \t]*['"]|(?:import|export)[ \t{*][^'"`;]{0,500}?\bfrom[ \t]*['"])/y;
+/** Code after which a `/` starts a regex literal rather than a division. */
+const REGEX_AFTER = new Set(['', '=', '(', ',', ':', '[', '!', '&', '|', '?', '{', '}', ';']);
+const REGEX_KEYWORD = /\b(?:return|typeof|case|void|yield|await|in|of|delete|instanceof)$/;
+
+/** End of the regex literal opening at `i` (past its closing `/`), or -1 when the line does not close one. */
+function regexEnd(src: string, i: number): number {
+  let cls = false;
+  for (let j = i + 1; j < src.length && src[j] !== '\n'; j++) {
+    const c = src[j];
+    if (c === '\\') j++;
+    else if (c === '[') cls = true;
+    else if (c === ']') cls = false;
+    else if (c === '/' && !cls) return j + 1;
+  }
+  return -1;
+}
+
 /**
- * `src` with comments and the bodies of string and template literals blanked (quotes and newlines kept),
- * so offsets still match `src`: statements are matched here and their specifiers read back from `src`.
+ * `src` with comments and the bodies of string, template and regex literals blanked (quotes and newlines
+ * kept), so offsets still match `src`: statements are matched here and their specifiers read back from `src`.
+ * A stray quote must not hide the imports after it: a quoted string ends at its line's end, and a template
+ * ends early before a line that starts an import or export statement.
  */
 function blankJs(src: string): string {
   let out = '';
   let i = 0;
+  // The last code character on this line ('' at a line start), to tell a regex from a division.
+  let prev = '';
+  // Set when a `/` opened no regex: the rest of the line is not read for one again, keeping long lines linear.
+  let divisions = false;
   while (i < src.length) {
     const c = src[i];
     if (c === '"' || c === "'" || c === '`') {
       let j = i + 1;
-      while (j < src.length && src[j] !== c && (c === '`' || src[j] !== '\n')) j += src[j] === '\\' ? 2 : 1;
-      const closed = j < src.length;
-      out += c + blank(src.slice(i + 1, closed ? j : src.length)) + (closed ? src[j] : '');
-      i = j + 1;
+      let closed = false;
+      for (; j < src.length; j += src[j] === '\\' ? 2 : 1) {
+        if (src[j] === c) { closed = true; break; }
+        if (src[j] !== '\n') continue;
+        if (c !== '`') break;
+        STATEMENT_LINE.lastIndex = j;
+        if (STATEMENT_LINE.test(src)) break;
+      }
+      j = Math.min(j, src.length);
+      out += c + blank(src.slice(i + 1, j)) + (closed ? c : '');
+      i = closed ? j + 1 : j;
+      prev = c;
     } else if (c === '/' && (src[i + 1] === '/' || src[i + 1] === '*')) {
       const end = src[i + 1] === '/' ? src.indexOf('\n', i) : src.indexOf('*/', i + 2);
       const stop = end === -1 ? src.length : src[i + 1] === '/' ? end : end + 2;
       out += blank(src.slice(i, stop));
       i = stop;
-    } else { out += c; i++; }
+    } else if (c === '/' && !divisions && (REGEX_AFTER.has(prev) || (/[\w$]/.test(prev) && REGEX_KEYWORD.test(src.slice(Math.max(0, i - 12), i).trimEnd())))) {
+      const end = regexEnd(src, i);
+      if (end < 0) { out += c; i++; prev = c; divisions = true; continue; }
+      out += '/' + blank(src.slice(i + 1, end - 1)) + '/';
+      i = end;
+      prev = ')';
+    } else {
+      out += c;
+      i++;
+      if (c === '\n') { prev = ''; divisions = false; }
+      else if (c !== ' ' && c !== '\t' && c !== '\r') prev = c;
+    }
   }
   return out;
 }
@@ -140,7 +184,7 @@ function parseJsSpecs(src: string): string[] {
   indexStats.jsParses++;
   const out: string[] = [];
   const patterns = [
-    /\b(?:import|export)\s+(?:type\s+)?(?:[^'";]*?\s+from\s+)?['"]([^'"\n]+)['"]/dg,
+    /\b(?:import|export)\s+(?:type\s+)?(?:[^'";]{0,2000}?\s+from\s+)?['"]([^'"\n]+)['"]/dg,
     /\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)/dg,
     /\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*\)/dg,
   ];

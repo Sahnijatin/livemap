@@ -141,6 +141,15 @@ describe('indexing and fixes', () => {
     expect(imp('src/a.ts', 'typescript', src)).toEqual({ local: ['src/lib/b.ts', 'src/lib/index.ts', 'src/ui/c.tsx'], external: ['react'] });
     expect(imp('src/a.ts', 'typescript', "import a from 'react' // import b from 'vue'\n/* 'x' */ import c from \"preact\"")).toEqual({ local: [], external: ['react', 'preact'] });
   });
+  it('keeps imports after a stray quote that opens no real string', () => {
+    const after = "\nimport y from './lib';\nimport {\n  b,\n} from './lib/b';\nexport * from 'vue';\n";
+    const want = { local: ['src/lib/b.ts', 'src/lib/index.ts'], external: ['vue'] };
+    expect(imp('src/a.ts', 'typescript', "const re = /`/; const q = /[/'\"]/g; const half = a / 2 / b;" + after)).toEqual(want);
+    expect(imp('src/a.tsx', 'tsx', 'const P = () => <p>Don`t</p>;' + after)).toEqual(want);
+    expect(imp('src/a.tsx', 'tsx', "const P = () => <p>Don't</p>;" + after)).toEqual(want);
+    // A regex body is not code, and a template still hides import-like text that does not start a line.
+    expect(imp('src/a.ts', 'typescript', "const r = /import x from 'lodash'/;\nconst t = `a\n  b; import z from 'chalk'`;" + after)).toEqual(want);
+  });
   it('prefers the longest alias prefix', () => {
     expect(imp('src/a.ts','typescript',`import b from '@a/lib/b'`, { aliases: [['@a',['nowhere']],['@a/lib',['src/lib']]] }).local).toEqual(['src/lib/b.ts']);
   });
