@@ -24,7 +24,8 @@ function targetBox(g: MapGraph, boxes: Map<string, Box> | null, target: string |
 export function useFollowCamera(graph: MapGraph, boxes: Map<string, Box> | null, target: string | null, initiallyHeld = false) {
   const rf = useReactFlow<MapFlowNode, LinkFlowEdge>();
   const storeApi = useStoreApi<MapFlowNode, LinkFlowEdge>();
-  const follow = useStore(s => s.follow);
+  // Suspended while the UI shows the past: historical activity is not the agent working now.
+  const follow = useStore(s => s.follow && !s.rewound);
   const [paused, setPaused] = useState(false);
 
   const cam = useRef<FollowCamera | null>(null);

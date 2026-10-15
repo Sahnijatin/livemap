@@ -110,6 +110,7 @@ function Canvas({ run, tools }: { run: ElkRun; tools: HTMLElement | null }) {
   const level = useStore(s => s.mapLevel);
   const mapExpanded = useStore(s => s.mapExpanded);
   const selected = useStore(s => s.selected);
+  const rewound = useStore(s => s.rewound !== null);
   const target = useCurrentTarget()?.path ?? null;
   // Symbol tags only matter at the functions level; elsewhere a new change does not rebuild the graph.
   const changes = level === 'functions' ? allChanges : NO_CHANGES;
@@ -422,6 +423,8 @@ function Canvas({ run, tools }: { run: ElkRun; tools: HTMLElement | null }) {
             onMove={(e, vp) => { if (gesture.current!.step(!!e, vp)) userMoved(); }}
             onMoveEnd={(e, vp) => { mem.viewport = vp; if (gesture.current!.end(!!e, vp)) userMoved(); }}
             defaultViewport={mem.viewport ?? undefined}
+            // Pins are live layout edits: off while the UI shows the past.
+            nodesDraggable={!rewound}
             nodesConnectable={false}
             nodesFocusable={false}
             edgesFocusable={false}
