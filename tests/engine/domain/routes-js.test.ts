@@ -65,6 +65,13 @@ describe('routes-js analyzer', () => {
     expect(run('src/client.ts', client).routes).toEqual([]);
   });
 
+  it('keeps guessed routes with middleware factory calls, and drops client calls in any value position', () => {
+    const src = "module.exports = (app) => {\n  app.get('/users', requireAuth(), list);\n  app.post('/u', validate(schema), create);\n  app.get('/x', ctrl.list.bind(ctrl))\n  if (admin) app.delete('/z', remove);\n};\n";
+    expect(run('routes/users.js', src).routes.map(r => `${r.method} ${r.path}`)).toEqual(['GET /users', 'POST /u', 'GET /x', 'DELETE /z']);
+    const client = "export async function g(api, id, event, ok) {\n  const [a, b] = await Promise.all([api.get('/a', id), api.get('/b', id)]);\n  void api.post('/track', event);\n  const c = ok ? api.get('/x', id) : null;\n  const d =\n          api.get('/u', id);\n  return ok && api.get('/v', id);\n}\n";
+    expect(run('src/client.ts', client).routes).toEqual([]);
+  });
+
   it('ignores member receivers except this.app/router/server and this.X assigned from a router factory', () => {
     expect(run('src/users.service.ts', "export class UsersService {\n  list() { return this.api.get('/users'); }\n}\nctx.router.get('/x', h);\n").routes).toEqual([]);
     const src = "import express from 'express';\nclass S {\n  web = express();\n  start() {\n    this.app.get('/a', a);\n    this.web.get('/w', w);\n  }\n}\n";

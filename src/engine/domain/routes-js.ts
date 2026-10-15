@@ -203,7 +203,7 @@ function codeRoutes(code: string, scan: string): { routes: Route[]; mounts: Moun
     const open = callOpen(scan, m.index + m[0].length);
     if (open < 0) continue;
     const { args, end } = splitArgs(code, open);
-    const used = !!r.guessed && CONSUMED.test(scan.slice(Math.max(0, m.index - 16), m.index));
+    const used = !!r.guessed && valueUsed(scan, m.index);
     if (verb === 'use') {
       const prefix = literal(args[0]);
       if (isPath(prefix) && args.length > 1) mount(prefix, specOf(args[args.length - 1], imports), m.index, r);
@@ -242,11 +242,31 @@ function codeRoutes(code: string, scan: string): { routes: Route[]; mounts: Moun
 }
 
 const FN_ARG = /^(?:async\s+)?(?:function\b|(?:\([^()]*\)|[\w$]+)\s*(?::[^=]{0,200})?=>)/;
-const REF_ARG = /^[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*$/;
+/** A handler reference or a middleware factory call: `list`, `ctl.show`, `requireAuth()`, `h.bind(ctl)`. */
+const REF_ARG = /^[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*|\s*\([^]*\))*$/;
 /** Last segments that name a request payload or config, as passed to an HTTP client. */
 const CLIENT_ARG = new Set(['body', 'data', 'payload', 'params', 'query', 'config', 'cfg', 'conf', 'options', 'opts', 'init', 'headers', 'form', 'formdata', 'values', 'input', 'signal']);
-/** Text before a call whose value is used (`await`, `return`, an assignment, an argument or an arrow body). */
-const CONSUMED = /(?:\bawait|\breturn|=>|[=(,])\s*$/;
+/** Words after which an expression's value is used. */
+const USING_WORDS = new Set(['await', 'return', 'void', 'yield', 'typeof', 'new', 'throw', 'in', 'of', 'case', 'delete', 'instanceof']);
+/**
+ * Whether the call starting at `index` is part of a larger expression rather than a statement of its own:
+ * route registrations are statements, while a client call's value is awaited, returned, assigned, passed
+ * on, put in an array or used in a condition. A statement starts the file or follows `;`, `{`, `}`, `)`
+ * (`if (x) app.get(...)`) or a word that does not use a value (a line ending without `;`).
+ */
+function valueUsed(scan: string, index: number): boolean {
+  let i = index - 1;
+  while (i >= 0 && /\s/.test(scan[i])) i--;
+  if (i < 0) return false;
+  const c = scan[i];
+  if (c === ';' || c === '{' || c === '}' || c === ')') return false;
+  if (/[\w$]/.test(c)) {
+    let j = i;
+    while (j > 0 && /[\w$]/.test(scan[j - 1])) j--;
+    return USING_WORDS.has(scan.slice(j, i + 1));
+  }
+  return true;
+}
 /**
  * Route registrations, as opposed to HTTP client calls: an inline function, or only handler references
  * (the last not named like a payload or config) in a call whose value is not used.
@@ -255,7 +275,9 @@ function routeLike(rest: string[], used: boolean): boolean {
   if (rest.some(a => FN_ARG.test(a.trim()))) return true;
   if (used || !rest.length || !rest.every(a => REF_ARG.test(a.trim()))) return false;
   const last = rest[rest.length - 1].trim();
-  return !CLIENT_ARG.has(last.slice(last.lastIndexOf('.') + 1).trim().toLowerCase());
+  // A factory call names its handler before the parentheses: `validate(schema)` is `validate`.
+  const name = last.replace(/\([^]*$/, '');
+  return !CLIENT_ARG.has(name.slice(name.lastIndexOf('.') + 1).trim().toLowerCase());
 }
 
 /** Fastify `route({ method, url, handler })`; a method array gives one route per method. */
