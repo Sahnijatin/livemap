@@ -119,12 +119,15 @@ export class ProjectModel {
    * With `deferRelink`, a created/deleted file does not re-resolve every file's imports now; the
    * next non-deferred update, removeDir or flushRelink does it once for the whole burst.
    */
-  update(rel: string, _event: 'add' | 'change' | 'unlink', opts: { deferRelink?: boolean } = {}): Promise<UpdateResult | null> {
+  update(rel: string, event: 'add' | 'change' | 'unlink', opts: { deferRelink?: boolean } = {}): Promise<UpdateResult | null> {
     return this.serial(async () => {
       if (this.ignored(rel)) return null;
-      const r = await this.read(rel);
+      let r = await this.read(rel);
+      // On a case-insensitive filesystem a case-only rename (Foo.ts -> foo.ts) unlinks the old
+      // name while reading it still succeeds; it is gone unless its directory lists it exactly.
+      if (r && event === 'unlink' && this.files.has(rel) && !(await this.listedExactly(rel))) r = null;
       // readForModel returns null for any failure; a known file is deleted only if it is really gone.
-      if (!r && this.files.has(rel) && !(await this.isGone(rel))) return null;
+      else if (!r && this.files.has(rel) && !(await this.isGone(rel))) return null;
       if (r && !this.files.has(rel) && this.files.size >= this.limit) { this.truncated = true; return null; }
       const res = this.apply(rel, r);
       if (!res) return null;
@@ -293,6 +296,18 @@ export class ProjectModel {
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
       return code === 'ENOENT' || code === 'ENOTDIR';
+    }
+  }
+
+  /** True unless the parent directory can be listed and has no entry spelled exactly like `rel`'s name. */
+  private async listedExactly(rel: string): Promise<boolean> {
+    const base = path.posix.basename(rel);
+    try {
+      const names = await fs.readdir(path.join(this.root, ...parentDir(rel).split('/')));
+      // Compared normalized too: macOS may report a name in another Unicode form than it lists.
+      return names.some(n => n === base || n.normalize() === base.normalize());
+    } catch {
+      return true;
     }
   }
 
