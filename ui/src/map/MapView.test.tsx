@@ -140,7 +140,7 @@ describe('MapView', () => {
     expect(Number.isFinite(Number(app.dataset.x))).toBe(true);
     expect(Number.isFinite(Number(app.dataset.y))).toBe(true);
     // Folder regions are labeled.
-    const labels = [...host.querySelectorAll('.mgroup .gl')].map(e => e.textContent);
+    const labels = [...host.querySelectorAll('.mglabel .gl')].map(e => e.textContent);
     expect(labels.some(l => l?.startsWith('src/web/'))).toBe(true);
     expect(host.querySelector('.cv-hint')!.textContent).toBe('Drag to pan · ⌘ + scroll to zoom · click a card to inspect');
   });

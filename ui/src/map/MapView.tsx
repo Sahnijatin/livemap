@@ -21,7 +21,7 @@ import {
 } from './mapFlow';
 import { MapContext, type MapActions } from './MapContext';
 import { FileNode } from './FileNode';
-import { FolderNode } from './FolderNode';
+import { FolderLabelNode, FolderNode } from './FolderNode';
 import { LinkEdge } from './LinkEdge';
 import { MapTools } from './MapTools';
 import { usePins } from './usePins';
@@ -29,7 +29,7 @@ import { useNodeMotion } from './useNodeMotion';
 import { useFollowCamera } from './useFollowCamera';
 import { FOLLOW_MAX_ZOOM, MoveGesture } from './camera';
 
-const nodeTypes = { file: FileNode, folder: FolderNode };
+const nodeTypes = { file: FileNode, folder: FolderNode, folderLabel: FolderLabelNode };
 const edgeTypes = { link: LinkEdge };
 const ZOOM_KEYS = ['Meta', 'Control'];
 const NO_CHANGES: ChangeSummary[] = [];

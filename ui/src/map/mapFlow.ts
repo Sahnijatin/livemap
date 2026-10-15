@@ -20,7 +20,9 @@ export type FileNodeData = { file: MapFile; level: Level };
 export type FolderNodeData = { folder: MapFolder; level: Level; large: boolean; expanded: boolean };
 export type FileFlowNode = Node<FileNodeData, 'file'>;
 export type FolderFlowNode = Node<FolderNodeData, 'folder'>;
-export type MapFlowNode = FileFlowNode | FolderFlowNode;
+/** A folder region's header, drawn above the links at the files and functions levels. */
+export type FolderLabelFlowNode = Node<FolderNodeData, 'folderLabel'>;
+export type MapFlowNode = FileFlowNode | FolderFlowNode | FolderLabelFlowNode;
 export type LinkData = { fresh: boolean; weight: number };
 export type LinkFlowEdge = Edge<LinkData, 'link'>;
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { applyNodeChanges, type NodeChange } from '@xyflow/react';
 import { animate } from 'framer-motion';
 import type { Level, MapGraph } from './mapModel';
-import { FILE_W } from './mapLayout';
+import { FILE_W, FOLDER_HEAD } from './mapLayout';
 import { DataCache, MOVE_S, lerpBox, prefersReducedMotion, sameBox, type Box, type MapFlowNode } from './mapFlow';
 
 export interface Move { id: string; from: Box; to: Box }
@@ -64,7 +64,13 @@ export function planSpawns(g: MapGraph, boxes: Map<string, Box>, shown: Map<stri
 /** A spawn is read when its card mounts; one not read this soon (an off-screen card) is dropped. */
 const SPAWN_TTL_MS = 1500;
 
-/** React Flow nodes at their shown boxes; unchanged nodes keep their objects. */
+/** The node id of a folder's label. */
+const labelId = (folder: string): string => `label:${folder}`;
+
+/**
+ * React Flow nodes at their shown boxes; unchanged nodes keep their objects. At the files and functions
+ * levels each folder region sits behind the links and its label is a separate node in front of them.
+ */
 export function buildNodes(g: MapGraph, shown: Map<string, Box>, cache: DataCache, expanded: Set<string>, prev: MapFlowNode[]): MapFlowNode[] {
   const old = new Map(prev.map(n => [n.id, n]));
   const out: MapFlowNode[] = [];
@@ -94,14 +100,28 @@ export function buildNodes(g: MapGraph, shown: Map<string, Box>, cache: DataCach
       data: cache.file(f, g.level), draggable: true, selectable: false, zIndex: 0,
     }));
   }
+  if (!folders) {
+    for (const f of g.folders) {
+      const b = shown.get(f.id);
+      if (!b) continue;
+      out.push(keep({
+        id: labelId(f.id), type: 'folderLabel', position: { x: b.x, y: b.y }, width: b.w, height: FOLDER_HEAD,
+        data: cache.folder(f, g.level, g.large, expanded.has(f.id)), draggable: false, selectable: false, zIndex: 1,
+      }));
+    }
+  }
   cache.prune(new Set(out.map(n => n.id)));
   return out;
 }
 
-/** Moved nodes get new objects at their new boxes; every other node object is returned as is. */
+/** Moved nodes (and the labels of moved folders) get new objects at their new boxes; every other node object is returned as is. */
 export function patchNodes(ns: MapFlowNode[], moved: Map<string, Box>): MapFlowNode[] {
   if (!moved.size) return ns;
   return ns.map(n => {
+    if (n.type === 'folderLabel') {
+      const b = moved.get(n.data.folder.id);
+      return b ? { ...n, position: { x: b.x, y: b.y }, width: b.w } : n;
+    }
     const b = moved.get(n.id);
     return b ? ({ ...n, position: { x: b.x, y: b.y }, width: b.w, height: b.h } as MapFlowNode) : n;
   });

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { MapGraph } from './mapModel';
 import { DataCache, type Box } from './mapFlow';
+import { FOLDER_HEAD } from './mapLayout';
 import { buildNodes, patchNodes, planMoves, planSpawns } from './useNodeMotion';
 
 const box = (x: number, y: number, w = 220, h = 64): Box => ({ x, y, w, h });
@@ -50,6 +51,24 @@ describe('nodes', () => {
     expect(out[2]).not.toBe(ns[2]);
     expect(out[2].position).toEqual({ x: 20, y: 200 });
     expect(patchNodes(ns, new Map())).toBe(ns);
+  });
+
+  it('folder labels are their own non-interactive nodes above the links; the region stays behind', () => {
+    const ns = buildNodes(graph, shown, new DataCache(), new Set(), []);
+    const region = ns.find(n => n.id === 'dir:a')!;
+    expect(region.type).toBe('folder');
+    expect(region.zIndex).toBe(-1);
+    const labels = ns.filter(n => n.type === 'folderLabel');
+    expect(labels).toHaveLength(1);
+    expect(labels[0]).toMatchObject({
+      position: { x: 0, y: 0 }, width: 260, height: FOLDER_HEAD, selectable: false, draggable: false, zIndex: 1,
+      data: { folder: graph.folders[0] },
+    });
+    // A moved folder takes its label along.
+    const moved = patchNodes(ns, new Map([['dir:a', box(40, 80, 260, 228)]]));
+    expect(moved.find(n => n.type === 'folderLabel')!.position).toEqual({ x: 40, y: 80 });
+    // The folders level shows folder cards with their own labels.
+    expect(buildNodes({ ...graph, level: 'folders' }, shown, new DataCache(), new Set(), []).some(n => n.type === 'folderLabel')).toBe(false);
   });
 
   it('buildNodes keeps unchanged node objects across rebuilds', () => {
