@@ -5,3 +5,4 @@ ui/node_modules
 .livemap
 test-results
 playwright-report
+docs/demo/*.html
