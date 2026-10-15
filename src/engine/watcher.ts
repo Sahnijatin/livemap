@@ -28,6 +28,9 @@ export interface WatcherOptions {
  * While more jobs are queued, file-set changes defer the model's import re-resolution (O(files)),
  * so a burst (a checkout adding hundreds of files) re-resolves once when the queue drains.
  */
+/** How long start() waits after chokidar's 'ready' before it resolves (see start). */
+const LIVE_SETTLE_MS = process.platform === 'darwin' ? 250 : 0;
+
 export class Watcher extends EventEmitter {
   private readonly model: ProjectModel;
   private readonly debounceMs: number;
@@ -88,7 +91,12 @@ export class Watcher extends EventEmitter {
     for (const ev of ['add', 'change', 'unlink'] as const) fsw.on(ev, (p: string) => this.onFile(p, ev));
     fsw.on('unlinkDir', (p: string) => this.onDir(p));
     fsw.on('error', (e: unknown) => this.fail(e));
-    return new Promise(resolve => fsw.once('ready', () => { this.ready = true; resolve(); }));
+    // On macOS, fs.watch runs on FSEvents, whose streams start asynchronously after the call returns:
+    // a write right after 'ready' can be lost. Resolving a little later means "started" is live.
+    return new Promise(resolve => fsw.once('ready', () => {
+      this.ready = true;
+      if (LIVE_SETTLE_MS) setTimeout(resolve, LIVE_SETTLE_MS); else resolve();
+    }));
   }
 
   async stop(): Promise<void> {

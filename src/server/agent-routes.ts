@@ -48,9 +48,24 @@ export function readJsonBody(req: http.IncomingMessage, cap: number): Promise<Re
 }
 
 /** After an early reply, discard the rest of the body and close the connection. */
+/** An oversized body is read and dropped up to this many bytes, for at most DRAIN_MS, before the socket is cut. */
+const MAX_DRAIN = 64 * 1024 * 1024;
+const DRAIN_MS = 5000;
+
+/**
+ * Answers an oversized body, then reads and drops the rest of it (nothing is kept) so the client sees
+ * the status. Closing the socket while the client still sends makes the peer reset the connection,
+ * and on macOS the reset discards the unread response. A body past MAX_DRAIN or DRAIN_MS is cut off.
+ */
 function rejectBody(req: http.IncomingMessage, res: http.ServerResponse, json: Json, status: number, error: string): void {
-  json(status, { error }, { connection: 'close' });
-  res.once('finish', () => req.socket.destroySoon?.());
+  json(status, { error });
+  let drained = 0;
+  const cut = () => { clearTimeout(timer); req.socket.destroy(); };
+  const timer = setTimeout(cut, DRAIN_MS);
+  timer.unref();
+  req.on('data', (c: Buffer) => { drained += c.length; if (drained > MAX_DRAIN) cut(); });
+  req.once('end', () => clearTimeout(timer));
+  req.once('close', () => clearTimeout(timer));
   req.resume();
 }
 
