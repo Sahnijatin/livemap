@@ -36,6 +36,14 @@ describe('scriptBlocks', () => {
 });
 
 describe('fileSymbols', () => {
+  it('shares the per-file symbol cap across every script block', async () => {
+    const fns = (p: string) => Array.from({ length: 1000 }, (_, i) => `export function ${p}${i}() {}`).join('\n');
+    const src = `<script lang="ts">\n${fns('a')}\n</script>\n<script setup lang="ts">\n${fns('b')}\n</script>\n`;
+    const r = await fileSymbols('vue', src, 'Big.vue');
+    expect(r.symbols[0].children.length).toBeLessThanOrEqual(1500);
+    expect(r.symbols[0].children.some(c => c.name === 'b0')).toBe(true);
+  });
+
   it('vue file yields a component with shifted children', async () => {
     const src = '<template>\n<div>\n</div>\n<p/>\n</template>\n<script setup lang="ts">function go() {}</script>\n';
     const r = await fileSymbols('vue', src, 'src/Widget.vue');
