@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useStore, type StoreState } from './store';
 import { NARROW_QUERY, isNarrow, isPhone } from './media';
 import { typingElsewhere } from './keys';
-import type { Panel as Side, PanelLayout } from './panelLayout';
+import { fitLayout, reach, type Panel as Side, type PanelLayout } from './panelLayout';
 
 type Panel = NonNullable<StoreState['panel']>;
 
@@ -12,9 +12,26 @@ export const PANELS: Record<Side, { name: string; key: string; id: string }> = {
   inspector: { name: 'inspector', key: ']', id: 'inspector' },
 };
 
-/** The docked layout as drawn: while `peek` (a file was selected) a collapsed inspector shows; the stored layout is untouched. */
-export const shownLayout = (l: PanelLayout, peek: boolean): PanelLayout =>
-  peek && l.collapsed.inspector ? { ...l, collapsed: { ...l.collapsed, inspector: false } } : l;
+type Shown = Pick<StoreState, 'layout' | 'peek' | 'selected' | 'files'>;
+/** A selection shows a collapsed inspector (`peek`) only while the selected file exists; clearing the selection ends it. */
+const peeking = (s: Shown): boolean => s.peek && s.selected !== null && !!s.files[s.selected];
+
+/** The docked layout as drawn: the user's, with a collapsed inspector shown while peeking. Nothing here is stored. */
+export const shownLayout = (s: Shown): PanelLayout =>
+  peeking(s) && s.layout.collapsed.inspector ? { ...s.layout, collapsed: { ...s.layout.collapsed, inspector: false } } : s.layout;
+
+export interface Drawn { l: PanelLayout; fit: Record<Side, number>; reach: Record<Side, number> }
+let memo: { layout: PanelLayout; peek: boolean; dock: StoreState['dock']; v: Drawn } | undefined;
+/** The shown layout and each panel's drawn width and reach, computed once per change of layout, peek or box. */
+export function drawn(s: StoreState): Drawn {
+  const peek = peeking(s);
+  if (memo && memo.layout === s.layout && memo.peek === peek && memo.dock === s.dock) return memo.v;
+  const l = shownLayout(s);
+  const { width, vw } = s.dock;
+  const v = { l, fit: fitLayout(l, width, vw), reach: { files: reach(l, 'files', width), inspector: reach(l, 'inspector', width) } };
+  memo = { layout: s.layout, peek, dock: s.dock, v };
+  return v;
+}
 
 /** Spread on a closed slide-over below 1080 px: off screen, so out of the tab order and the accessibility tree (React 18 has no `inert` prop). */
 export const INERT = { inert: '' } as Record<string, unknown>;
@@ -37,7 +54,7 @@ export function closePanel(): void {
   const owned = inside || !active || active === document.body || active === btn;
   useStore.getState().setPanel(null);
   const s = useStore.getState();
-  if (owned && !(inside && !isNarrow() && !shownLayout(s.layout, s.peek).collapsed[panel])) btn?.focus();
+  if (owned && !(inside && !isNarrow() && !shownLayout(s).collapsed[panel])) btn?.focus();
 }
 
 /** Where the slide-overs go after a file is picked in the sidebar: closed below 1080 px, the inspector on a phone. Undefined: leave as is. */
@@ -72,7 +89,7 @@ export function setCollapsed(p: Panel, on: boolean): void {
  */
 export function togglePanel(p: Panel): void {
   const s = useStore.getState();
-  if (!isNarrow()) setCollapsed(p, !shownLayout(s.layout, s.peek).collapsed[p]);
+  if (!isNarrow()) setCollapsed(p, !shownLayout(s).collapsed[p]);
   else if (s.panel === p) closePanel();
   else s.setPanel(p);
 }

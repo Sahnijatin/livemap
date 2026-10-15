@@ -11,6 +11,7 @@ import { Avatar } from './Avatar';
 import { KindBadge, LayerTile, layerVars } from './icons';
 import { MethodPill } from './MethodPill';
 import { authHeaders } from '../connection';
+import { CollapseButton } from './Dock';
 
 /* The inspector's file view. It only shows once a file is selected, so it loads after first paint (see Inspector). */
 
@@ -219,7 +220,10 @@ export function FileDetail({ file }: { file: FileModel }) {
 
   return (
     <>
-      <button type="button" className="backbtn" onClick={() => select(null)}>‹ Live session</button>
+      <div className="ins-top">
+        <button type="button" className="backbtn" onClick={() => select(null)}>‹ Live session</button>
+        <CollapseButton panel="inspector" />
+      </div>
       <div className="sh-head">
         <LayerTile layer={layer} className="ic" />
         <div style={{ minWidth: 0 }}>

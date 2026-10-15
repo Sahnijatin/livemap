@@ -190,8 +190,9 @@
 
   /* inspector */
   .insp { position:relative; border-radius:20px; display:flex; flex-direction:column; min-height:0; box-shadow:var(--shadow); overflow:hidden; }
-  .hide-inspector { position:absolute; top:12px; right:10px; z-index:2; }
-  .insp .live-h { margin-right:28px; }
+  /* The inspector's header rows (Live session, a file's back link) hold its hide button, in flow, so nothing scrolls under it. */
+  .ins-top { display:flex; align-items:center; justify-content:space-between; margin:-4px -6px -4px 0; }
+  .live-h .hidebtn { margin:-4px -6px -4px 0; }
   .ins-scroll { flex:1; overflow:auto; padding:16px; display:flex; flex-direction:column; gap:16px; }
   /* Content cross-fade (180 ms): the new page fades in while the old one, on top, fades out a little faster, then unmounts. */
   .ins-scroll.in { animation:paneIn .18s var(--ease) backwards; }
@@ -244,8 +245,8 @@
   .code .n { display:inline-block; min-width:28px; padding-right:10px; text-align:right; color:var(--ink3); user-select:none; }
   .notshown { display:flex; gap:12px; align-items:center; background:var(--card); border:1px solid var(--hair); border-radius:14px; padding:14px; font-size:13px; color:var(--ink2); }
   .notshown b { display:block; color:var(--ink); font-weight:600; font-size:13.5px; }
-  .live-h { display:flex; align-items:center; justify-content:space-between; }
-  .live-h h3 { margin:0; font:650 17px var(--display); }
+  .live-h { display:flex; align-items:center; gap:8px; }
+  .live-h h3 { margin:0 auto 0 0; font:650 17px var(--display); }
   .livetag { display:flex; align-items:center; gap:6px; font-size:12px; font-weight:600; color:var(--green); }
   .livetag i { width:7px; height:7px; border-radius:50%; background:var(--green); animation:ping 1.8s var(--ease) infinite; }
   .mstats { display:grid; grid-template-columns:1fr 1fr; gap:8px; }

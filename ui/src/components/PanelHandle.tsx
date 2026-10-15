@@ -1,27 +1,32 @@
 import { useEffect, useRef, type KeyboardEvent, type PointerEvent } from 'react';
 import { useStore } from '../store';
-import { PANELS, setCollapsed, shownLayout } from '../panels';
-import { LIMITS, fitLayout, saveLayout, type Panel, type PanelLayout } from '../panelLayout';
-
-let drag: typeof import('../panelDrag') | undefined;
-/** The drag and key code (panelDrag.ts), loaded on a handle's first focus or pointerdown. */
-export const loadDrag = () => import('../panelDrag').then(m => { drag = m; });
-const KEYS = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+import { PANELS, drawn, setCollapsed } from '../panels';
+import { LIMITS, saveLayout, type Panel, type PanelLayout } from '../panelLayout';
 
 /**
  * The drag handle on a docked panel's inner edge (1080 px and wider): drag or arrow keys resize (Shift: 64 px), Home
- * and End go to the limits, Enter collapses, a double-click restores the default. A drag saves once, when it ends;
- * a lost pointer capture or a window blur ends it too.
+ * and End go to the minimum and to the widest the box allows, Enter collapses, a double-click restores the default.
+ * What the user sees is what is stored: the panel's drawn width, and it becomes the panel the other gives way to.
+ * A drag saves once, when it ends; a lost pointer capture or a window blur ends it too.
  */
 export function PanelHandle({ panel }: { panel: Panel }) {
-  const l = shownLayout(useStore(s => s.layout), useStore(s => s.peek));
-  const { width, vw } = useStore(s => s.dock);
-  const now = fitLayout(l, width, vw)[panel];
-  const max = fitLayout({ ...l, w: { ...l.w, [panel]: LIMITS[panel][1] } }, width, vw)[panel];
-  const h = useRef({ panel, l, width, vw, now, max });
-  h.current = { panel, l, width, vw, now, max };
+  const { fit, reach } = useStore(drawn);
+  const now = fit[panel];
+  const [min] = LIMITS[panel];
+  const max = reach[panel];
+  // The inspector's handle is on its left edge: moving it left widens the panel.
+  const dir = panel === 'files' ? 1 : -1;
   const g = useRef<{ x: number; d: number; from: PanelLayout } | null>(null);
 
+  const set = (w: number | null, save = true) => {
+    const s = useStore.getState();
+    s.setLayout({ ...s.layout, w: { ...s.layout.w, [panel]: w }, last: panel }, save);
+  };
+  /** Draws the panel at `d`, within reach; nothing happens (or is saved) when that is the width drawn now. */
+  const draw = (d: number, save = true) => {
+    const t = Math.max(min, Math.min(max, Math.round(d)));
+    if (t !== now) set(t, save);
+  };
   const end = () => {
     const d = g.current;
     if (!d) return;
@@ -36,12 +41,14 @@ export function PanelHandle({ panel }: { panel: Panel }) {
   }, []);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'Enter') setCollapsed(panel, true);
-    else if (!KEYS.includes(e.key)) return;
+    const step = (e.shiftKey ? 64 : 16) * dir;
+    if (e.key === 'ArrowRight') draw(now + step);
+    else if (e.key === 'ArrowLeft') draw(now - step);
+    else if (e.key === 'Home') draw(min);
+    else if (e.key === 'End') draw(max);
+    else if (e.key === 'Enter') setCollapsed(panel, true);
+    else return;
     e.preventDefault();
-    const { key, shiftKey } = e;
-    const run = () => drag!.key(key, shiftKey, h.current);
-    if (key !== 'Enter') void (drag ? run() : loadDrag().then(run));
   };
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -49,15 +56,10 @@ export function PanelHandle({ panel }: { panel: Panel }) {
     e.currentTarget.setPointerCapture?.(e.pointerId);
     g.current = { x: e.clientX, d: now, from: useStore.getState().layout };
     useStore.getState().setDock({ dragging: true });
-    if (!drag) void loadDrag();
   };
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
     const d = g.current;
-    if (d && drag) drag.draw(h.current, d.d + (panel === 'files' ? 1 : -1) * (e.clientX - d.x), false);
-  };
-  const reset = () => {
-    const s = useStore.getState();
-    s.setLayout({ ...s.layout, w: { ...s.layout.w, [panel]: null } });
+    if (d) draw(d.d + dir * (e.clientX - d.x), false);
   };
 
   return (
@@ -68,18 +70,17 @@ export function PanelHandle({ panel }: { panel: Panel }) {
       aria-label={`Resize ${PANELS[panel].name}`}
       aria-controls={PANELS[panel].id}
       aria-valuenow={now}
-      aria-valuemin={LIMITS[panel][0]}
+      aria-valuemin={min}
       aria-valuemax={max}
       tabIndex={0}
       data-handle={panel}
-      onFocus={() => void loadDrag()}
       onKeyDown={onKeyDown}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={end}
       onPointerCancel={end}
       onLostPointerCapture={end}
-      onDoubleClick={reset}
+      onDoubleClick={() => set(null)}
     />
   );
 }

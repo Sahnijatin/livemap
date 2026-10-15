@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { useStore, type StoreState } from '../store';
-import { PANELS, setCollapsed, shownLayout } from '../panels';
-import { fitLayout, type Panel } from '../panelLayout';
+import { PANELS, drawn, setCollapsed, shownLayout } from '../panels';
+import type { Panel } from '../panelLayout';
 import { PanelIcon, SidebarIcon } from './icons';
 
-const collapsedOf = (p: Panel) => (s: StoreState) => shownLayout(s.layout, s.peek).collapsed[p];
+const collapsedOf = (p: Panel) => (s: StoreState) => shownLayout(s).collapsed[p];
 const filesCollapsed = collapsedOf('files');
 const inspectorCollapsed = collapsedOf('inspector');
 
@@ -36,15 +36,16 @@ export function Dock({ gated, children }: { gated: boolean; children: ReactNode 
     return () => window.clearTimeout(t);
   }, [glide, shape]);
 
-  // Before first paint: measure the real box (safe-area insets and gutters included; jsdom has no layout, so it falls
-  // back to the 12 px gutters) and write the drawn widths as --left-w and --right-w, then keep both current.
+  // Before first paint: measure the real box (safe-area insets and gutters included; the ResizeObserver also sees
+  // every window resize, since .app is inset from the window) and write the drawn widths as --left-w and --right-w,
+  // then keep both current. jsdom has no layout: the box falls back to the window less its 12 px gutters.
   useLayoutEffect(() => {
     const el = ref.current!;
-    let last: unknown[] = [];
-    const paint = ({ layout, peek, dock }: StoreState) => {
-      if (layout === last[0] && peek === last[1] && dock === last[2]) return;
-      last = [layout, peek, dock];
-      const fit = fitLayout(shownLayout(layout, peek), dock.width, dock.vw);
+    let last: unknown;
+    const paint = (s: StoreState) => {
+      const { fit } = drawn(s);
+      if (fit === last) return;
+      last = fit;
       el.style.setProperty('--left-w', `${fit.files}px`);
       el.style.setProperty('--right-w', `${fit.inspector}px`);
     };
@@ -54,11 +55,9 @@ export function Dock({ gated, children }: { gated: boolean; children: ReactNode 
     const off = useStore.subscribe(paint);
     const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
     ro?.observe(el);
-    window.addEventListener('resize', measure);
     return () => {
       off();
       ro?.disconnect();
-      window.removeEventListener('resize', measure);
     };
   }, []);
 

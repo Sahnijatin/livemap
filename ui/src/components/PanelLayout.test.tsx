@@ -4,7 +4,7 @@ import { Profiler, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../store';
 import { file, emptyDomain } from '../fixtures';
-import { LAYOUT_KEY, LIMITS, fitLayout } from '../panelLayout';
+import { LAYOUT_KEY, fitLayout } from '../panelLayout';
 
 vi.mock('../api', () => ({ addFlag: vi.fn(), removeFlag: vi.fn(), setPaused: vi.fn(), fetchFile: vi.fn(() => new Promise(() => {})) }));
 const { Toolbar } = await import('./Toolbar');
@@ -13,10 +13,8 @@ const { Inspector, loadDetail } = await import('./Inspector');
 // The file view loads after first paint in the app; load it up front so a selection renders at once.
 await loadDetail();
 const { Dock } = await import('./Dock');
-const { PanelHandle, loadDrag } = await import('./PanelHandle');
+const { PanelHandle } = await import('./PanelHandle');
 const { useSlideOvers } = await import('../panels');
-// The handles' drag and key code loads on first focus or pointerdown; load it up front so key events apply at once.
-await loadDrag();
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -30,9 +28,13 @@ const evaluate = (q: string): boolean => {
   const min = q.match(/min-width:\s*([\d.]+)px/);
   return (!max || width <= Number(max[1])) && (!min || width >= Number(min[1]));
 };
+/** ResizeObserver stand-in: Dock measures `.app` only through it, and a window resize resizes `.app`. */
+let observers: ((entries: unknown[]) => void)[] = [];
+class FakeResizeObserver { constructor(fn: (entries: unknown[]) => void) { observers.push(fn); } observe() {} unobserve() {} disconnect() {} }
 function resize(w: number) {
   width = w;
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: w });
+  for (const fn of observers) fn([]);
   for (const l of lists) {
     const m = evaluate(l.media);
     if (m === l.last) continue;
@@ -102,6 +104,8 @@ beforeEach(() => {
       removeEventListener: (_: string, fn: Listener) => l.listeners.delete(fn),
     };
   }) as unknown as typeof window.matchMedia;
+  observers = [];
+  vi.stubGlobal('ResizeObserver', FakeResizeObserver);
   localStorage.clear();
   useStore.getState().reset();
   hello();
@@ -249,14 +253,32 @@ describe('docked panels at 1080 px and wider', () => {
     pointer(files, 'pointermove', 300);
     pointer(files, 'pointerup', 300);
     expect(localStorage.getItem(LAYOUT_KEY)).toBe(before);
-    // Already as wide as this window allows: End and Right change nothing, so the 520 survives.
+    // End draws the widest this box allows (the inspector gives way) and stores exactly that.
     key(files, 'End');
+    expect(now('Resize project panel')).toBe(1076 - 420 - 12 - (300 + 12));
+    expect(stored().w.files).toBe(332);
+    const after = localStorage.getItem(LAYOUT_KEY);
     key(files, 'ArrowRight');
-    expect(localStorage.getItem(LAYOUT_KEY)).toBe(before);
+    key(files, 'End');
+    expect(localStorage.getItem(LAYOUT_KEY)).toBe(after);
+  });
+
+  it('what a drag shows is what is stored: 300 in a squeezed window stays 300 when the window grows', async () => {
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify({ w: { inspector: 720 } }));
+    useStore.getState().reset();
+    hello();
+    resize(1200);
+    await mount();
+    const files = sep('Resize project panel');
+    expect(now('Resize project panel')).toBe(200);
+    pointer(files, 'pointerdown', 100);
+    pointer(files, 'pointermove', 200);
+    pointer(files, 'pointerup', 200);
+    expect(now('Resize project panel')).toBe(300);
+    expect(stored().w).toEqual({ files: 300, inspector: 720 });
     act(() => resize(1920));
-    expect(now('Resize project panel')).toBe(520);
-    key(files, 'ArrowLeft');
-    expect(stored().w.files).toBe(504);
+    expect(now('Resize project panel')).toBe(300);
+    expect(now('Resize inspector')).toBe(720);
   });
 
   it('the drag is a state the .app class follows: it survives re-renders and stops the collapse glide', async () => {
@@ -339,18 +361,26 @@ describe('docked panels at 1080 px and wider', () => {
   });
 
   it('fits the measured .app box, not the viewport', async () => {
-    const observers: ((entries: unknown[]) => void)[] = [];
-    const notify = () => observers.forEach(fn => fn([]));
-    vi.stubGlobal('ResizeObserver', class { constructor(fn: (entries: unknown[]) => void) { observers.push(fn); } observe() {} unobserve() {} disconnect() {} });
     await mount();
-    expect(sep('Resize inspector').getAttribute('aria-valuemax')).toBe(String(fitLayout({ w: { files: null, inspector: LIMITS.inspector[1] }, collapsed: { files: false, inspector: false } }, 1416, 1440).inspector));
+    // 1416 - 420 center - 12 gap - (200 + 12) sidebar at its minimum = 772, over the 720 limit.
+    expect(sep('Resize inspector').getAttribute('aria-valuemax')).toBe('720');
     // Safe-area insets or a larger gutter: the box is narrower than the viewport minus 24.
     Object.defineProperty(app(), 'clientWidth', { configurable: true, value: 1200 });
-    act(() => notify());
-    const max = Number(sep('Resize inspector').getAttribute('aria-valuemax'));
-    expect(max).toBe(fitLayout({ w: { files: null, inspector: LIMITS.inspector[1] }, collapsed: { files: false, inspector: false } }, 1200, 1440).inspector);
+    act(() => observers.forEach(fn => fn([])));
+    expect(sep('Resize inspector').getAttribute('aria-valuemax')).toBe(String(1200 - 420 - 12 - 212));
     key(sep('Resize inspector'), 'End');
-    expect(1200 - (now('Resize project panel') + 12) - (now('Resize inspector') + 12)).toBeGreaterThanOrEqual(420);
+    expect(now('Resize inspector')).toBe(556);
+    expect(1200 - (now('Resize project panel') + 12) - (now('Resize inspector') + 12)).toBe(420);
+  });
+
+  it('reset keeps the measured box and an ongoing drag', async () => {
+    await mount();
+    Object.defineProperty(app(), 'clientWidth', { configurable: true, value: 1300 });
+    act(() => observers.forEach(fn => fn([])));
+    pointer(sep('Resize project panel'), 'pointerdown', 300);
+    act(() => useStore.getState().reset());
+    expect(useStore.getState().dock).toEqual({ width: 1300, vw: 1440, dragging: true });
+    pointer(sep('Resize project panel'), 'pointerup', 300);
   });
 
   it('[ and ] toggle the panels, but not while typing in the filter or with the palette open', async () => {
@@ -401,6 +431,52 @@ describe('docked panels at 1080 px and wider', () => {
     act(() => btn('Inspector').click());
     expect(app().classList.contains('right-collapsed')).toBe(true);
     act(() => useStore.getState().select(null));
+    expect(app().classList.contains('right-collapsed')).toBe(true);
+  });
+
+  it('a peek ends whenever the selection goes away: Live session, a deleted file, a new state without it', async () => {
+    await mount();
+    act(() => btn('Hide inspector').click());
+    const peek = () => act(() => useStore.getState().select('src/a.ts'));
+    const hidden = () => app().classList.contains('right-collapsed');
+
+    peek();
+    expect(hidden()).toBe(false);
+    act(() => host.querySelector<HTMLButtonElement>('.backbtn')!.click());
+    expect(hidden()).toBe(true);
+
+    peek();
+    act(() => useStore.getState().apply({ type: 'files', files: [], removed: ['src/a.ts'] }));
+    expect(useStore.getState().selected).toBeNull();
+    expect(hidden()).toBe(true);
+
+    hello();
+    peek();
+    act(() => useStore.getState().apply({ type: 'hello', root: '/p/shop', name: 'shop', files: [file('src/b.ts')], changes: [], usedBy: [], domain: emptyDomain(), indexing: false, events: [], sessions: [], control: { paused: false, flags: [] } }));
+    expect(hidden()).toBe(true);
+
+    // Rewound to before the file existed: the selection stays (for going back to live), the peek does not show.
+    hello();
+    peek();
+    act(() => useStore.getState().rewind({ seq: 1, at: 1, root: '/p/shop', name: 'shop', files: [file('src/b.ts')], changes: [], usedBy: [], domain: emptyDomain(), indexing: false, events: [], sessions: [], control: { paused: false, flags: [] } }));
+    expect(useStore.getState().selected).toBe('src/a.ts');
+    expect(hidden()).toBe(true);
+    expect(stored().collapsed.inspector).toBe(true);
+  });
+
+  it('a selection at narrow width never peeks, so the inspector stays hidden back at wide width', async () => {
+    await mount();
+    act(() => btn('Hide inspector').click());
+    act(() => resize(900));
+    act(() => useStore.getState().select('src/a.ts'));
+    act(() => resize(1440));
+    expect(app().classList.contains('right-collapsed')).toBe(true);
+    // And a narrow selection ends an earlier peek.
+    act(() => useStore.getState().select('src/b.ts'));
+    expect(app().classList.contains('right-collapsed')).toBe(false);
+    act(() => resize(900));
+    act(() => useStore.getState().select('src/a.ts'));
+    act(() => resize(1440));
     expect(app().classList.contains('right-collapsed')).toBe(true);
   });
 });

@@ -177,7 +177,7 @@ export function ProjectChip() {
  */
 function PanelButton({ p }: { p: Panel }) {
   const narrow = useMedia(NARROW_QUERY);
-  const open = useStore(s => (narrow ? s.panel === p : !shownLayout(s.layout, s.peek).collapsed[p]));
+  const open = useStore(s => (narrow ? s.panel === p : !shownLayout(s).collapsed[p]));
   const { name, key, id } = PANELS[p];
   const on = open && !narrow;
   return (

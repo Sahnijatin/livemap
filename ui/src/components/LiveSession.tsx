@@ -8,6 +8,7 @@ import { READ_ONLY_TIP } from '../history';
 import { COUNTER_LABELS, CountUp, useLiveState } from './Activity';
 import { FlagBox } from './FlagBox';
 import { FlagIcon, LayerTile } from './icons';
+import { CollapseButton } from './Dock';
 
 function YourFlags() {
   const flags = useStore(s => s.control.flags);
@@ -61,7 +62,7 @@ export function LiveSession() {
 
   return (
     <>
-      <div className="live-h"><h3>Live session</h3>{working && !paused && !rewound && <span className="livetag"><i />Live</span>}{paused && <span className="livetag paused"><i />Paused</span>}</div>
+      <div className="live-h"><h3>Live session</h3>{working && !paused && !rewound && <span className="livetag"><i />Live</span>}{paused && <span className="livetag paused"><i />Paused</span>}<CollapseButton panel="inspector" /></div>
       <div className={clsx('nowcard', working && !paused && 'working')}>
         <span className="lbl">{working && !paused ? <span className="spinner" aria-hidden="true" /> : <i className="ndot" aria-hidden="true" />}<span className="truncate">{step.line}</span></span>
         <p>{msg?.text ? msg.text.slice(0, 600) : session ? `${agentName(session.agent)} has not said anything yet.` : 'No agent has worked in this project since LiveMap started. Start one to watch it here.'}</p>

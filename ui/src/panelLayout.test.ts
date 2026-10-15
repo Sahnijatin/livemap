@@ -1,6 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { CENTER_MIN, GAP, LAYOUT_KEY, LIMITS, defaultWidth, fitLayout, loadLayout, parseLayout, saveLayout, type PanelLayout } from './panelLayout';
-import { widthFor } from './panelDrag';
+import { CENTER_MIN, GAP, LAYOUT_KEY, LIMITS, defaultWidth, fitLayout, loadLayout, parseLayout, reach, saveLayout, type PanelLayout } from './panelLayout';
 import { PANELS, shownLayout } from './panels';
 
 const layout = (p: Partial<PanelLayout> = {}): PanelLayout => ({ w: { files: null, inspector: null }, collapsed: { files: false, inspector: false }, ...p });
@@ -40,7 +39,7 @@ describe('fitLayout', () => {
     const l = layout({ w: { files: 400, inspector: 600 } });
     expect(fitLayout(l, 1876, 1900)).toEqual({ files: 400, inspector: 600 });
     expect(center(1400, l, fitLayout(l, 1400, 1900))).toBeGreaterThanOrEqual(CENTER_MIN);
-    expect(fitLayout(l, 1400, 1900).inspector).toBeLessThan(600);
+    expect(fitLayout(l, 1400, 1900)).toEqual({ files: 356, inspector: 600 });
   });
 
   it('shrinks both panels when the box narrows, so the center keeps CENTER_MIN', () => {
@@ -61,46 +60,46 @@ describe('fitLayout', () => {
   });
 });
 
-describe('widthFor', () => {
-  it('is the drawn width itself when nothing is squeezed', () => {
-    expect(widthFor(layout(), 'files', 333, 1416, 1440)).toBe(333);
-    expect(widthFor(layout(), 'inspector', 300, 1416, 1440)).toBe(300);
+describe('which panel gives way', () => {
+  it('the panel not resized last shrinks first, then the other; the sidebar first when neither was', () => {
+    const w = { files: 400, inspector: 600 };
+    // 1176 box: 1176 - 420 - 24 = 732 for both panels, 268 too many.
+    expect(fitLayout(layout({ w }), 1176, 1200)).toEqual({ files: 200, inspector: 532 });
+    expect(fitLayout(layout({ w, last: 'files' }), 1176, 1200)).toEqual({ files: 400, inspector: 332 });
+    expect(fitLayout(layout({ w, last: 'inspector' }), 1176, 1200)).toEqual({ files: 200, inspector: 532 });
+    // Narrower still: both at their minimums.
+    expect(fitLayout(layout({ w, last: 'files' }), 900, 1080)).toEqual({ files: 200, inspector: 300 });
   });
 
-  it('in a squeezed box: a stored width that fitLayout draws exactly at the target, so a drag follows the pointer', () => {
-    // Stored inspector 720 in a 1200 px window: the sidebar is drawn narrower than its default.
-    const l = layout({ w: { files: null, inspector: 720 } });
-    const width = 1176, vw = 1200;
-    const start = fitLayout(l, width, vw).files;
-    expect(start).toBeLessThan(248);
-    const max = fitLayout({ ...l, w: { ...l.w, files: LIMITS.files[1] } }, width, vw).files;
-    let prev = start;
-    for (let d = start; d <= max; d++) {
-      const w = widthFor(l, 'files', d, width, vw);
-      const drawn = fitLayout({ ...l, w: { ...l.w, files: w } }, width, vw).files;
-      expect(drawn).toBe(d);
-      expect(drawn).toBeGreaterThanOrEqual(prev);
-      expect(center(width, { ...l, w: { ...l.w, files: w } })).toBeGreaterThanOrEqual(CENTER_MIN);
-      prev = drawn;
-    }
-    // Past what the box allows: the limit.
-    expect(widthFor(l, 'files', max + 50, width, vw)).toBe(LIMITS.files[1]);
+  it('reach: the widest a panel draws, with the other at its minimum (or collapsed) and the center at CENTER_MIN', () => {
+    expect(reach(layout(), 'files', 1176)).toBe(1176 - 420 - 12 - 312);
+    expect(reach(layout(), 'inspector', 1176)).toBe(1176 - 420 - 12 - 212);
+    expect(reach(layout(), 'files', 2400)).toBe(520);
+    expect(reach(layout({ collapsed: { files: false, inspector: true } }), 'files', 900)).toBe(468);
+    // A width within reach, set by the panel resized last, is drawn exactly.
+    const l = layout({ w: { files: reach(layout(), 'files', 1176), inspector: 720 }, last: 'files' });
+    expect(fitLayout(l, 1176, 1200).files).toBe(432);
   });
 });
 
 describe('shownLayout', () => {
   it('shows a collapsed inspector while peeking, without touching the stored layout', () => {
     const l = layout({ collapsed: { files: true, inspector: true } });
-    expect(shownLayout(l, false)).toBe(l);
-    expect(shownLayout(l, true).collapsed).toEqual({ files: true, inspector: false });
+    const files = { 'a.ts': {} } as never;
+    expect(shownLayout({ layout: l, peek: false, selected: 'a.ts', files })).toBe(l);
+    expect(shownLayout({ layout: l, peek: true, selected: 'a.ts', files }).collapsed).toEqual({ files: true, inspector: false });
+    // Only while the selected file exists.
+    expect(shownLayout({ layout: l, peek: true, selected: null, files })).toBe(l);
+    expect(shownLayout({ layout: l, peek: true, selected: 'gone.ts', files })).toBe(l);
     expect(l.collapsed.inspector).toBe(true);
   });
 });
 
 describe('parseLayout', () => {
   it('reads a stored layout and clamps its widths', () => {
-    expect(parseLayout(JSON.stringify({ w: { files: 300, inspector: 9999 }, collapsed: { files: true, inspector: false } })))
-      .toEqual(layout({ w: { files: 300, inspector: 720 }, collapsed: { files: true, inspector: false } }));
+    expect(parseLayout(JSON.stringify({ w: { files: 300, inspector: 9999 }, collapsed: { files: true, inspector: false }, last: 'files' })))
+      .toEqual(layout({ w: { files: 300, inspector: 720 }, collapsed: { files: true, inspector: false }, last: 'files' }));
+    expect(parseLayout(JSON.stringify({ last: 'center' })).last).toBeUndefined();
   });
 
   it('ignores bad values', () => {

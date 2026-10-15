@@ -7,6 +7,7 @@ import type { AgentEvent, AgentSession, ChangeSummary, ControlState, Dep, FileMo
 import { LARGE_PROJECT, codeFileCount, edgeBaseline, type Level } from './map/mapModel';
 import { historySource, type HistoryRecord, type HistoryState, type LiveState } from './history';
 import { loadLayout, saveLayout, type Panel, type PanelLayout } from './panelLayout';
+import { isNarrow } from './media';
 
 export const MAX_CHANGES = 2000;
 export const MAX_EVENTS = 2000;
@@ -117,8 +118,13 @@ export interface StoreState {
   panel: 'files' | 'inspector' | null;
   /** Wide layouts: docked panel widths and collapsed state as the user set them, remembered across reloads. */
   layout: PanelLayout;
-  /** A selected file shows a collapsed inspector for the session (not saved); toggling the inspector ends it. */
+  /**
+   * A file selected at 1080 px or wider shows a collapsed inspector (not saved). It counts only while the selected
+   * file exists (see shownLayout); toggling the inspector or a narrow-width selection ends it.
+   */
   peek: boolean;
+  /** Bumped by every file selection, even of the selected file (the Inspector retries a failed file view load on it). */
+  selects: number;
   /** The `.app` box width and the viewport width the docked layout fits, and whether a panel edge is being dragged. */
   dock: { width: number; vw: number; dragging: boolean };
   /** Agent activity: the last 2,000 events, sessions by id, and pause and flag state. */
@@ -225,6 +231,7 @@ const initial = {
   reveal: null,
   panel: null,
   peek: false,
+  selects: 0,
   events: [],
   sessions: {},
   control: { paused: false, flags: [] } as ControlState,
@@ -466,7 +473,7 @@ export const useStore = create<StoreState>()((set, get) => ({
   },
 
   select(path) {
-    set(path ? { selected: path, history: pushHistory(get().history, path), peek: true } : { selected: null });
+    set(path ? { selected: path, history: pushHistory(get().history, path), peek: !isNarrow(), selects: get().selects + 1 } : { selected: null, peek: false });
   },
 
   toggle(path) {
@@ -484,7 +491,7 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   revealLine(path, line) {
     const seq = (get().reveal?.seq ?? 0) + 1;
-    set({ selected: path, reveal: { path, line, seq }, history: pushHistory(get().history, path), peek: true });
+    set({ selected: path, reveal: { path, line, seq }, history: pushHistory(get().history, path), peek: !isNarrow(), selects: get().selects + 1 });
   },
 
   clearReveal() {
@@ -637,6 +644,6 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   reset() {
     summaryRequests.clear();
-    set({ ...initial, ...freshDomain(), tab: 'activity', follow: loadFollow(), layout: loadLayout(), dock: windowDock(), historyStatus: NO_HISTORY, rewound: null, playing: false, summaries: emptySummaries(), helloFiles: new Set(), files: {}, changes: [], usedBy: [], recent: {}, expanded: {}, events: [], sessions: {}, control: { paused: false, flags: [] }, mapExpanded: {}, helloEdges: new Set(), history: [] });
+    set({ ...initial, ...freshDomain(), tab: 'activity', follow: loadFollow(), layout: loadLayout(), historyStatus: NO_HISTORY, rewound: null, playing: false, summaries: emptySummaries(), helloFiles: new Set(), files: {}, changes: [], usedBy: [], recent: {}, expanded: {}, events: [], sessions: {}, control: { paused: false, flags: [] }, mapExpanded: {}, helloEdges: new Set(), history: [] });
   },
 }));

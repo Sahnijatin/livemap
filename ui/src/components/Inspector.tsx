@@ -5,16 +5,18 @@ import { LiveSession } from './LiveSession';
 import { LEAVING, useGlide, useLeaving } from '../motion';
 import { NARROW_QUERY, useMedia } from '../media';
 import { INERT, shownLayout } from '../panels';
-import { CollapseButton } from './Dock';
 
 let Detail: typeof import('./FileDetail').FileDetail | undefined;
-let loading: Promise<void> | undefined;
+let loading: Promise<boolean> | undefined;
+/** Where the file view comes from (tests swap in a failing loader). */
+export const detailLoader = { load: () => import('./FileDetail') };
 /**
- * Loads the file view (FileDetail.tsx, with the code view). The Inspector starts this on mount, right after first
- * paint, so it is in place before a file can be selected; a failed load is tried again on the next selection.
+ * Loads the file view (FileDetail.tsx, with the code view); resolves to whether it is in place. The Inspector starts
+ * this on mount, right after first paint, so it is there before a file can be selected. A failed load shows a Retry
+ * button and is tried again on the next selection of any file.
  */
-export function loadDetail(): Promise<void> {
-  loading ??= import('./FileDetail').then(m => { Detail = m.FileDetail; }, () => { loading = undefined; });
+export function loadDetail(): Promise<boolean> {
+  loading ??= detailLoader.load().then(m => { Detail = m.FileDetail; return true; }, () => { loading = undefined; return false; });
   return loading;
 }
 
@@ -23,13 +25,17 @@ const OVERVIEW = '__overview';
 const SWAP_MS = 180;
 
 /** One inspector page: a file's details, or the Live session. Section height changes animate (useGlide). */
-function Pane({ id, entering, leaving }: { id: string; entering: boolean; leaving: boolean }) {
+function Pane({ id, entering, leaving, failed, retry }: { id: string; entering: boolean; leaving: boolean; failed: boolean; retry(): void }) {
   const file = useStore(s => (id === OVERVIEW ? undefined : s.files[id]));
   const box = useRef<HTMLDivElement>(null);
   useGlide(box);
   return (
     <div className={clsx('ins-scroll', leaving ? 'leave' : entering && 'in')} ref={box} {...(leaving ? LEAVING : {})}>
-      {file ? Detail && <Detail file={file} /> : <LiveSession />}
+      {!file ? <LiveSession /> : Detail ? <Detail file={file} /> : failed && (
+        <div className="note err" role="alert">
+          Could not load the file view. <button type="button" className="linkbtn" onClick={retry}>Retry</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -37,15 +43,17 @@ function Pane({ id, entering, leaving }: { id: string; entering: boolean; leavin
 export function Inspector() {
   const id = useStore(s => s.selected ?? OVERVIEW);
   const panel = useStore(s => s.panel);
-  const collapsed = useStore(s => shownLayout(s.layout, s.peek).collapsed.inspector);
+  const collapsed = useStore(s => shownLayout(s).collapsed.inspector);
   // Below 1080 px a closed slide-over is off screen, and wider a collapsed panel is hidden: keep it out of the tab order.
   const narrow = useMedia(NARROW_QUERY);
   // The old page stays mounted (keyed by id, so never rebuilt) while it fades out over the new one.
   const { prev, from } = useLeaving(id, SWAP_MS);
   const ids = prev !== null ? [prev, id] : [id];
-  // Re-renders once the file view has loaded (it normally has, long before the first selection).
-  const [, setReady] = useState(!!Detail);
-  useEffect(() => { if (!Detail) void loadDetail().then(() => setReady(!!Detail)); }, [id]);
+  // Loads the file view on mount and, after a failure, again on each selection (it normally loaded long before).
+  const selects = useStore(s => s.selects);
+  const [failed, setFailed] = useState(false);
+  const retry = () => { if (!Detail) void loadDetail().then(ok => setFailed(!ok)); };
+  useEffect(retry, [selects]);
   return (
     <aside
       id="inspector"
@@ -55,8 +63,7 @@ export function Inspector() {
       tabIndex={-1}
       {...((narrow ? panel !== 'inspector' : collapsed) ? INERT : {})}
     >
-      <CollapseButton panel="inspector" />
-      {ids.map(k => <Pane key={k} id={k} entering={from !== null && k === id} leaving={k === prev} />)}
+      {ids.map(k => <Pane key={k} id={k} entering={from !== null && k === id} leaving={k === prev} failed={failed} retry={retry} />)}
     </aside>
   );
 }
