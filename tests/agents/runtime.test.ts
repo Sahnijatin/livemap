@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { findRuntime, removeRuntime, runtimeDir, writeRuntime } from '../../src/agents/runtime.js';
+import { findRuntime, removeRuntime, runtimeDir, runtimeFor, writeRuntime } from '../../src/agents/runtime.js';
 
 let home: string;
 let root: string;
@@ -94,5 +94,21 @@ describe('runtime file', () => {
     fs.writeFileSync(file, 'not json');
     removeRuntime(root);
     expect(fs.existsSync(file)).toBe(true);
+  });
+
+  it('#21: writeRuntime refuses to replace the entry of another live LiveMap', async () => {
+    const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+    try {
+      const file = writeRuntime(root, 4321, 'tok');
+      fs.writeFileSync(file, JSON.stringify({ root, port: 9999, token: 'theirs', pid: other.pid }));
+      expect(() => writeRuntime(root, 4321, 'tok')).toThrow(`another LiveMap (pid ${other.pid})`);
+      expect(runtimeFor(root)).toEqual({ root, port: 9999, token: 'theirs', pid: other.pid });
+    } finally {
+      other.kill('SIGKILL');
+      await new Promise(r => other.on('exit', r));
+    }
+    // Its owner is gone now: the entry is stale and may be replaced.
+    writeRuntime(root, 4321, 'tok');
+    expect(runtimeFor(root)?.token).toBe('tok');
   });
 });

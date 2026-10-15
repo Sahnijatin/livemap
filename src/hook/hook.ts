@@ -8,9 +8,13 @@ import { findRuntime } from '../agents/runtime.js';
 
 const MAX_STDIN = 8 * 1024 * 1024;
 const STDIN_WAIT_MS = 1000;
-const REQUEST_BUDGET_MS = 2000;
-/** One deadline for the whole run so the worst case stays under 2.5 s including node startup. */
-const TOTAL_BUDGET_MS = 2300;
+const REQUEST_BUDGET_MS = 1500;
+/**
+ * One deadline for the whole run. With the exit grace and node startup (100-300 ms, far more on a
+ * loaded machine) the worst case stays under 2.5 s with real margin.
+ */
+const TOTAL_BUDGET_MS = 1600;
+const EXIT_GRACE_MS = 50;
 const started = Date.now();
 
 // A closed pipe must never change the exit code.
@@ -121,6 +125,6 @@ async function main(): Promise<number> {
 const exit = (code: number) => {
   process.exitCode = code;
   // Let stdout and stderr drain; force the exit only if some handle (an open stdin) would keep us alive.
-  setTimeout(() => process.exit(code), 200).unref();
+  setTimeout(() => process.exit(code), EXIT_GRACE_MS).unref();
 };
 main().then(exit, () => exit(0));

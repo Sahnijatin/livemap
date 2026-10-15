@@ -124,8 +124,21 @@ describe('hook: LiveMap not running (Review Focus 1)', () => {
     const r = await runHook(['claude-code', 'PreToolUse'], claudePayload(), root, true);
     s.closeAllConnections();
     expect(r.code).toBe(0);
-    expect(r.ms).toBeLessThan(2700); // 2.5 s budget plus slack for node startup
+    expect(r.ms).toBeLessThan(2500); // the documented bound includes node startup: no extra slack
     expect(r.stdout).toBe('');
+  });
+
+  it('#22: stays under 2.5 s in the worst case with several hooks starting at once', async () => {
+    const s = http.createServer(() => { /* never respond */ });
+    servers.push(s);
+    await new Promise<void>(r => s.listen(0, '127.0.0.1', () => r()));
+    writeRuntimeFile((s.address() as net.AddressInfo).port);
+    const runs = await Promise.all(Array.from({ length: 4 }, () => runHook(['claude-code', 'PreToolUse'], claudePayload(), root, true)));
+    s.closeAllConnections();
+    for (const r of runs) {
+      expect(r.code).toBe(0);
+      expect(r.ms).toBeLessThan(2500);
+    }
   });
 
   it('exits 0 on malformed stdin', async () => {
