@@ -1,13 +1,18 @@
 import { EventEmitter } from 'node:events';
 import type { AgentEvent, Attribution, ChangeSummary } from '../shared/types.js';
 import type { AgentHub } from './hub.js';
-import { toolFamily } from './labels.js';
+import { classifyTool, sameRecord } from '../shared/tools.js';
 
 const MAX_INTENT = 500;
 const MAX_PENDING = 200;
-const WRITE_FAMILIES = new Set(['write', 'edit', 'patch', 'notebook', 'shell']);
 
-export interface AttributorOptions { exactBeforeMs?: number; exactAfterMs?: number; likelyMs?: number }
+/** The record a changed path holds (a ServiceNow mirror file), for matching tool calls that name records. */
+export type RecordKey = { instance?: string; table: string; sysId?: string; name?: string };
+export interface AttributorOptions {
+  exactBeforeMs?: number; exactAfterMs?: number; likelyMs?: number;
+  /** Maps a changed path to the record it mirrors; undefined for ordinary files. */
+  recordOf?: (path: string) => RecordKey | undefined;
+}
 interface Pending { id: number; path: string; at: number }
 
 const cap = (s: string) => (s.length > MAX_INTENT ? s.slice(0, MAX_INTENT) : s);
@@ -16,11 +21,14 @@ const cap = (s: string) => (s.length > MAX_INTENT ? s.slice(0, MAX_INTENT) : s);
 const timeOf = (e: AgentEvent): number => (e.type === 'commit' ? e.seenAt ?? e.at : e.at);
 const subject = (text: string | undefined): string | undefined => text?.split('\n')[0].trim() || undefined;
 
-/** A tool_start or tool_end of a write-family tool. Reads, searches and fetches never qualify. */
+/**
+ * A tool_start or tool_end of a tool that writes: a write-family built-in or an MCP tool the classifier
+ * marks as a write. Reads, searches and fetches never qualify. Events stored before classification
+ * existed fall back to the tool name.
+ */
 function isWriteTool(e: AgentEvent): boolean {
   if ((e.type !== 'tool_start' && e.type !== 'tool_end') || !e.tool) return false;
-  const fam = toolFamily(e.tool.name);
-  return !!fam && WRITE_FAMILIES.has(fam);
+  return (e.tool.access ?? classifyTool(e.tool.inner ?? e.tool.name).access) === 'write';
 }
 
 /**
@@ -33,6 +41,7 @@ export class Attributor extends EventEmitter {
   private readonly before: number;
   private readonly after: number;
   private readonly likelyMs: number;
+  private readonly recordOf?: (path: string) => RecordKey | undefined;
   private pending: Pending[] = [];
   private readonly onEvent = (e: AgentEvent) => this.handle(e);
 
@@ -41,6 +50,7 @@ export class Attributor extends EventEmitter {
     this.before = opts.exactBeforeMs ?? 10_000;
     this.after = opts.exactAfterMs ?? 5000;
     this.likelyMs = opts.likelyMs ?? 15_000;
+    this.recordOf = opts.recordOf;
     hub.on('event', this.onEvent);
   }
 
@@ -80,9 +90,14 @@ export class Attributor extends EventEmitter {
 
   private matches(e: AgentEvent, path: string, at: number): boolean {
     if (!this.candidate(e)) return false;
-    const paths = e.type === 'commit' ? e.paths : e.tool?.paths;
     const t = timeOf(e);
-    return !!paths?.includes(path) && t >= at - this.before && t <= at + this.after;
+    if (t < at - this.before || t > at + this.after) return false;
+    const paths = e.type === 'commit' ? e.paths : e.tool?.paths;
+    if (paths?.includes(path)) return true;
+    const targets = e.tool?.targets;
+    if (!targets?.length || !this.recordOf) return false;
+    const key = this.recordOf(path);
+    return !!key && targets.some((x) => sameRecord(x, key));
   }
 
   private findExact(all: AgentEvent[], change: ChangeSummary): AgentEvent | undefined {

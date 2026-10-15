@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import type { RawAgentEvent } from '../shared/types.js';
-import { toolLabel, toolPaths, redactSecretInput, outputMentionsSecret } from './labels.js';
+import { toolLabel, toolMeta, toolPaths, redactSecretInput, outputMentionsSecret } from './labels.js';
 
 const MAX_OUTPUT = 4000;
 const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
@@ -64,7 +64,7 @@ export function parseClaudeLine(line: string, root: string, fallbackAt?: number)
     else if (b.type === 'tool_use' && typeof b.name === 'string') {
       out.push({
         ...base, type: 'tool_start',
-        tool: { id: typeof b.id === 'string' ? b.id : undefined, name: b.name, label: toolLabel(b.name, b.input, root), input: redactSecretInput(b.name, b.input), paths: toolPaths(b.name, b.input, root) },
+        tool: { id: typeof b.id === 'string' ? b.id : undefined, name: b.name, label: toolLabel(b.name, b.input, root), input: redactSecretInput(b.name, b.input), paths: toolPaths(b.name, b.input, root), ...toolMeta(b.name, b.input) },
       });
     }
   }

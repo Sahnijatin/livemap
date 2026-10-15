@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { toolLabel, toolPaths, patchPaths, redactSecretInput, touchesSecret, outputMentionsSecret, SECRET_COMMAND, REAL_CACHE_MS } from '../../src/agents/labels.js';
+import { toolLabel, toolMeta, toolPaths, patchPaths, redactSecretInput, touchesSecret, outputMentionsSecret, SECRET_COMMAND, REAL_CACHE_MS } from '../../src/agents/labels.js';
 
 describe('toolLabel', () => {
   it('labels known tools', () => {
@@ -177,5 +177,45 @@ describe('symlinked project folder (#32)', () => {
       vi.useRealTimers();
       fs.rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe('#49: MCP and SkyForge nexus calls', () => {
+  const EXEC = 'nexus_ses_ebf63bf49ffeGGE3hEhWQuinBE_tool_execute';
+  const SYS_ID = '871f6b2a1b2c3d4e5f60718293a4b5c6';
+
+  it('labels a tool_execute call by its inner tool, action, table and record', () => {
+    expect(toolLabel(EXEC, { tool: 'sn_record_manage', args: { table: 'sys_script', action: 'update', sys_id: SYS_ID } })).toBe('sn_record_manage update sys_script 871f6b2a…');
+    expect(toolLabel(EXEC, { tool: 'sn_get_instance_info', args: {} })).toBe('sn_get_instance_info');
+    expect(toolLabel('sn_query_table', { table: 'sp_widget', query: 'active=true' })).toBe('sn_query_table sp_widget');
+    expect(toolLabel(EXEC, { tool: 'sn_update_set_manage', args: { action: 'create', name: 'CC v2' } })).toBe('sn_update_set_manage create CC v2');
+  });
+
+  it('keeps the full name of MCP tools that name no table', () => {
+    expect(toolLabel('mcp__github__create_or_update_file', { path: 'a.ts', content: 'x' })).toBe('mcp__github__create_or_update_file');
+    expect(toolLabel(EXEC, { query: 'x' })).toBe(EXEC);
+  });
+
+  it('reads local paths from a gateway call\'s inner args, and from local filesystem servers only', () => {
+    expect(toolPaths(EXEC, { tool: 'sn_pull_artifact', args: { file_path: '/p/src/w.html' } }, '/p')).toEqual(['src/w.html']);
+    expect(toolPaths('mcp__filesystem__write_file', { path: '/p/src/a.ts' }, '/p')).toEqual(['src/a.ts']);
+    // A GitHub path is in the remote repo, and sn_push_artifact reads its local file: neither wrote a local file.
+    expect(toolPaths('mcp__github__create_or_update_file', { path: 'src/a.ts' }, '/p', '/p')).toEqual([]);
+    expect(toolPaths(EXEC, { tool: 'sn_push_artifact', args: { file_path: '/p/src/w.html' } }, '/p')).toEqual([]);
+  });
+
+  it('redacts secret paths inside a gateway call and keeps the wrapper', () => {
+    const input = { tool: 'write_file', args: { file_path: '.env', content: 'KEY=1' } };
+    expect(redactSecretInput(EXEC, input)).toEqual({ tool: 'write_file', args: { file_path: '.env' } });
+    const safe = { tool: 'sn_query_table', args: { table: 't' } };
+    expect(redactSecretInput(EXEC, safe)).toBe(safe);
+  });
+
+  it('toolMeta stores inner tool, access and targets', () => {
+    expect(toolMeta(EXEC, { tool: 'sn_push_artifact', args: { table: 'sp_widget', sys_id: SYS_ID } })).toEqual({
+      inner: 'sn_push_artifact', access: 'write', targets: [{ kind: 'record', instance: '', table: 'sp_widget', sysId: SYS_ID }],
+    });
+    expect(toolMeta('Read', { file_path: 'a' })).toEqual({});
+    expect(toolMeta('mcp__github__list_issues', {})).toEqual({ access: 'read' });
   });
 });

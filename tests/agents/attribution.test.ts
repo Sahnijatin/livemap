@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { AgentHub } from '../../src/agents/hub.js';
 import { Attributor } from '../../src/agents/attribution.js';
+import { toolMeta, toolPaths } from '../../src/agents/labels.js';
 import type { Attribution, ChangeSummary, RawAgentEvent } from '../../src/shared/types.js';
 
 const T0 = 1_000_000;
@@ -181,5 +182,85 @@ describe('Attributor', () => {
     hub.ingestRaw([commitEv(T0 - 3_600_000, T0 + 2500, ['src/a.ts'], 'Pulled change')], gitHints);
     expect(got).toHaveLength(1);
     expect(got[0][1]).toMatchObject({ agent: 'git', sessionId: 'Ann', confidence: 'exact', intent: 'Pulled change' });
+  });
+});
+
+describe('#49: MCP writes and record targets', () => {
+  const SYS_ID = '871f6b2a1b2c3d4e5f60718293a4b5c6';
+  const EXEC = 'nexus_ses_ebf63bf49ffeGGE3hEhWQuinBE_tool_execute';
+  const mcpTool = (sessionId: string, name: string, at: number, extra: Partial<NonNullable<RawAgentEvent['tool']>>): RawAgentEvent =>
+    ev(sessionId, 'tool_start', at, { tool: { id: `${sessionId}${at}`, name, label: name, paths: [], ...extra } });
+  const mirror = (path: string) => {
+    const m = /^x_app\/widget\/[^/]+__([0-9a-f]{32})\//.exec(path);
+    return m ? { instance: 'inmorphisdemo3', table: 'sp_widget', sysId: m[1] } : undefined;
+  };
+  function setupWith(opts: ConstructorParameters<typeof Attributor>[1]) {
+    const hub = new AgentHub('/proj');
+    const attr = new Attributor(hub, opts);
+    cleanup.push(() => { attr.stop(); hub.stop(); });
+    return { hub, attr, feed: (...evs: RawAgentEvent[]) => hub.ingestRaw(evs, hints) };
+  }
+
+  it('a local filesystem MCP write naming the file is exact', () => {
+    const { attr, feed } = setup();
+    const input = { path: '/proj/src/a.ts', content: 'x' };
+    feed(mcpTool('S', 'mcp__filesystem__write_file', T0 - 1000, { paths: toolPaths('mcp__filesystem__write_file', input, '/proj'), ...toolMeta('mcp__filesystem__write_file', input) }));
+    expect(attr.attribute(change(), T0)).toMatchObject({ sessionId: 'S', confidence: 'exact' });
+  });
+
+  it('a GitHub MCP create_or_update_file is a remote write: a local edit of the same path is only likely', () => {
+    const { attr, feed } = setup();
+    const input = { owner: 'o', repo: 'r', path: 'src/a.ts', content: 'x' };
+    const meta = toolMeta('mcp__github__create_or_update_file', input);
+    expect(meta.access).toBe('write');
+    feed(mcpTool('S', 'mcp__github__create_or_update_file', T0 - 1000, { paths: toolPaths('mcp__github__create_or_update_file', input, '/proj', '/proj'), ...meta }));
+    expect(attr.attribute(change(), T0)?.confidence).toBe('likely');
+  });
+
+  it('a write stored without access (older events) is still classified from its name', () => {
+    const { attr, feed } = setup();
+    feed(mcpTool('S', 'mcp__filesystem__write_file', T0 - 1000, { paths: ['src/a.ts'] }));
+    expect(attr.attribute(change(), T0)?.confidence).toBe('exact');
+  });
+
+  it('an MCP read naming the path stays likely', () => {
+    const { attr, feed } = setup();
+    feed(mcpTool('S', 'mcp__github__get_file_contents', T0 - 1000, { paths: ['src/a.ts'], access: 'read' }));
+    expect(attr.attribute(change(), T0)?.confidence).toBe('likely');
+  });
+
+  it('SkyForge tool_execute(sn_push_artifact) is exact on the mirror file of its record', () => {
+    const { attr, feed } = setupWith({ recordOf: mirror });
+    const path = `x_app/widget/cc_apply__${SYS_ID}/template.html`;
+    feed(mcpTool('S', EXEC, T0 - 3000, { inner: 'sn_push_artifact', access: 'write', targets: [{ kind: 'record', instance: 'inmorphisdemo3', table: 'sp_widget', sysId: SYS_ID }] }));
+    expect(attr.attribute(change({ path }), T0)).toMatchObject({ sessionId: 'S', confidence: 'exact' });
+  });
+
+  it('a record target for another record, table or instance does not match', () => {
+    const { attr, feed } = setupWith({ recordOf: mirror });
+    const path = `x_app/widget/cc_apply__${SYS_ID}/template.html`;
+    const other = 'ffffffffffffffffffffffffffffffff';
+    feed(
+      mcpTool('A', EXEC, T0 - 3000, { inner: 'sn_push_artifact', access: 'write', targets: [{ kind: 'record', instance: '', table: 'sp_widget', sysId: other }] }),
+      mcpTool('B', EXEC, T0 - 2000, { inner: 'sn_push_artifact', access: 'write', targets: [{ kind: 'record', instance: '', table: 'sys_script', sysId: SYS_ID }] }),
+      mcpTool('C', EXEC, T0 - 1000, { inner: 'sn_push_artifact', access: 'write', targets: [{ kind: 'record', instance: 'other', table: 'sp_widget', sysId: SYS_ID }] }),
+    );
+    expect(attr.attribute(change({ path }), T0)?.confidence).toBe('likely');
+  });
+
+  it('without a recordOf resolver, record targets never match a path', () => {
+    const { attr, feed } = setup();
+    feed(mcpTool('S', EXEC, T0 - 1000, { inner: 'sn_push_artifact', access: 'write', targets: [{ kind: 'record', instance: '', table: 'sp_widget', sysId: SYS_ID }] }));
+    expect(attr.attribute(change({ path: `x_app/widget/cc_apply__${SYS_ID}/template.html` }), T0)?.confidence).toBe('likely');
+  });
+
+  it('a record write arriving after the change upgrades it late', () => {
+    const { attr, feed } = setupWith({ recordOf: mirror });
+    const got: Attribution[] = [];
+    attr.on('late', (_id, a) => got.push(a));
+    expect(attr.attribute(change({ path: `x_app/widget/cc_apply__${SYS_ID}/client.js` }), T0)).toBeUndefined();
+    feed(mcpTool('S', EXEC, T0 + 1000, { inner: 'sn_push_artifact', access: 'write', targets: [{ kind: 'record', instance: '', table: 'sp_widget', sysId: SYS_ID }] }));
+    expect(got).toHaveLength(1);
+    expect(got[0]).toMatchObject({ sessionId: 'S', confidence: 'exact' });
   });
 });

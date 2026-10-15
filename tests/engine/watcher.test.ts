@@ -4,7 +4,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ProjectModel } from '../../src/engine/project.js';
-import { Watcher } from '../../src/engine/watcher.js';
+import { Watcher, type WatcherOptions } from '../../src/engine/watcher.js';
 import type { ChangeSummary, FileModel } from '../../src/shared/types.js';
 
 let root: string;
@@ -26,10 +26,10 @@ function put(rel: string, data: string): void {
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, data);
 }
-async function startWatcher(): Promise<Watcher> {
+async function startWatcher(opts: WatcherOptions = {}): Promise<Watcher> {
   model = new ProjectModel(root);
   await model.scan();
-  const w = new Watcher(model);
+  const w = new Watcher(model, opts);
   w.on('change', (change: ChangeSummary, touched: FileModel[]) => changes.push({ change, touched, t: Date.now() }));
   w.on('error', (e: Error) => errors.push(e));
   await w.start();
@@ -67,13 +67,15 @@ describe('Watcher', () => {
 
   it('coalesces five rapid writes into one modified change reflecting the last write', async () => {
     put('src/x.ts', 'export function x() {}\n');
-    await startWatcher();
+    // Writes 15 ms apart must coalesce; a debounce of 400 ms (not 150) keeps a loaded CI runner's
+    // pause between two writes from splitting them into two changes.
+    await startWatcher({ debounceMs: 400, maxWaitMs: 2000 });
     for (let i = 1; i <= 5; i++) {
       fs.writeFileSync(path.join(root, 'src/x.ts'), `export function x() {}\nexport function v${i}() {}\n`);
       await sleep(15);
     }
     await waitFor(() => changes.length >= 1);
-    await sleep(400);
+    await sleep(800);
     expect(changes).toHaveLength(1);
     const c = changes[0].change;
     expect(c.kind).toBe('modified');
