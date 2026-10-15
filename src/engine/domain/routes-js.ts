@@ -4,7 +4,8 @@ import { blankStrings, defaultExport, filePath, handlerOf, lineAt, maskCommentsA
 
 type MountFact = Omit<Mount, 'target'>;
 /** `assigned` marks a name set from a router factory in this file, which is also accepted as `this.<name>`. */
-interface Receiver { fw: string; prefix: string; assigned?: true }
+/** `guessed`: a conventional name in a file without a server import, a route only when it passes a handler. */
+interface Receiver { fw: string; prefix: string; assigned?: true; guessed?: true }
 
 const LANGS = new Set<Lang>(['typescript', 'tsx', 'javascript', 'svelte']);
 const FILE_VERBS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
@@ -81,16 +82,16 @@ const ASSIGN = new RegExp(`(?:\\b(?:const|let|var)\\s+|(?<![\\w$.])this\\s*\\.\\
 const THIS_RECEIVERS = new Set(['app', 'router', 'server']);
 
 /**
- * Router receivers of this file: identifiers assigned from a router factory, plus the conventional names
- * when the file imports a server framework (elsewhere `api.get('/users')` is usually an HTTP client).
+ * Router receivers of this file: identifiers assigned from a router factory, plus the conventional names.
+ * Without a server import those names are only guessed (`api.get('/users')` is usually an HTTP client),
+ * so their calls count as routes only when they pass a handler (see `handlerLike`).
  */
 function receiversOf(code: string, scan: string, imports: Map<string, string>, fileFw: string): Map<string, Receiver> {
   const recv = new Map<string, Receiver>();
   const importsServer = [...imports.values()].some(s => SERVER_MODULES.has(s) || s.startsWith('hono/'));
-  if (importsServer) {
-    for (const n of DEFAULT_RECEIVERS) recv.set(n, { fw: fileFw, prefix: '' });
-    recv.set('fastify', { fw: 'fastify', prefix: '' });
-  }
+  const guessed = importsServer ? {} : { guessed: true as const };
+  for (const n of DEFAULT_RECEIVERS) if (importsServer || !imports.has(n)) recv.set(n, { fw: fileFw, prefix: '', ...guessed });
+  if (importsServer || !imports.has('fastify')) recv.set('fastify', { fw: 'fastify', prefix: '', ...guessed });
   const basePathFrom = new RegExp(`(${ID})\\s*\\.\\s*basePath\\s*\\(\\s*(['"\`])([^'"\`\\n]*)\\2\\s*\\)`, 'y');
   const init = new RegExp(`(?:await\\s+)?(?:new\\s+)?(${ID})(\\s*\\.\\s*Router)?\\s*(?:<[^>\\n]{0,200}>)?\\s*\\(`, 'y');
   const basePath = /\s*\.\s*basePath\s*\(\s*(['"`])([^'"`\n]*)\1\s*\)/y;
@@ -177,7 +178,7 @@ function codeRoutes(code: string, scan: string): { routes: Route[]; mounts: Moun
       let rest = args.slice(1);
       let path = literal(args[0]);
       if (!isPath(path) && r.fw === 'koa' && isPath(literal(args[1]))) { path = literal(args[1]); rest = args.slice(2); }
-      if (isPath(path)) add(verb === 'all' ? 'ANY' : verb.toUpperCase(), path, handlerOf(rest), index, r);
+      if (isPath(path) && (!r.guessed || handlerLike(rest))) add(verb === 'all' ? 'ANY' : verb.toUpperCase(), path, handlerOf(rest), index, r);
       chained.lastIndex = end;
       const c = chained.exec(scan);
       const open = c ? callOpen(scan, chained.lastIndex) : -1;
@@ -205,6 +206,7 @@ function codeRoutes(code: string, scan: string): { routes: Route[]; mounts: Moun
       const path = literal(args[1]);
       if (!isPath(path) || !args[0]) continue;
       const methods = args[0].startsWith('[') ? [...args[0].matchAll(/['"`]([A-Za-z]+)['"`]/g)].map(x => x[1]) : [literal(args[0])].filter((x): x is string => !!x);
+      if (r.guessed && !handlerLike(args.slice(2))) continue;
       for (const method of methods) add(method.toUpperCase(), path, handlerOf(args.slice(2)), m.index, r);
     } else if (verb === 'route') {
       if (args.length > 1) {
@@ -232,6 +234,12 @@ function codeRoutes(code: string, scan: string): { routes: Route[]; mounts: Moun
 }
 
 /** Fastify `route({ method, url, handler })`; a method array gives one route per method. */
+const FN_ARG = /^(?:async\s+)?(?:function\b|(?:\([^()]*\)|[\w$]+)\s*(?::[^=]{0,200})?=>)/;
+/** Route handlers, as opposed to HTTP client arguments: an inline function, or a middleware chain. */
+function handlerLike(rest: string[]): boolean {
+  return rest.some(a => FN_ARG.test(a.trim())) || (rest.length >= 2 && !rest.some(a => /^[{[]/.test(a.trim())));
+}
+
 function routeOptions(obj: string, index: number, r: Receiver, add: (m: string, p: string, h: string | undefined, i: number, r: Receiver) => void): void {
   const url = /\b(?:url|path)\s*:\s*(['"`])([^'"`\n]*)\1/.exec(obj);
   const method = /\bmethod\s*:\s*(?:(['"`])([A-Za-z]+)\1|\[([^\]]*)\])/.exec(obj);

@@ -48,6 +48,13 @@ describe('routes-js analyzer', () => {
     expect(run('src/routes.ts', "import type { Router } from 'express';\nexport function mount(router: Router) { router.get('/x', h); }\n").routes.map(r => r.path)).toEqual(['/x']);
   });
 
+  it('keeps conventional receivers without a server import when the call passes a handler', () => {
+    const src = "module.exports = (app) => {\n  app.get('/a', (req, res) => res.send('ok'));\n  app.post('/b', auth, create);\n  app.put('/c', async function (req, res) {});\n};\n";
+    expect(run('routes/index.js', src).routes.map(r => `${r.method} ${r.path}`)).toEqual(['GET /a', 'POST /b', 'PUT /c']);
+    const client = "export const f = (api, body) => { api.post('/u', body); api.get('/v', { params: { q: 1 } }); api.put('/w', body, { headers: {} }); };\n";
+    expect(run('src/client.ts', client).routes).toEqual([]);
+  });
+
   it('ignores member receivers except this.app/router/server and this.X assigned from a router factory', () => {
     expect(run('src/users.service.ts', "export class UsersService {\n  list() { return this.api.get('/users'); }\n}\nctx.router.get('/x', h);\n").routes).toEqual([]);
     const src = "import express from 'express';\nclass S {\n  web = express();\n  start() {\n    this.app.get('/a', a);\n    this.web.get('/w', w);\n  }\n}\n";
