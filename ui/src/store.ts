@@ -120,7 +120,10 @@ export interface StoreState {
   control: ControlState;
   /** The newest event id replayed by the last hello; later ids arrived live. */
   liveAfterId: number;
-  /** Bumped by every live hello. A new LiveMap run restarts event ids at 1, so per-id memos reset on it. */
+  /**
+   * Bumped by a live hello from a new LiveMap run, which restarts event ids at 1, so per-id memos reset on
+   * it. A reconnect to the same run (its ids only grow) leaves it, so the feed keeps its open cards.
+   */
   hellos: number;
   /** A short message shown at the top of the window (seq makes repeats fire). */
   toast: { text: string; tone: 'info' | 'error'; seq: number } | null;
@@ -308,6 +311,23 @@ let replaying = false;
 /** Bumped by every rewind and return to live, so a slow `backToLive` never overrides a later rewind. */
 let viewGen = 0;
 /** Bumped by every `backToLive`: a past state requested before it must not rewind the UI again. */
+/**
+ * Whether a hello comes from a new LiveMap run rather than a reconnect to the same one: a new run restarts
+ * event ids at 1, so an id it sends names a different event than before (another time or session), or it
+ * has no events at all where the old run had some.
+ */
+const maxId = (events: AgentEvent[]): number => events.reduce((m, e) => Math.max(m, e.id), 0);
+
+function newRun(before: AgentEvent[], after: AgentEvent[]): boolean {
+  if (!before.length) return false;
+  if (!after.length) return true;
+  const byId = new Map(before.map(e => [e.id, e]));
+  return after.some(e => {
+    const old = byId.get(e.id);
+    return old !== undefined && (old.at !== e.at || old.sessionId !== e.sessionId);
+  }) || maxId(after) < maxId(before);
+}
+
 let liveGen = 0;
 export const liveGeneration = (): number => liveGen;
 /**
@@ -353,11 +373,11 @@ export const useStore = create<StoreState>()((set, get) => ({
       case 'hello': {
         // Replaces all project data. View state (selection, expansion, filter) survives a
         // reconnect as long as the selected file still exists.
-        const { selected } = get();
+        const { selected, events: before } = get();
         const data = replaceData(msg, get());
         set({
           ...data,
-          hellos: get().hellos + 1,
+          hellos: newRun(before, msg.events) ? get().hellos + 1 : get().hellos,
           historyStatus: msg.history ?? NO_HISTORY,
           selected: selected && data.files[selected] ? selected : null,
         });
@@ -523,6 +543,8 @@ export const useStore = create<StoreState>()((set, get) => ({
     if (get().replay) {
       // No live in a replay: its end.
       set({ playing: false });
+      // Seeks requested before this click are dropped whenever they arrive; a later seek still wins below.
+      liveGen++;
       const gen = viewGen;
       let end: HistoryState;
       try {
