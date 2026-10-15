@@ -26,10 +26,24 @@ export function expectStopped(exit: { code: number | null; signal: NodeJS.Signal
   if (!IS_WIN) expect(exit).toEqual({ code: 0, signal: null });
 }
 
+/** Errors Windows gives while another process still holds a file or directory. */
+const HELD = new Set(['EBUSY', 'EPERM', 'ENOTEMPTY']);
+
 /**
- * Removes a temp tree. Windows keeps a killed process's handles (its cwd, open files) for a moment after
- * the exit event, so the delete is retried there instead of failing with EBUSY.
+ * Removes a temp tree. On Windows a process the test killed can leave a child (a git command) that still
+ * holds the tree as its working directory, and nothing can delete it until that child exits. So a held
+ * tree is retried every 200 ms for up to 8 s. Node's own maxRetries did not retry this on Windows CI.
  */
 export function rmTree(dir: string): void {
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  const end = Date.now() + 8000;
+  for (;;) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code ?? '';
+      if (!HELD.has(code) || Date.now() > end) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+    }
+  }
 }

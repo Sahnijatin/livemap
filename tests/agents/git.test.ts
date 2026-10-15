@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { GitWatcher } from '../../src/agents/git.js';
 import type { RawAgentEvent } from '../../src/shared/types.js';
-import { rmTree } from '../helpers/platform.js';
+import { IS_WIN, rmTree } from '../helpers/platform.js';
 
 const dirs: string[] = [];
 const watchers: GitWatcher[] = [];
@@ -270,6 +270,27 @@ describe('GitWatcher', () => {
     expect(got[99].text).toBe('c120');
     // 120 git processes in a row: each start costs tens of ms on Windows, past vitest's 5 s default.
   }, 30_000);
+
+  it('stop() ends a git command still running (on Windows it would keep the repo from being deleted)', async () => {
+    // A stand-in git that sleeps; a shell script cannot stand in for git.exe on Windows.
+    if (IS_WIN) return;
+    const d = tmp();
+    const bin = tmp();
+    fs.writeFileSync(path.join(bin, 'git'), '#!/bin/sh\nsleep 5\necho ok\n', { mode: 0o755 });
+    const saved = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${saved}`;
+    try {
+      const { w } = watch(d);
+      const t = Date.now();
+      const started = w.start();
+      await new Promise((r) => setTimeout(r, 200));
+      w.stop();
+      expect(await started).toBe(false);
+      expect(Date.now() - t).toBeLessThan(2000);
+    } finally {
+      process.env.PATH = saved;
+    }
+  });
 
   it('start is idempotent', async () => {
     const d = initRepo();
