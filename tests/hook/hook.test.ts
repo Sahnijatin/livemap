@@ -67,8 +67,8 @@ beforeAll(async () => {
   if (!fs.existsSync(hook)) throw new Error('dist/hook.mjs is missing after the build');
 }, 120_000);
 beforeEach(() => {
-  home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hookhome-')));
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hookroot-')));
+  home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hookhome-')));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hookroot-')));
   servers = [];
 });
 afterEach(async () => {

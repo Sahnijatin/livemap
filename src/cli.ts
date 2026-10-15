@@ -68,7 +68,7 @@ function parseExportArgs(argv: string[]): ExportArgs {
 function resolveRoot(dir: string): string {
   let root: string;
   try {
-    root = fs.realpathSync(path.resolve(dir));
+    root = fs.realpathSync.native(path.resolve(dir));
   } catch {
     fail(`directory not found: ${dir}`);
   }

@@ -12,8 +12,8 @@ let saved: string | undefined;
 
 beforeEach(() => {
   saved = process.env.LIVEMAP_HOME;
-  home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-home-')));
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-root-')));
+  home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-home-')));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-root-')));
   process.env.LIVEMAP_HOME = home;
 });
 afterEach(() => {
@@ -48,8 +48,8 @@ describe('runtime file', () => {
     expect(findRuntime(root)).toEqual({ root, port: 4321, token: 'tok', pid: process.pid });
   });
 
-  it('is found through a symlinked path to root', () => {
-    if (process.platform === 'win32') return;
+  // Windows: creating a symlink needs admin rights or Developer Mode.
+  it.skipIf(process.platform === 'win32')('is found through a symlinked path to root', () => {
     writeRuntime(root, 4321, 'tok');
     const link = path.join(home, 'link');
     fs.symlinkSync(root, link);

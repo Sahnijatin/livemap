@@ -209,9 +209,9 @@ const openInspector = (page: Page) => async () => {
 };
 
 test.beforeAll(async () => {
-  tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-history-e2e-')));
-  home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-history-home-')));
-  claudeDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-history-claude-')));
+  tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-history-e2e-')));
+  home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-history-home-')));
+  claudeDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-history-claude-')));
   env = {
     ...process.env,
     LIVEMAP_HOME: home,

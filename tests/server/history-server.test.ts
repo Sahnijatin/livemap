@@ -80,9 +80,9 @@ async function boot(extra: Partial<ServerOptions> = {}, withHistory = true): Pro
 
 beforeEach(() => {
   savedHome = process.env.LIVEMAP_HOME;
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hsrv-')));
-  home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hsrv-home-')));
-  uiDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hsrv-ui-')));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hsrv-')));
+  home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hsrv-home-')));
+  uiDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hsrv-ui-')));
   process.env.LIVEMAP_HOME = home;
   put('src/a.ts', 'export function alpha() { return 1; }\n');
   put('src/b.ts', 'export function beta() { return 2; }\n');

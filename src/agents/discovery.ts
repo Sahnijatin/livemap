@@ -15,7 +15,7 @@ export function findClaudeSessions(
   now: number = Date.now(),
 ): string[] {
   const roots = new Set<string>([path.resolve(root)]);
-  try { roots.add(fs.realpathSync(root)); } catch { /* root may not exist */ }
+  try { roots.add(fs.realpathSync.native(root)); } catch { /* root may not exist */ }
   const found = new Map<string, number>();
   for (const r of roots) {
     const dir = path.join(claudeDir, 'projects', claudeProjectDirName(r));

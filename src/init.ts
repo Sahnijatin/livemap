@@ -99,7 +99,7 @@ function atomicWrite(file: string, content: string | Buffer, newMode = 0o644): v
   let target = file;
   let mode = newMode;
   try {
-    target = fs.realpathSync(file);
+    target = fs.realpathSync.native(file);
     mode = fs.statSync(target).mode & 0o7777;
   } catch { /* new file (or dangling link): write at `file` */ }
   fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -150,7 +150,7 @@ const NOTHING: Created = { file: false, hooks: false, version: false, events: []
 
 function stateFile(home: string, file: string): string {
   let real: string;
-  try { real = path.join(fs.realpathSync(path.dirname(file)), path.basename(file)); } catch { real = path.resolve(file); }
+  try { real = path.join(fs.realpathSync.native(path.dirname(file)), path.basename(file)); } catch { real = path.resolve(file); }
   return path.join(home, 'init', `${crypto.createHash('sha1').update(real).digest('hex')}.json`);
 }
 

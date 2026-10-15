@@ -67,8 +67,8 @@ interface StartInfo { name: string; label: string; paths: string[]; secret: bool
  * missing file is keyed by its directory's real path, matching the key once it exists.
  */
 export function transcriptKey(file: string): string {
-  try { return fs.realpathSync(file); } catch { /* not created yet */ }
-  try { return path.join(fs.realpathSync(path.dirname(file)), path.basename(file)); } catch { return path.resolve(file); }
+  try { return fs.realpathSync.native(file); } catch { /* not created yet */ }
+  try { return path.join(fs.realpathSync.native(path.dirname(file)), path.basename(file)); } catch { return path.resolve(file); }
 }
 
 async function readLastBytes(file: string): Promise<string> {

@@ -35,7 +35,7 @@ function startCli(dir: string): Promise<string> {
 }
 
 test.beforeAll(async () => {
-  tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-domain-e2e-')));
+  tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-domain-e2e-')));
   fs.cpSync(path.join(root, 'tests/fixtures/fullstack'), tmp, { recursive: true });
   expect(fs.readFileSync(path.join(tmp, '.env'), 'utf8')).toContain(`${SECRET_LINE}${SECRET}`);
   url = await startCli(tmp);

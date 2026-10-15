@@ -104,8 +104,8 @@ async function hello(s: Started): Promise<Extract<ServerMessage, { type: 'hello'
 }
 
 beforeEach(() => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-asrv-')));
-  uiDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-aui-')));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-asrv-')));
+  uiDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-aui-')));
   put(root, 'src/a.ts', 'export const a = 1;\n');
   put(uiDir, 'index.html', '<!doctype html><title>LiveMap</title>');
   srv = null;

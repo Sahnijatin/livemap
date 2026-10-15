@@ -25,8 +25,8 @@ let root: string;
 let clock = Date.UTC(2026, 9, 15, 9, 30);
 
 beforeEach(() => {
-  home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-exp-home-')));
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-exp-root-')));
+  home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-exp-home-')));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-exp-root-')));
 });
 afterEach(() => {
   for (const d of [home, root]) fs.rmSync(d, { recursive: true, force: true });
@@ -316,7 +316,8 @@ describe('buildExport', () => {
     expect(text).not.toContain(root);
     expect(text).not.toContain(`${parent}/`);
     const ev = plain(payload.messages).find(m => m.type === 'agentEvent') as { event: AgentEvent };
-    expect(ev.event.text).toBe('Copied app-old/x.ts into a.ts');
+    // The scrubber removes the absolute prefix and keeps the text's own separators (backslashes on Windows).
+    expect(ev.event.text).toBe(`Copied ${path.join('app-old', 'x.ts')} into a.ts`);
   });
 
   it('keeps the code map as file content', async () => {
