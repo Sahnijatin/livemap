@@ -2,13 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import zlib from 'node:zlib';
+import { SECRET_LABEL, toolFamily } from '../agents/labels.js';
 import { readForModel } from '../engine/files.js';
 import { HistoryStore } from '../history/store.js';
 import { projectDir } from '../history/paths.js';
 import { EXPORT_DATA_ID, type ExportPayload } from '../shared/export.js';
 import type { ServerMessage } from '../shared/protocol.js';
 import { emptyState, type ProjectState } from '../shared/state.js';
-import type { AgentEvent, AgentSession, ChangeSummary } from '../shared/types.js';
+import type { AgentEvent, AgentSession, Attribution, ChangeSummary } from '../shared/types.js';
 
 const gzip = promisify(zlib.gzip);
 
@@ -117,20 +118,47 @@ async function sessionScope(store: HistoryStore, all: Rec[], id: string, firstSe
   return { initial, messages };
 }
 
+/** Stands in for a fenced block or an inline code span in agent text under `--no-code`. */
+export const CODE_REMOVED = '[code removed]';
+
+/** Agent text with fenced blocks (an unclosed one runs to the end) and inline code spans replaced. */
+export const stripCode = (text: string): string =>
+  text.replace(/```[\s\S]*?(?:```|$)/g, CODE_REMOVED).replace(/`[^`\n]+`/g, CODE_REMOVED);
+
+/** `$ <command name>` of a shell label (`$ FOO=1 ./bin/run --x` is `$ run`); the secret marker stays. */
+function shellLabel(label: string): string {
+  if (label === SECRET_LABEL || !label.startsWith('$')) return label;
+  const word = label.slice(1).trim().split(/\s+/).find(w => !/^[A-Za-z_]\w*=/.test(w)) ?? '';
+  const name = /[\w.+-]+/.exec(word.slice(Math.max(word.lastIndexOf('/'), word.lastIndexOf('\\')) + 1))?.[0];
+  return name ? `$ ${name}` : '$';
+}
+
 /**
- * `--no-code`: the code map is not all of the source an export can carry. Diff hunks in change cards and
- * tool inputs and outputs in agent events (an Edit's old and new text) are code too. Symbol names and
- * signatures stay: they are the structure the Map and the cards show.
+ * `--no-code`: the code map is not all of the source an export can carry. Diff hunks in change cards,
+ * tool inputs and outputs in agent events (an Edit's old and new text), shell command lines in tool
+ * labels, and code in prompts, messages, thinking, session titles and attribution intents are code
+ * too. Symbol names and signatures stay: they are the structure the Map and the cards show.
  */
 function withoutCode(initial: ProjectState, messages: Rec[]): { initial: ProjectState; messages: Rec[] } {
-  const change = (c: ChangeSummary): ChangeSummary => ({ ...c, hunks: [] });
-  const event = (e: AgentEvent): AgentEvent => (e.tool ? { ...e, tool: (({ input: _i, output: _o, ...t }) => t)(e.tool) } : e);
-  const state = <T extends Pick<ProjectState, 'changes' | 'events'>>(s: T): T => ({ ...s, changes: s.changes.map(change), events: s.events.map(event) });
+  const attribution = (a: Attribution): Attribution => (a.intent === undefined ? a : { ...a, intent: stripCode(a.intent) });
+  const change = (c: ChangeSummary): ChangeSummary => ({ ...c, hunks: [], ...(c.attribution ? { attribution: attribution(c.attribution) } : {}) });
+  const prose = new Set<AgentEvent['type']>(['prompt', 'message', 'thinking']);
+  const event = (e: AgentEvent): AgentEvent => {
+    const out = e.text !== undefined && prose.has(e.type) ? { ...e, text: stripCode(e.text) } : e;
+    if (!out.tool) return out;
+    const { input: _i, output: _o, ...tool } = out.tool;
+    return { ...out, tool: toolFamily(tool.name) === 'shell' ? { ...tool, label: shellLabel(tool.label) } : tool };
+  };
+  const session = (s: AgentSession): AgentSession => ({ ...s, title: stripCode(s.title) });
+  const state = <T extends Pick<ProjectState, 'changes' | 'events' | 'sessions'>>(s: T): T =>
+    ({ ...s, changes: s.changes.map(change), events: s.events.map(event), sessions: s.sessions.map(session) });
   const msg = (m: ServerMessage): ServerMessage => {
     switch (m.type) {
       case 'hello': return state(m);
       case 'change': return { ...m, change: change(m.change) };
       case 'agentEvent': return { ...m, event: event(m.event) };
+      case 'attribution': return { ...m, attribution: attribution(m.attribution) };
+      case 'session': return { ...m, session: session(m.session) };
       default: return m;
     }
   };

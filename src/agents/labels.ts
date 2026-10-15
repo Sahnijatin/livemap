@@ -4,7 +4,8 @@ import { isSecretEnvPath, SECRET_NAME_ALT } from '../engine/languages.js';
 const MAX_LABEL = 160;
 /** Stored in place of a shell command that names a secret env file. */
 export const SECRET_COMMAND = '<touches a secret file>';
-const SECRET_LABEL = '$ (command touching .env)';
+/** Label of a shell command that names a secret env file. */
+export const SECRET_LABEL = '$ (command touching .env)';
 const PATH_KEYS = ['file_path', 'path', 'absolute_path', 'notebook_path', 'filePath', 'target_file'];
 
 export type ToolFamily = 'read' | 'write' | 'edit' | 'shell' | 'patch' | 'search' | 'glob' | 'fetch' | 'websearch' | 'subagent' | 'notebook';
