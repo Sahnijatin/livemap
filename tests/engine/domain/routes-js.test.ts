@@ -55,6 +55,16 @@ describe('routes-js analyzer', () => {
     expect(run('src/client.ts', client).routes).toEqual([]);
   });
 
+  it('keeps a guessed receiver passing named handlers, chained or not, and drops client-shaped calls', () => {
+    const src = "module.exports = (app) => {\n  app.get('/users', listUsers);\n  app.get('/users/:id', usersCtl.show);\n  app.post('/b', auth, create);\n  app.route('/x').get(list).post(req.body);\n};\n";
+    expect(run('routes/users.js', src).routes.map(r => `${r.method} ${r.path} ${r.handler}`))
+      .toEqual(['GET /users listUsers', 'GET /users/:id usersCtl.show', 'POST /b create', 'GET /x list']);
+    const client = "export const f = (api, body, cfg) => { api.put('/w', body, cfg); };\n"
+      + "export async function g(api, id, payload) {\n  if (id) return api.get('/u', id);\n  await api.post('/u', payload);\n  api.get('/u').then(done);\n  api.get('/u', id).catch(fail);\n  const r = api.get('/u', id);\n  use(api.get('/u', id));\n}\n"
+      + "export const h = (api, id) => api.get('/u', id);\nexport const k = (app) => { app.route('/y').get(load).then(done); };\n";
+    expect(run('src/client.ts', client).routes).toEqual([]);
+  });
+
   it('ignores member receivers except this.app/router/server and this.X assigned from a router factory', () => {
     expect(run('src/users.service.ts', "export class UsersService {\n  list() { return this.api.get('/users'); }\n}\nctx.router.get('/x', h);\n").routes).toEqual([]);
     const src = "import express from 'express';\nclass S {\n  web = express();\n  start() {\n    this.app.get('/a', a);\n    this.web.get('/w', w);\n  }\n}\n";
