@@ -547,6 +547,22 @@ describe('history and rewind', () => {
     expect(useStore.getState().rewound?.seq).toBe(4);
   });
 
+  it('in a replay, a seek made while the end loads wins over Back to live', async () => {
+    const s = useStore.getState();
+    s.apply({ ...hello(), history: status, seq: 9 });
+    const { type: _t, ...state } = past();
+    s.rewind(state);
+    useStore.setState({ replay: true });
+    let resolveEnd!: (v: unknown) => void;
+    setHistorySource({ ...restHistorySource, stateAt: () => new Promise(r => { resolveEnd = r; }) } as unknown as HistorySource);
+    const back = useStore.getState().backToLive();
+    // The user drags the timeline before the end arrives.
+    useStore.getState().rewind({ ...state, seq: 6 });
+    resolveEnd({ ...state, seq: 9 });
+    await back;
+    expect(useStore.getState().rewound?.seq).toBe(6);
+  });
+
   it('Play that cannot load its first state shows an error toast', async () => {
     const s = useStore.getState();
     s.apply({ ...hello(), history: status, seq: 9 });

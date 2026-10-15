@@ -531,6 +531,8 @@ export const useStore = create<StoreState>()((set, get) => ({
         if (gen === viewGen) get().showToast('Could not load the end of this replay.', 'error');
         return;
       }
+      // A seek made while the end was loading wins.
+      if (gen !== viewGen) return;
       return get().rewind(end);
     }
     const gen = ++viewGen;
