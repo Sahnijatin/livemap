@@ -242,8 +242,13 @@ const rubyDsl = (word: string, eco: string): Parser => text => {
   return { deps };
 };
 
-/** Any configuration (`implementation`, `api`, `ksp`, `kapt`, `testImplementation`, ...); `platform(...)`, `project(...)` and `files(...)` never match. */
-const GRADLE_CONF = '(\\w+)';
+/**
+ * A dependency configuration: Gradle's own and their source-set or variant forms (`implementation`, `api`,
+ * `compileOnly`, `runtimeOnly`, `testImplementation`, `debugImplementation`, `annotationProcessor`), the
+ * annotation processors (`kapt`, `ksp` and their variants) and a few common others. A word such as
+ * `println` or `mainClassName` before a `"a:b"` string is not one.
+ */
+const GRADLE_CONF = '((?:[a-z][A-Za-z0-9]*)?(?:[Ii]mplementation|[Aa]pi|[Cc]ompileOnly(?:Api)?|[Rr]untimeOnly|[Aa]nnotationProcessor|[Cc]ompile|[Rr]untime)|kapt[A-Za-z0-9]*|ksp[A-Za-z0-9]*|classpath|coreLibraryDesugaring|developmentOnly|lintChecks|detektPlugins)';
 /** Words that start a dependency-shaped line without being a configuration. */
 const NOT_CONF = new Set(['id', 'platform', 'enforcedPlatform', 'project', 'files', 'fileTree', 'kotlin', 'alias']);
 /** Test and debug-only configurations (`testImplementation`, `androidTestImplementation`, `kaptTest`, `debugImplementation`). */
