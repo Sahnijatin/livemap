@@ -134,6 +134,23 @@ describe('Timeline', () => {
     expect(thumb().getAttribute('aria-valuenow')).toBe('1');
   });
 
+  it('Back to live during the first rewind returns to live and drops the pending seek', async () => {
+    let resolve!: () => void;
+    const gate = new Promise<void>(r => { resolve = r; });
+    source.stateAt.mockImplementation(async (seq: number) => { await gate; return { ...projectState(), seq, at: T0 + seq * 1000 }; });
+    render(<Timeline />);
+    await flush();
+    act(() => { thumb().dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })); });
+    await flush();
+    expect(host.querySelector('.tl-state')!.textContent).toBe('REWOUND');
+    act(() => { (host.querySelector('.tl-back-inline') as HTMLElement).click(); });
+    await flush();
+    await act(async () => { resolve(); await gate; await Promise.resolve(); });
+    await flush();
+    expect(host.querySelector('.tl-state')!.textContent).toBe('LIVE');
+    expect(useStore.getState().rewound).toBeNull();
+  });
+
   it('a failed state request drops the aim and shows live again', async () => {
     source.stateAt.mockImplementation(async () => { throw new Error('nope'); });
     render(<Timeline />);

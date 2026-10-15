@@ -191,6 +191,29 @@ describe('HistoryStore basics', () => {
     expect(fs.existsSync(path.join(dir, 'index.json'))).toBe(true);
   });
 
+  it('snapshots a 5,000-file state', async () => {
+    const store = await open({ snapshotEvery: 2 });
+    await store.startRun(startState());
+    const sync: number[] = [];
+    for (let run = 0; run < 5; run++) {
+      const files = Array.from({ length: 5000 }, (_, i) => file(`src/m${run}/f${i}.ts`));
+      const msg: ServerMessage = { type: 'files', files, removed: [] };
+      const text = JSON.stringify(msg);
+      // The big record is over the flush threshold, so appending it flushes (and snapshots) at once.
+      const t0 = performance.now();
+      store.append(msg, 1, text);
+      sync.push(performance.now() - t0);
+      await store.flush();
+      store.append({ type: 'control', control: { paused: false, flags: [] } });
+    }
+    await store.close();
+    sync.sort((a, b) => a - b);
+    const median = sync[Math.floor(sync.length / 2)];
+    console.info(`snapshot sync part, 5,000 files: median ${median.toFixed(1)} ms (${sync.map(n => n.toFixed(1)).join(', ')})`);
+    expect(median).toBeLessThan(50);
+    expect(fs.readdirSync(path.join(projectDir(root, home), 'snapshots'))).toContain('2.json.gz');
+  });
+
   it('reopens from index.json, and rebuilds when it is missing or garbage', async () => {
     const store = await open();
     await store.startRun(startState());

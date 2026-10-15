@@ -518,6 +518,8 @@ export const useStore = create<StoreState>()((set, get) => ({
   },
 
   async backToLive() {
+    // Drops a queued seek even before the first rewound state has landed.
+    liveGen++;
     if (!get().rewound) return;
     stopPlayback();
     if (get().replay) {
