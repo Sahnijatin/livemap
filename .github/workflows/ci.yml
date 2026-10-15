@@ -5,9 +5,17 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,6 +27,7 @@ jobs:
             ui/package-lock.json
       - run: npm ci
       - run: npm --prefix ui ci
+      # npm test rebuilds dist itself (tests/build.ts buildOnce); this step stays so build errors fail early.
       - run: npm run build
       - run: npm run typecheck
       - run: npm --prefix ui run typecheck
