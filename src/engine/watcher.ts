@@ -4,12 +4,14 @@ import { watch, type FSWatcher } from 'chokidar';
 import type { ChangeSummary, FileModel } from '../shared/types.js';
 import type { ProjectModel, UpdateResult } from './project.js';
 import { buildChange } from './differ.js';
-import { isTempName, parentDir } from './files.js';
+import { insideRoot, isTempName, parentDir } from './files.js';
 
 type FileEvent = 'add' | 'change' | 'unlink';
 
 export interface WatcherOptions {
   debounceMs?: number;
+  /** Longest a path's events are debounced while they keep coming (default 1000 ms). */
+  maxWaitMs?: number;
   /** Longest a deferred import re-resolution waits while jobs keep arriving (default 1000 ms). */
   maxDeferMs?: number;
 }
@@ -28,11 +30,14 @@ export interface WatcherOptions {
 export class Watcher extends EventEmitter {
   private readonly model: ProjectModel;
   private readonly debounceMs: number;
+  private readonly maxWaitMs: number;
   private readonly maxDeferMs: number;
   /** When the current run of deferred jobs began; null when nothing is deferred. */
   private deferSince: number | null = null;
   private fsw: FSWatcher | null = null;
   private timers = new Map<string, NodeJS.Timeout>();
+  /** When each key's pending (not yet fired) debounce began. */
+  private pendingSince = new Map<string, number>();
   private queue: Promise<void> = Promise.resolve();
   /** .gitignore files changed since the last rules reload. */
   private gitignores = new Set<string>();
@@ -47,6 +52,7 @@ export class Watcher extends EventEmitter {
     super();
     this.model = model;
     this.debounceMs = opts.debounceMs ?? 150;
+    this.maxWaitMs = opts.maxWaitMs ?? 1000;
     this.maxDeferMs = opts.maxDeferMs ?? 1000;
   }
 
@@ -82,6 +88,7 @@ export class Watcher extends EventEmitter {
     this.stopped = true;
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();
+    this.pendingSince.clear();
     this.gitignores.clear(); // their debounced job was just cancelled
     this.deferSince = null;
     const fsw = this.fsw;
@@ -92,9 +99,8 @@ export class Watcher extends EventEmitter {
 
   /** POSIX path relative to root; null when outside root. */
   private rel(p: string): string | null {
-    const r = path.relative(this.model.root, p);
-    if (r.startsWith('..') || path.isAbsolute(r)) return null;
-    return r.split(path.sep).join('/');
+    if (!insideRoot(this.model.root, p)) return null;
+    return path.relative(this.model.root, p).split(path.sep).join('/');
   }
 
   /**
@@ -173,12 +179,19 @@ export class Watcher extends EventEmitter {
     if (this.stopped) return;
     const prev = this.timers.get(key);
     if (prev) clearTimeout(prev);
+    // Each event restarts the debounce, but a path written more often than that still fires
+    // maxWaitMs after its first pending event.
+    const now = Date.now();
+    const since = this.pendingSince.get(key) ?? now;
+    this.pendingSince.set(key, since);
+    const delay = Math.min(this.debounceMs, Math.max(0, since + this.maxWaitMs - now));
     this.timers.set(key, setTimeout(() => {
       this.timers.delete(key);
+      this.pendingSince.delete(key);
       this.waiting++;
       // catch: a throwing 'error'/'change' listener must not poison the queue for later jobs.
       this.queue = this.queue.then(() => this.run(job)).catch(() => {});
-    }, this.debounceMs));
+    }, delay));
   }
 
   private async run(job: (deferRelink: boolean) => Promise<UpdateResult[]>): Promise<void> {

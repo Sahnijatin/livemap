@@ -80,6 +80,30 @@ describe('Watcher', () => {
     expect(names(c)).toEqual(['v5']);
   });
 
+  it('still reports a file rewritten faster than the debounce before the writes stop (#31)', async () => {
+    put('src/x.ts', 'export const v0 = 0;\n');
+    await startWatcher();
+    let i = 0;
+    const end = Date.now() + 1800;
+    while (Date.now() < end) {
+      i++;
+      fs.writeFileSync(path.join(root, 'src/x.ts'), `export const v${i} = ${i};\n`);
+      await sleep(40);
+    }
+    const lastWrite = Date.now();
+    await waitFor(() => changes.length >= 1);
+    expect(changes[0].t).toBeLessThan(lastWrite);
+    await waitFor(() => names(changes.at(-1)!.change).includes(`v${i}`));
+  });
+
+  it('indexes files whose names start with two dots (#31)', async () => {
+    await startWatcher();
+    put('..notes.ts', 'export const n = 1;\n');
+    await waitFor(() => changes.length >= 1);
+    expect(changes[0].change.path).toBe('..notes.ts');
+    expect(model.get('..notes.ts')).toBeDefined();
+  });
+
   it('treats an atomic save as one modified change and never indexes the tmp file', async () => {
     put('src/x.ts', 'export function x() {}\n');
     await startWatcher();
