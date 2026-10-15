@@ -29,7 +29,7 @@ Everything LiveMap stores lives in its home folder, `~/.livemap` (or `$LIVEMAP_H
 | `usage.json` | This month's summary token count, shared by every LiveMap process on the machine. |
 | `cache/summaries/` | Summaries already written, so they are not requested twice. |
 | `init/` | What `livemap init` created in each agent config file, so `--remove` can restore it. |
-| `locks/` | One lock file per running project, with the pid and port of the LiveMap holding it, so a second LiveMap on the same project exits. Removed when LiveMap stops. |
+| `locks/` | One lock file per running project, with the pid, port and a random id of the LiveMap holding it, so a second LiveMap on the same project exits. The server answers `/__livemap/lock` with that id without a token; it says nothing about the project. Removed when LiveMap stops. |
 | `run/` | The port and token of each running LiveMap, for the hooks. Removed when LiveMap stops. |
 | `bin/livemap-hook.mjs` | The hook script. |
 
@@ -56,7 +56,7 @@ Secret files, binary files and files over 1 MB are never sent.
 
 ## What exports contain
 
-`livemap export` writes one HTML file holding the recorded history: file structure, changes and diffs, prompts, agent messages, tool calls and summaries. With `--session`, it holds only that session's prompts, messages, tool calls and changes, also in the state the replay starts from, so other sessions' prompts are left out. Unless you pass `--no-code`, it also embeds the current text of every file the history touches, and LiveMap warns you that the file contains source code. With `--no-code`, it holds no file contents, diff lines or agent tool inputs and outputs (symbol names and signatures stay; shell commands are cut to the command name, and code blocks and inline code in prompts, agent messages and thinking, session titles, change intents and tool labels become `[code removed]`, but the plain text around them, code not marked as code, tool labels such as file paths and search terms, commit messages and summaries stay). Secret, binary and over-1 MB files are never embedded. Your project's absolute path is removed outside the embedded code. The file loads nothing from the network.
+`livemap export` writes one HTML file holding the recorded history: file structure, changes and diffs, prompts, agent messages, tool calls and summaries. With `--session`, it holds only that session's prompts, messages, tool calls and changes, also in the state the replay starts from, so other sessions' prompts are left out. Unless you pass `--no-code`, it also embeds the current text of every file the history touches, and LiveMap warns you that the file contains source code. With `--no-code`, it holds no file contents, diff lines or agent tool inputs and outputs (symbol names and signatures stay; shell commands are cut to the command name, and code blocks and inline code in prompts, agent messages and thinking, commit messages, session titles, change intents, tool labels, flag notes and AI summaries become `[code removed]`, but the plain text around them, code not marked as code, and tool labels such as file paths and search terms stay). Secret, binary and over-1 MB files are never embedded. Your project's absolute path is removed outside the embedded code. The file loads nothing from the network.
 
 An export can still contain prompts and code you would not share. Read it before you send it.
 

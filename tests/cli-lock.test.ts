@@ -83,6 +83,10 @@ describe('one LiveMap per project (#21)', () => {
       const token = first.out.match(URL_RE)![2];
       const health = await fetch(`http://127.0.0.1:${first.port}/api/health`, { headers: { 'x-livemap-token': token } });
       expect(health.status).toBe(200);
+      // The running LiveMap answers with the id its lock records, which tells it from a reused pid or port.
+      const lock = JSON.parse(fs.readFileSync(path.join(lmHome, 'locks', dirFiles('locks')[0]), 'utf8'));
+      const probe = await fetch(`http://127.0.0.1:${first.port}/__livemap/lock`);
+      expect(await probe.json()).toEqual({ lock: lock.id });
 
       first.child.kill('SIGTERM');
       await ended(first);
@@ -104,7 +108,7 @@ describe('one LiveMap per project (#21)', () => {
     await ended(first);
     expect(dirFiles('locks')).toHaveLength(1);
     const next = await started();
-    expect(JSON.parse(fs.readFileSync(path.join(lmHome, 'locks', dirFiles('locks')[0]), 'utf8'))).toEqual({ pid: next.child.pid, port: next.port });
+    expect(JSON.parse(fs.readFileSync(path.join(lmHome, 'locks', dirFiles('locks')[0]), 'utf8'))).toMatchObject({ pid: next.child.pid, id: expect.stringMatching(/^[0-9a-f]{24}$/), port: next.port });
   }, 30_000);
 
   it('replaces the lock of a killed instance whose pid an unrelated process reuses (#40)', async () => {
@@ -117,7 +121,7 @@ describe('one LiveMap per project (#21)', () => {
       // The lock as the killed run left it, but its pid now names a live process that is not LiveMap.
       fs.writeFileSync(lock, JSON.stringify({ pid: squatter.pid, port: first.port }));
       const next = await started();
-      expect(JSON.parse(fs.readFileSync(lock, 'utf8'))).toEqual({ pid: next.child.pid, port: next.port });
+      expect(JSON.parse(fs.readFileSync(lock, 'utf8'))).toMatchObject({ pid: next.child.pid, id: expect.stringMatching(/^[0-9a-f]{24}$/), port: next.port });
     } finally {
       squatter.kill('SIGKILL');
       await new Promise(r => squatter.on('exit', r));

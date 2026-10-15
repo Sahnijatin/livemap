@@ -128,20 +128,25 @@ describe('buildExport', () => {
       { type: 'agentEvent', event: said(3, 'prompt', 'Please change `CODE_A` here') },
       { type: 'agentEvent', event: said(4, 'message', 'Done:\n```ts\nconst CODE_B = 1;\n```\nAll set.') },
       { type: 'agentEvent', event: said(5, 'thinking', 'Maybe ```\nCODE_C unclosed') },
-      { type: 'agentEvent', event: said(6, 'commit', 'Add `a` helper') },
+      { type: 'agentEvent', event: said(6, 'commit', 'Add `CODE_COMMIT` helper') },
       { type: 'change', change: c, files: [file('a.ts')], removed: [] },
+      { type: 'summary', changeId: 1, summary: 'Replaced `CODE_SUM(sql + id)` with a parameter.' },
+      { type: 'fileSummary', path: 'a.ts', hash: 'h', summary: 'Exports `CODE_FILESUM`.' },
+      { type: 'control', control: { paused: false, flags: [{ id: 1, target: null, note: 'use `CODE_FLAG` instead', createdAt: 1 }] } },
       { type: 'attribution', changeId: 1, attribution: { agent: 'claude-code', sessionId: 's1', confidence: 'exact', intent } },
     ]);
     const { text, payload } = decode((await buildExport(root, { home, code: false, uiHtml: UI })).html);
     expect(text).not.toMatch(/CODE_/);
     const events = plain(payload.messages).flatMap(m => (m.type === 'agentEvent' ? [m.event] : []));
     expect(events.map(e => e.tool?.label ?? e.text)).toEqual([
-      '$ vitest', '$ (command touching .env)', 'Please change [code removed] here', 'Done:\n[code removed]\nAll set.', 'Maybe [code removed]', 'Add `a` helper',
+      '$ vitest', '$ (command touching .env)', 'Please change [code removed] here', 'Done:\n[code removed]\nAll set.', 'Maybe [code removed]', 'Add [code removed] helper',
     ]);
+    const prose = plain(payload.messages).flatMap(m => (m.type === 'summary' || m.type === 'fileSummary' ? [m.summary] : m.type === 'control' ? m.control.flags.map(f => f.note) : []));
+    expect(prose).toEqual(['Replaced [code removed] with a parameter.', 'Exports [code removed].', 'use [code removed] instead']);
     const attributions = plain(payload.messages).flatMap(m => (m.type === 'attribution' ? [m.attribution.intent] : m.type === 'change' ? [m.change.attribution?.intent] : []));
     expect(attributions).toEqual(['Adds [code removed] to a.ts', 'Adds [code removed] to a.ts']);
     const { text: withCode } = decode((await buildExport(root, { home, code: true, uiHtml: UI })).html);
-    for (const s of ['CODE_ARG', 'CODE_A', 'CODE_B', 'CODE_C', 'CODE_INLINE', 'CODE_TITLE']) expect(withCode).toContain(s);
+    for (const s of ['CODE_ARG', 'CODE_A', 'CODE_B', 'CODE_C', 'CODE_INLINE', 'CODE_TITLE', 'CODE_COMMIT', 'CODE_SUM', 'CODE_FILESUM', 'CODE_FLAG']) expect(withCode).toContain(s);
   });
 
   it('code: false removes code spans from labels of tools other than shell', async () => {
@@ -394,8 +399,19 @@ describe('stripCode', () => {
     expect(stripCode('fix `foo(LEAK')).toBe(`fix ${R}`);
   });
   it('removes a fence opened mid-line, and an unclosed one to the end', () => {
-    expect(stripCode('Run ```\nLEAK\n``` then go')).toBe(`Run ${R}\n then go`);
+    // A fence closes only on a line holding nothing else, so text after it is code still.
+    expect(stripCode('Run ```\nLEAK\n``` then go')).toBe(`Run ${R}`);
+    expect(stripCode('Run ```\nLEAK\n```\nthen go')).toBe(`Run ${R}\nthen go`);
     expect(stripCode('Maybe ```\nLEAK unclosed')).toBe(`Maybe ${R}`);
+  });
+  it('does not let a fence with text after it, or a wrapped inline span, leak code', () => {
+    expect(stripCode('```\ncode1\n```python\nLEAK1\n```\nafter')).toBe(`${R}\nafter`);
+    expect(stripCode('  ```\nLEAK3\n  ```  trailing LEAK4\nmore')).toBe(R);
+    expect(stripCode('a `foo\nLEAK2` b')).toBe(`a ${R} b`);
+  });
+  it('keeps a one-line triple-backtick span inline, and pairs spans only within a paragraph', () => {
+    expect(stripCode('```npm test``` fails, please fix\n\nKeep the API stable.')).toBe(`${R} fails, please fix\n\nKeep the API stable.`);
+    expect(stripCode('Press the ` key to toggle.\n\nThen call `parseConfig`.')).toBe(`Press the ${R}\n\nThen call ${R}.`);
   });
   it('leaves text without code alone', () => {
     expect(stripCode('Adds a cancel route.\nNo code here.')).toBe('Adds a cancel route.\nNo code here.');
