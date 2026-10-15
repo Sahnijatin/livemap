@@ -42,7 +42,7 @@ Run these from the repo root. `npm run build` installs the UI's dependencies fir
 | `npm run demo` | Builds a sample project, drives a scripted agent session and exports the demo replay. `-- --shots` also captures the README screenshots. Needs `npm run build` first. |
 | `npm run docs:check` | Checks links, anchors, em dashes and CLI flags in the docs. Add `-- --allow-missing-media` while screenshots are not generated yet. `node scripts/check-docs.mjs --self-test` checks the checker. |
 
-CI (`.github/workflows/ci.yml`) runs the build, the typechecks and both unit suites on Ubuntu, macOS and Windows with Node 20 and 22. The docs check, the size budget, the end-to-end suite and the smoke test run once, on Ubuntu with Node 22.
+CI (`.github/workflows/ci.yml`) runs the build, the typechecks and both unit suites on Ubuntu, macOS and Windows with Node 20 and 22. The docs check, the size budget, the end-to-end suite and the smoke test run once, on Ubuntu with Node 22. Wall-clock budgets in unit tests are multiplied by `LIVEMAP_TIME_SCALE` (default 1); CI sets it to 3 on macOS and Windows.
 
 Notes on the end-to-end suite:
 
