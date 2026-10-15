@@ -31,7 +31,7 @@ Run these from the repo root. `npm run build` installs the UI's dependencies fir
 | `npm install` | Installs the engine's dependencies. |
 | `npm run build` | Builds the CLI and hook script into `dist/`, the parser grammars into `dist/grammars/`, the UI into `dist/ui/` and the export page into `dist/ui-export/`. |
 | `node dist/cli.js [dir]` | Runs the built CLI without `npm link`. |
-| `npm test` | Engine, server and CLI unit tests (Vitest). |
+| `npm test` | Engine, server and CLI unit tests (Vitest). The CLI tests run `npm run build` once first; with `LIVEMAP_TEST_PREBUILT=1` they use an existing `dist/` instead (CI sets it after its build step). |
 | `npm --prefix ui test` | UI unit tests (Vitest with jsdom). |
 | `npm run build && npm run test:e2e` | End-to-end tests in Chromium (Playwright). They run against `dist/`, so build first. |
 | `npm run test:perf` | Performance test: indexing 5,000 files in under 15 s and under 500 MB of memory. |

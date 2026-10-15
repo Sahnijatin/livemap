@@ -27,11 +27,13 @@ jobs:
             ui/package-lock.json
       - run: npm ci
       - run: npm --prefix ui ci
-      # npm test rebuilds dist itself (tests/build.ts buildOnce); this step stays so build errors fail early.
+      # npm test reuses this build (LIVEMAP_TEST_PREBUILT below), so no test worker rebuilds while others run timed tests.
       - run: npm run build
       - run: npm run typecheck
       - run: npm --prefix ui run typecheck
       - run: npm test
+        env:
+          LIVEMAP_TEST_PREBUILT: '1'
       - run: npm --prefix ui test
       - run: npm run docs:check
       - run: npm run budget

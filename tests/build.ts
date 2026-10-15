@@ -11,12 +11,19 @@ const runId = String(process.ppid);
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const builtThisRun = () => { try { return fs.readFileSync(stamp, 'utf8') === runId; } catch { return false; } };
 
+/** With LIVEMAP_TEST_PREBUILT=1 (CI builds before `npm test`), a complete existing build is used as is. */
+export function usePrebuilt(dir = repo, env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.LIVEMAP_TEST_PREBUILT === '1'
+    && ['dist/cli.js', 'dist/ui/index.html', 'dist/ui-export/index.html'].every(f => fs.existsSync(path.join(dir, f)));
+}
+
 /**
  * Runs `npm run build` once per test run even when several test files ask for it: a second build
  * would delete dist/ output while another file's CLI tests are using it. The builder holds a lock
- * directory; the others wait for it, then see the stamp and skip.
+ * directory; the others wait for it, then see the stamp and skip. Skipped with usePrebuilt().
  */
 export async function buildOnce(): Promise<void> {
+  if (usePrebuilt()) return;
   for (;;) {
     if (builtThisRun()) return;
     try {
