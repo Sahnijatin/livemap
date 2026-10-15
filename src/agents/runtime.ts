@@ -67,7 +67,7 @@ export function removeRuntime(root: string): void {
 }
 
 /** Whether `pid` is a running process (EPERM: it exists but belongs to another user). */
-export function pidAlive(pid: number): boolean {
+function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
