@@ -1,5 +1,6 @@
 // Packs LiveMap, installs the tarball into a fresh project under a temp dir whose path contains a
-// space, and checks the installed CLI: --help, init, and a running server (npm run smoke, after build).
+// space, and checks the installed CLI: --help, init, its hook commands, and a running server (npm run smoke,
+// after build). POSIX only: on Windows it would spawn npm.cmd and the hook commands without a shell.
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -88,6 +89,9 @@ async function main() {
     const quoted = /^node '((?:[^']|'\\'')*)' /.exec(command) ?? /^node "([^"]*)" /.exec(command);
     const hook = quoted?.[1].replace(/'\\''/g, "'");
     check(hook && fs.existsSync(hook), `hook command points at a missing file: ${command}`);
+    // With no LiveMap running the hook exits 0 at once; this also proves the command resolves its script.
+    const run = spawnSync(command, { shell: true, cwd: fixture, env, input: '', encoding: 'utf8', timeout: 10_000 });
+    check(run.status === 0, `hook command failed (${run.status ?? run.signal}): ${command}\n${run.stdout}${run.stderr}`);
   }
 
   const state = await serve(bin, fixture);
