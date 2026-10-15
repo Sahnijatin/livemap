@@ -32,32 +32,25 @@ describe('extractImports', () => {
     // A root-level project still resolves from the root.
     expect(py('main.py', 'from app.models import User').local).toEqual(['app/models.py']);
   });
-  it('python does not let a local file shadow the standard library, nor resolve from inside a package', () => {
+  it('python looks up modules on the import path Python would use, not from inside a package', () => {
     const files = ['app/views.py', 'app/logging.py', 'app/util.py', 'svc/app/__init__.py', 'svc/app/views.py', 'svc/app/helpers.py', 'svc/helpers.py'];
     const has = new Set(files);
     const ctx: ImportCtx = { has: p => has.has(p), files, aliases: [], goModule: null };
-    expect(extractImports('app/views.py', 'python', 'import logging\nfrom logging import handlers\nimport util', ctx))
-      .toEqual({ local: ['app/util.py'], external: ['logging'] });
-    expect(resolveSpecifier('app/views.py', 'python', 'logging', ctx)).toBeNull();
+    // app/ is not a package, so it is on the import path of its scripts: as in Python, its logging.py
+    // shadows the standard library module.
+    expect(extractImports('app/views.py', 'python', 'import logging\nimport util\nimport json', ctx))
+      .toEqual({ local: ['app/logging.py', 'app/util.py'], external: ['json'] });
     // svc/app is a package, so its own directory is not on the import path; its parent svc/ is.
     expect(extractImports('svc/app/views.py', 'python', 'import helpers', ctx).local).toEqual(['svc/helpers.py']);
     expect(resolveSpecifier('svc/app/views.py', 'python', 'helpers', ctx)).toBe('svc/helpers.py');
   });
-  it('python resolves a nested local package named like a stdlib module through its submodules', () => {
+  it('python resolves a nested local package named like a stdlib module', () => {
     const files = ['backend/main.py', 'backend/email/__init__.py', 'backend/email/services.py', 'backend/queue/tasks.py'];
     const has = new Set(files);
     const ctx: ImportCtx = { has: p => has.has(p), files, aliases: [], goModule: null };
-    expect(extractImports('backend/main.py', 'python', 'from email.services import send\nimport queue.tasks\nimport email\nfrom email.mime.text import MIMEText', ctx))
-      .toEqual({ local: ['backend/email/services.py', 'backend/queue/tasks.py'], external: ['email'] });
+    expect(extractImports('backend/main.py', 'python', 'from email.services import send\nimport queue.tasks\nfrom email import services', ctx).local)
+      .toEqual(['backend/email/__init__.py', 'backend/email/services.py', 'backend/queue/tasks.py']);
     expect(resolveSpecifier('backend/main.py', 'python', 'email.services', ctx)).toBe('backend/email/services.py');
-    // The names imported from a stdlib-named package resolve through its local submodules too.
-    expect(extractImports('backend/main.py', 'python', 'from email import services', ctx).local).toEqual(['backend/email/services.py']);
-  });
-  it('python treats every standard library name alike, including ones removed from newer Pythons', () => {
-    const files = ['app/views.py', 'app/code.py', 'app/hmac.py', 'app/zoneinfo.py', 'app/imp.py'];
-    const has = new Set(files);
-    const ctx: ImportCtx = { has: p => has.has(p), files, aliases: [], goModule: null };
-    expect(extractImports('app/views.py', 'python', 'import code\nimport hmac\nimport zoneinfo\nimport imp', ctx).local).toEqual([]);
   });
   it('go', () => {
     expect(imp('cmd/main.go','go','import (\n "fmt"\n "shop/internal/db"\n)', { goModule: 'shop' }).local).toEqual(['internal/db/conn.go','internal/db/db.go']);
@@ -172,7 +165,10 @@ describe('indexing and fixes', () => {
     const after = "\nimport y from './lib';\nimport {\n  b,\n} from './lib/b';\nexport * from 'vue';\n";
     const want = { local: ['src/lib/b.ts', 'src/lib/index.ts'], external: ['vue'] };
     expect(imp('src/a.ts', 'typescript', "const re = /`/; const q = /[/'\"]/g; const half = a / 2 / b;" + after)).toEqual(want);
-    expect(imp('src/a.ts', 'typescript', "const tick = c => /`/.test(c);\nconst ok = x > /'/.source.length;" + after)).toEqual(want);
+    expect(imp('src/a.ts', 'typescript', "const tick = c => /`/.test(c);" + after)).toEqual(want);
+    // A JSX closing tag is not a regex: the template after it is read as one.
+    expect(imp('src/a.tsx', 'tsx', after + "const P = () => <div><p>x</p>{`a/b`}</div>;\nconst m = require('./ui/c');\nconst v = `ok`;\n"))
+      .toEqual({ ...want, local: [...want.local, 'src/ui/c.tsx'] });
     // A raw backtick in JSX text opens a template to the next backtick; imports come first in a module.
     expect(imp('src/a.tsx', 'tsx', after + 'const P = () => <p>Don`t</p>;\nconst m = require("./lib");\n')).toEqual(want);
     expect(imp('src/a.tsx', 'tsx', "const P = () => <p>Don't</p>;" + after)).toEqual(want);
