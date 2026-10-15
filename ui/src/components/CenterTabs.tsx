@@ -6,14 +6,14 @@ import { LEAVING, useLeaving } from '../motion';
 import { NARROW_QUERY, useMedia } from '../media';
 import { INERT } from '../panels';
 import { Activity } from './Activity';
-import { StackView } from './StackView';
 import { RewoundBanner, Timeline } from './Timeline';
 import { ApiIcon, MapIcon, PulseIcon, SchemaIcon, StackIcon } from './icons';
 
-// Map and Schema (React Flow, ELK, framer-motion) and API load on first open, so Activity's first paint does not pay for them.
+// Map and Schema (React Flow, ELK, framer-motion), API and Stack load on first open, so Activity's first paint does not pay for them.
 const MapView = lazy(() => import('../map/MapView'));
 const SchemaView = lazy(() => import('./SchemaView'));
 const ApiView = lazy(() => import('./ApiView').then(m => ({ default: m.ApiView })));
+const StackView = lazy(() => import('./StackView').then(m => ({ default: m.StackView })));
 
 /** Placeholder cards while a lazy view loads. */
 function ViewSkeleton() {
@@ -60,7 +60,7 @@ function view(t: CenterTab, tools: HTMLDivElement | null): ReactNode {
     case 'map': return <Suspense fallback={<ViewSkeleton />}><MapView tools={tools} /></Suspense>;
     case 'schema': return <Suspense fallback={<ViewSkeleton />}><SchemaView /></Suspense>;
     case 'api': return <Suspense fallback={<ViewSkeleton />}><ApiView /></Suspense>;
-    default: return <StackView />;
+    default: return <Suspense fallback={<ViewSkeleton />}><StackView /></Suspense>;
   }
 }
 

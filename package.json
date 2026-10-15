@@ -15,7 +15,8 @@
     "test:e2e": "playwright test",
     "docs:check": "node scripts/check-docs.mjs",
     "demo": "node scripts/demo.mjs",
-    "smoke": "node scripts/smoke-pack.mjs"
+    "smoke": "node scripts/smoke-pack.mjs",
+    "budget": "node scripts/check-budget.mjs"
   },
   "dependencies": {
     "chokidar": "^4.0.3",
