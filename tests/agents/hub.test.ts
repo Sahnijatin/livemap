@@ -558,3 +558,28 @@ describe('review fixes: transcript keys', () => {
   });
 });
 
+describe('AgentHub batches', () => {
+  const raw = (sessionId: string, at: number): RawAgentEvent => ({ agent: 'claude-code', sessionId, at, type: 'message', text: `m${at}` });
+  const hints = { agent: 'claude-code' as const, cwd: ROOT, hooks: false };
+
+  it('fires one events per ingestRaw, and one per event outside it', () => {
+    const h = mk();
+    const batches: number[][] = [];
+    h.on('events', (evs: AgentEvent[]) => batches.push(evs.map(e => e.at)));
+    h.ingestRaw([raw('a', 1), raw('a', 2), raw('a', 3)], hints);
+    h.ingestHook('codex', 'UserPromptSubmit', { session_id: 'c1', cwd: ROOT, prompt: 'hi' }, 9);
+    expect(batches).toEqual([[1, 2, 3], [9]]);
+    expect(h.batching).toBe(false);
+  });
+
+  it('a nested ingestRaw keeps the outer batch open', () => {
+    const h = mk();
+    const batches: number[][] = [];
+    const open: boolean[] = [];
+    h.on('events', (evs: AgentEvent[]) => { batches.push(evs.map(e => e.at)); open.push(h.batching); });
+    h.on('event', (e: AgentEvent) => { if (e.at === 1) h.ingestRaw([raw('b', 10), raw('b', 11)], hints); });
+    h.ingestRaw([raw('a', 1), raw('a', 2)], hints);
+    expect(batches).toEqual([[10, 11], [1, 2]]);
+    expect(open).toEqual([true, false]);
+  });
+});

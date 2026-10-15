@@ -86,8 +86,8 @@ async function sessionScope(store: HistoryStore, all: Rec[], id: string, firstSe
   const first = mine[0][0];
   const last = mine[mine.length - 1][0];
   const changeIds = new Set<number>();
-  for (const [seq, , m] of all) {
-    if (seq < first) continue;
+  // Records before the first event count too: an attribution can land just ahead of the batch that caused it.
+  for (const [, , m] of all) {
     if (m.type === 'attribution' && m.attribution.sessionId === id) changeIds.add(m.changeId);
     if (m.type === 'change' && m.change.attribution?.sessionId === id) changeIds.add(m.change.id);
   }

@@ -238,6 +238,18 @@ describe('buildExport', () => {
     expect(res.events).toBe(payload.messages.length);
   });
 
+  it('with a session, keeps a change attributed just before the session\'s first batch', async () => {
+    write('a.ts', 'x\n');
+    await record([file('a.ts')], [
+      { type: 'change', change: change(1, 'a.ts'), files: [file('a.ts')], removed: [] },
+      { type: 'attribution', changeId: 1, attribution: { agent: 'claude-code', sessionId: 's1', confidence: 'exact', eventId: 3 } },
+      { type: 'agentEvents', events: [event(2, 's1'), event(3, 's1')] },
+    ]);
+    const { payload } = decode((await buildExport(root, { home, session: 's1', code: true, uiHtml: UI })).html);
+    expect(payload.initial.changes.map(c => [c.id, c.attribution?.sessionId])).toEqual([[1, 's1']]);
+    expect(plain(payload.messages).map(m => m.type)).toEqual(['agentEvents']);
+  });
+
   it('embeds a file holding a closing script tag safely', async () => {
     const evil = 'const s = "</script><script>alert(1)</script>";\n';
     write('evil.ts', evil);

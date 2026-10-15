@@ -175,6 +175,25 @@ describe('POST /hook', () => {
     expect(h.events).toHaveLength(300);
   });
 
+  it('an attribution a batch triggers is broadcast after that batch', async () => {
+    const s = await boot();
+    const c = connect(s);
+    await waitFor(() => c.msgs.length >= 1);
+    put(root, 'src/a.ts', 'export const a = 5;\n');
+    await waitFor(() => ofType(c, 'change').length >= 1);
+    expect(ofType(c, 'change')[0].change.attribution).toBeUndefined();
+    const at = Date.now();
+    hub!.ingestRaw([
+      { agent: 'claude-code', sessionId: 'cl1', at, type: 'message', text: 'Editing a' },
+      { agent: 'claude-code', sessionId: 'cl1', at, type: 'tool_start', tool: { id: 't1', name: 'Edit', label: 'Edit a.ts', paths: ['src/a.ts'] } },
+    ], { agent: 'claude-code', cwd: root, transcriptPath: '/t/cl1.jsonl', hooks: false });
+    await waitFor(() => ofType(c, 'attribution').length >= 1);
+    const types = c.msgs.map(m => m.type);
+    expect(types.indexOf('agentEvents')).toBeGreaterThan(-1);
+    expect(types.indexOf('attribution')).toBeGreaterThan(types.indexOf('agentEvents'));
+    expect(ofType(c, 'attribution')[0].attribution).toMatchObject({ sessionId: 'cl1', confidence: 'exact' });
+  });
+
   it('pausing via /api/pause makes a claude PreToolUse block and broadcasts control', async () => {
     const s = await boot();
     const c = connect(s);

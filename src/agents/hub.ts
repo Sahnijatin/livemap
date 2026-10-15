@@ -250,14 +250,20 @@ export class AgentHub extends EventEmitter {
   }
 
   ingestRaw(events: RawAgentEvent[], hints: IngestHints): void {
-    this.batch = [];
+    const outer = this.batch;
+    const batch: AgentEvent[] = [];
+    this.batch = batch;
     try {
       for (const e of events) this.record(e, hints);
     } finally {
-      const batch = this.batch;
-      this.batch = null;
+      this.batch = outer;
       if (batch.length) this.fire('events', batch);
     }
+  }
+
+  /** True while `ingestRaw` records a batch whose 'events' has not fired yet. */
+  get batching(): boolean {
+    return this.batch !== null;
   }
 
   watchClaudeTranscript(transcript: string): void {

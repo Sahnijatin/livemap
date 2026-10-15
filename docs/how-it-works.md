@@ -28,7 +28,7 @@ Dashed boxes are inputs. Everything runs on your machine; only the summarizer, w
 
 ## Server
 
-`src/server/server.ts` serves the UI and a small REST API on `127.0.0.1`, and pushes messages over a WebSocket. A client first gets `hello`, the whole project state, and then small messages: `files`, `change`, `domain`, `agentEvent`, `session`, `control`, `summary` and the like. REST covers file contents (`/api/file`), summaries, history (`/api/history/...`) and steering (`/api/flags`, `/api/pause`). Every API call and the WebSocket need the run's token; see [privacy.md](privacy.md#what-runs-where).
+`src/server/server.ts` serves the UI and a small REST API on `127.0.0.1`, and pushes messages over a WebSocket. A client first gets `hello`, the whole project state, and then small messages: `files`, `change`, `domain`, `agentEvent`, `agentEvents`, `session`, `control`, `summary` and the like. The events from one transcript read go out together as one `agentEvents` batch, so the UI updates once for them. REST covers file contents (`/api/file`), summaries, history (`/api/history/...`) and steering (`/api/flags`, `/api/pause`). Every API call and the WebSocket need the run's token; see [privacy.md](privacy.md#what-runs-where).
 
 ## History store
 
