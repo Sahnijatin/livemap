@@ -445,6 +445,14 @@ describe('buildExport grammars (#17)', () => {
     expect(g.langs.find(l => l.name === 'html')).toEqual({ name: 'html', end: '(</)(script)>' });
     expect(res.html.match(/<\/script>/g)).toHaveLength(3); // the grammars', the data's and the app script's own
   });
+
+  it('embeds no grammars, but still the code, when no exported file has a grammar', async () => {
+    await recordFiles([{ ...file('notes.txt'), lang: 'text' }]);
+    const res = await buildExport(root, { home, code: true, uiHtml: UI, grammars });
+    expect(res.html).not.toContain('livemap-grammars');
+    expect(res.files).toBe(1);
+    expect(decode(res.html).payload.code).toEqual({ 'notes.txt': 'x = 1\n' });
+  });
 });
 
 describe('the built export template (#17)', () => {

@@ -11,6 +11,7 @@ import type { ChangeSummary, FileModel } from '../../src/shared/types.js';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '../..');
 const APP = 'src/app.ts';
+const NOTES = 'notes.txt';
 const MARKER = 'embedded-code-marker';
 const T0 = Date.UTC(2026, 9, 15, 9, 0);
 
@@ -18,6 +19,8 @@ let root: string;
 let home: string;
 let out: string;
 let outNoCode: string;
+let textRoot: string;
+let outText: string;
 
 const file = (p: string, lines = 3): FileModel => ({
   path: p, lang: 'typescript', size: 60, lines, symbols: [],
@@ -56,10 +59,22 @@ test.beforeAll(async () => {
   };
   out = exportTo('replay.html');
   outNoCode = exportTo('replay-no-code.html', '--no-code');
+
+  // A project whose only file is in a language with no grammar.
+  textRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-e2e-export-text-')));
+  fs.writeFileSync(path.join(textRoot, NOTES), `plain notes\n${MARKER}\n`);
+  const notes: FileModel = { ...file(NOTES), lang: 'text' };
+  const textStore = await HistoryStore.open(textRoot, { home, now: () => (clock += 1000) });
+  await textStore.startRun({ ...emptyState(textRoot, path.basename(textRoot)), files: [notes] });
+  textStore.append({ type: 'change', change: { ...change(1, NOTES, clock), lang: 'text' }, files: [notes], removed: [] }, clock);
+  await textStore.close();
+  outText = path.join(textRoot, 'replay-text.html');
+  const r = spawnSync(process.execPath, [path.join(repo, 'dist/cli.js'), 'export', textRoot, '--out', outText], { env: { ...process.env, LIVEMAP_HOME: home }, encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`export failed: ${r.stdout}${r.stderr}`);
 });
 
 test.afterAll(() => {
-  for (const d of [root, home]) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of [root, home, textRoot]) if (d) fs.rmSync(d, { recursive: true, force: true });
 });
 
 test.use({ colorScheme: 'dark', viewport: { width: 1440, height: 900 } });
@@ -137,4 +152,22 @@ test('export: the code view highlights with the embedded grammars, and --no-code
 
   expect(errors).toEqual([]);
   console.log(`[export e2e] with code ${fs.statSync(out).size} bytes, --no-code ${fs.statSync(outNoCode).size} bytes`);
+});
+
+test('export: code with no grammar embeds none and shows as plain text', async ({ page, context }) => {
+  await context.route(/^(https?|wss?):/, r => r.abort());
+  const errors: string[] = [];
+  page.on('pageerror', e => errors.push(e.message));
+  page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+
+  await page.goto(pathToFileURL(outText).href);
+  expect(await page.locator('#livemap-grammars').count()).toBe(0);
+  await expect(page.getByRole('group', { name: 'Session timeline' }).locator('.tl-state')).toHaveText('REWOUND');
+  await page.getByRole('tree', { name: 'Files' }).locator(`[data-file="${NOTES}"]`).click();
+  const code = page.getByRole('complementary', { name: 'Inspector' }).locator('pre.code');
+  await expect(code.locator('[data-line="2"]')).toContainText(MARKER);
+  await expect(code).toContainText('plain notes');
+  expect(await code.locator('span[style*="color"]').count()).toBe(0);
+
+  expect(errors).toEqual([]);
 });
