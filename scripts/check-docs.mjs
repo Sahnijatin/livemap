@@ -116,7 +116,7 @@ function checkText(file, text) {
 
   lines.forEach((line, i) => {
     const n = i + 1;
-    if (line.includes('\\u2014')) report(file, n, 'em dash (U+2014)');
+    if (line.includes('\u2014')) report(file, n, 'em dash (U+2014)');
 
     for (const m of line.matchAll(/(?<![\w-])(--[a-z][a-z0-9-]*)/g)) {
       const flag = m[1];
@@ -158,7 +158,7 @@ function runSelfTest() {
   expect(sample('[![Shot](nowhere.png)](../LICENSE)').some(p => p.includes('missing file: nowhere.png')), 'the inner image of a linked image is checked');
   expect(sample('[guide](/docs/guide.md#command-line) and [license](/LICENSE)').length === 0, 'repo-root links resolve from the repo root');
   expect(sample('[gone](/docs/gone.md)').some(p => p.includes('missing file: /docs/gone.md')), 'a missing repo-root link is reported');
-  expect(sample('x \\u2014 y').some(p => p.includes('em dash')), 'an em dash is reported');
+  expect(sample('x \u2014 y').some(p => p.includes('em dash')), 'an em dash is reported');
   expect(sample('| `--port N` | 1 |').some(p => p.includes('--port row')), 'a --port row without the default is reported');
 
   if (failures.length) {
