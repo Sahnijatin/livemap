@@ -8,6 +8,20 @@ Thanks for helping. This page covers setup, the commands you need, where things 
 - Git.
 - For the end-to-end tests: Chromium for Playwright (`npx playwright install chromium`). A Chromium at `/opt/pw-browsers/chromium`, or at the path in `LIVEMAP_CHROMIUM`, is used instead when present.
 
+## Install from source
+
+LiveMap is not on npm yet, so to use it before then, build it from the repo:
+
+```sh
+git clone https://github.com/Sahnijatin/livemap.git
+cd livemap
+npm install
+npm run build
+npm link              # puts the livemap command on your PATH
+```
+
+Then run `livemap init` and `livemap` in the project your agent works on, as in the README. If you would rather not use `npm link`, run `node <path-to-livemap>/dist/cli.js` instead of `livemap`.
+
 ## Commands
 
 Run these from the repo root. `npm run build` installs the UI's dependencies first when they are missing or out of date.
@@ -24,6 +38,7 @@ Run these from the repo root. `npm run build` installs the UI's dependencies fir
 | `npm run typecheck` | Type-checks the engine. |
 | `npm --prefix ui run typecheck` | Type-checks the UI. |
 | `npm run build && npm run smoke` | Packs the tarball, installs it into a temp project and checks `--help`, `init` and a running server. Prints `smoke: ok`. |
+| `npm run build && npm run budget` | Checks that the main UI chunk is at most 82.29 kB gzip (the first-load budget). |
 | `npm run demo` | Builds a sample project, drives a scripted agent session and exports the demo replay. `-- --shots` also captures the README screenshots. Needs `npm run build` first. |
 | `npm run docs:check` | Checks links, anchors, em dashes and CLI flags in the docs. Add `-- --allow-missing-media` while screenshots are not generated yet. `node scripts/check-docs.mjs --self-test` checks the checker. |
 
@@ -34,6 +49,10 @@ Notes on the end-to-end suite:
 - The Map frame budget (median frame 16.7 ms or less, p95 25 ms or less while panning 500 files) is asserted only with `LIVEMAP_PERF_STRICT=1 npx playwright test tests/e2e/map.spec.ts` on a machine with a GPU. Otherwise the test logs the numbers and checks for long tasks.
 
 `node scripts/gen-big.mjs <dir> [count]` generates a large TypeScript project (5,000 files by default) for trying the Map at scale.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `main`, on Node 20. It installs both packages with `npm ci`, then runs the build, both typechecks, `npm test`, `npm --prefix ui test`, `npm run docs:check`, `npm run budget`, the end-to-end tests (with Chromium from `npx playwright install`) and `npm run smoke`. Run the same commands locally before you open a pull request. When a run fails, it uploads `test-results/` as an artifact.
 
 ## Repo layout
 
