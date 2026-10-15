@@ -8,7 +8,8 @@ import { openBrowser } from './server/open.js';
 import { AgentHub } from './agents/hub.js';
 import { Attributor } from './agents/attribution.js';
 import { GitWatcher } from './agents/git.js';
-import { livemapHome, removeRuntime, writeRuntime } from './agents/runtime.js';
+import { livemapHome, removeRuntime, runtimeFor, writeRuntime } from './agents/runtime.js';
+import { acquireLock, releaseLock } from './lock.js';
 import { HistoryStore } from './history/store.js';
 import { buildExport, codeWarning } from './export/export.js';
 import { loadSummaryConfig } from './summarize/config.js';
@@ -184,6 +185,21 @@ async function main(): Promise<void> {
   const args = parseArgs(argv);
   const root = resolveRoot(args.dir);
   const uiDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui');
+
+  // One LiveMap per project: a second one would overwrite the first's history and runtime entry.
+  let lock: ReturnType<typeof acquireLock> = { ok: true };
+  try {
+    lock = acquireLock(root);
+  } catch (e) {
+    process.stderr.write(`livemap: warning: could not take the project lock: ${(e as Error).message}\n`);
+  }
+  if (!lock.ok) {
+    const rt = runtimeFor(root);
+    const at = rt?.pid === lock.pid ? ` at http://127.0.0.1:${rt.port}` : '';
+    process.stderr.write(`LiveMap is already running for this project (pid ${lock.pid})${at}\n`);
+    process.exit(1);
+  }
+  process.on('exit', () => releaseLock(root));
 
   const model = new ProjectModel(root);
   const watcher = new Watcher(model);

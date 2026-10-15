@@ -8,6 +8,8 @@ livemap init [dir=.] [--agents claude,codex,cursor] [--remove]
 livemap export [dir=.] [--session ID] [--no-code] [--out FILE]
 ```
 
+One LiveMap runs per project. Starting a second one on the same folder exits with "LiveMap is already running for this project (pid N) at http://127.0.0.1:PORT"; use that one or stop it first. The lock is a file in `~/.livemap/locks/` (or under `LIVEMAP_HOME`), and a lock left by a process that is no longer running is replaced.
+
 ## Using LiveMap
 
 - **Tabs.** Activity is the live feed of prompts, messages and change cards. Map draws every code file as a card inside its folder's region, colored by layer and linked by imports. Schema, API and Stack show the tables, routes and technologies LiveMap found. Tab badges count what each view holds.
