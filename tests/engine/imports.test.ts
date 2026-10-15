@@ -40,9 +40,23 @@ describe('extractImports', () => {
     // shadows the standard library module.
     expect(extractImports('app/views.py', 'python', 'import logging\nimport util\nimport json', ctx))
       .toEqual({ local: ['app/logging.py', 'app/util.py'], external: ['json'] });
+    // Modules Python loads before searching any directory are never a project file.
+    const pre = ['app/views.py', 'app/time.py', 'app/io.py', 'app/os.py'];
+    const preHas = new Set(pre);
+    expect(extractImports('app/views.py', 'python', 'import time\nimport io\nfrom os import path', { has: p => preHas.has(p), files: pre, aliases: [], goModule: null }))
+      .toEqual({ local: [], external: ['os', 'time', 'io'] });
     // svc/app is a package, so its own directory is not on the import path; its parent svc/ is.
     expect(extractImports('svc/app/views.py', 'python', 'import helpers', ctx).local).toEqual(['svc/helpers.py']);
     expect(resolveSpecifier('svc/app/views.py', 'python', 'helpers', ctx)).toBe('svc/helpers.py');
+  });
+  it('python lets only the importing script\'s own directory shadow a standard library module', () => {
+    const files = ['app/logging.py', 'app/sub/x.py', 'tools/build.py', 'src/types.py', 'app/math.py', 'app/atexit.py', 'app/v.py'];
+    const has = new Set(files);
+    const ctx: ImportCtx = { has: p => has.has(p), files, aliases: [], goModule: null };
+    expect(extractImports('app/sub/x.py', 'python', 'import logging', ctx)).toEqual({ local: [], external: ['logging'] });
+    expect(extractImports('tools/build.py', 'python', 'import types', ctx)).toEqual({ local: [], external: ['types'] });
+    // math is an extension module on most builds, so a sibling math.py wins; atexit is built in.
+    expect(extractImports('app/v.py', 'python', 'import math\nimport atexit', ctx)).toEqual({ local: ['app/math.py'], external: ['atexit'] });
   });
   it('python resolves a nested local package named like a stdlib module', () => {
     const files = ['backend/main.py', 'backend/email/__init__.py', 'backend/email/services.py', 'backend/queue/tasks.py'];
@@ -51,6 +65,11 @@ describe('extractImports', () => {
     expect(extractImports('backend/main.py', 'python', 'from email.services import send\nimport queue.tasks\nfrom email import services', ctx).local)
       .toEqual(['backend/email/__init__.py', 'backend/email/services.py', 'backend/queue/tasks.py']);
     expect(resolveSpecifier('backend/main.py', 'python', 'email.services', ctx)).toBe('backend/email/services.py');
+    // From inside a package (a Django app), a dotted path into the project's email package still resolves.
+    const dj = ['backend/manage.py', 'backend/email/__init__.py', 'backend/email/services.py', 'backend/users/__init__.py', 'backend/users/views.py'];
+    const djHas = new Set(dj);
+    expect(extractImports('backend/users/views.py', 'python', 'from email.services import send\nimport email', { has: p => djHas.has(p), files: dj, aliases: [], goModule: null }))
+      .toEqual({ local: ['backend/email/services.py'], external: ['email'] });
   });
   it('go', () => {
     expect(imp('cmd/main.go','go','import (\n "fmt"\n "shop/internal/db"\n)', { goModule: 'shop' }).local).toEqual(['internal/db/conn.go','internal/db/db.go']);
@@ -165,7 +184,10 @@ describe('indexing and fixes', () => {
     const after = "\nimport y from './lib';\nimport {\n  b,\n} from './lib/b';\nexport * from 'vue';\n";
     const want = { local: ['src/lib/b.ts', 'src/lib/index.ts'], external: ['vue'] };
     expect(imp('src/a.ts', 'typescript', "const re = /`/; const q = /[/'\"]/g; const half = a / 2 / b;" + after)).toEqual(want);
-    expect(imp('src/a.ts', 'typescript', "const tick = c => /`/.test(c);" + after)).toEqual(want);
+    expect(imp('src/a.ts', 'typescript', "const tick = c => /`/.test(c);\nconst ok = x > /`/.source.length;" + after)).toEqual(want);
+    // Right after a JSX tag, `/` is text, not a regex: the template after it is read as one.
+    expect(imp('src/a.tsx', 'tsx', after + "const P = () => <span>/`x`</span>;\nconst m = require('./ui/c');\n"))
+      .toEqual({ ...want, local: [...want.local, 'src/ui/c.tsx'] });
     // A JSX closing tag is not a regex: the template after it is read as one.
     expect(imp('src/a.tsx', 'tsx', after + "const P = () => <div><p>x</p>{`a/b`}</div>;\nconst m = require('./ui/c');\nconst v = `ok`;\n"))
       .toEqual({ ...want, local: [...want.local, 'src/ui/c.tsx'] });

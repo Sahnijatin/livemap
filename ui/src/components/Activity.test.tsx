@@ -172,6 +172,26 @@ describe('Activity', () => {
     expect(host.querySelectorAll('.typing')).toHaveLength(1);
   });
 
+  it('a reconnect to the same LiveMap run keeps the feed\'s open rows', () => {
+    const events = [event({ id: 1, at: T, sessionId: 'r1', type: 'prompt', text: 'First run' }), event({ id: 2, at: T + 1, sessionId: 'r1', type: 'thinking', text: 'A thought' })];
+    const hello = (evs: AgentEvent[]) => useStore.getState().apply({
+      type: 'hello', root: '/p/shop', name: 'shop', files: [], changes: [], usedBy: [], domain: emptyDomain(), indexing: false,
+      events: evs, sessions: [session({ id: 'r1', status: 'working', startedAt: T })], control: { paused: false, flags: [] },
+    });
+    hello(events);
+    act(() => root.render(<Activity />));
+    act(() => (host.querySelector('.f-think button') as HTMLElement).click());
+    expect(host.querySelector('.f-think.open')).not.toBeNull();
+    const runs = useStore.getState().hellos;
+    // The socket drops and the same run sends its hello again, with one more event.
+    act(() => hello([...events, event({ id: 3, at: T + 2, sessionId: 'r1', type: 'message', text: 'More' })]));
+    expect(host.querySelector('.f-think.open')).not.toBeNull();
+    expect(useStore.getState().hellos).toBe(runs);
+    // A new run: id 1 now names another event.
+    act(() => hello([event({ id: 1, at: T + 50, sessionId: 'r2', type: 'prompt', text: 'New run' })]));
+    expect(useStore.getState().hellos).toBe(runs + 1);
+  });
+
   it('computes hero counters from change facts', () => {
     mount();
     const stats = [...host.querySelectorAll('.hero .stat')].map(s => s.textContent);

@@ -200,9 +200,9 @@ export async function walk(
 
 /**
  * Variable names only; values (including multi-line quoted ones) are never returned. A multi-line
- * value ends at the first line with its closing quote, which must be followed by nothing but a
- * comment; otherwise the quote was never closed (`A="x` then `B="y"`) and the lines after the key
- * are read as keys again.
+ * value ends at the first line with its closing quote, whatever follows it, so no line inside a value
+ * is ever read as a key. Only when that quote opens the next assignment (`A="x` then `B="y"`) was the
+ * quote never closed, and the lines after the key are read as keys again.
  */
 export function envKeys(src: string): string[] {
   const keys: string[] = [];
@@ -226,10 +226,22 @@ export function envKeys(src: string): string[] {
     const q = rest[0];
     if ((q === '"' || q === "'" || q === '`') && closeIndex(rest, 1, q) < 0) {
       const end = nextWith(q, i + 1);
-      if (end >= 0 && /^\s*(#.*)?$/.test(lines[end].slice(closeIndex(lines[end], 0, q) + 1))) i = end;
+      if (end >= 0 && !opensAssignment(lines[end], q)) i = end;
     }
   }
   return keys;
+}
+
+/**
+ * Whether `line` is the next assignment (`B="y"`, `URL=http://x?a="b"`, `B="y`) rather than the line that ends
+ * the open value (`two=3'`, `}" extra`, a base64 `abc=="` or `Zm9v="`): it starts `KEY=` and its quotes either
+ * balance or open right after the `=`, and it is not just `KEY=` and the quote.
+ */
+function opensAssignment(line: string, q: string): boolean {
+  const m = /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_.-]*\s*=(?!=)\s*/.exec(line);
+  if (!m || line.slice(m[0].length).trim() === q) return false;
+  const quotes = line.split(q).length - 1;
+  return quotes % 2 === 0 || line[m[0].length] === q;
 }
 
 function closeIndex(line: string, from: number, q: string): number {

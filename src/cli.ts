@@ -9,7 +9,7 @@ import { AgentHub } from './agents/hub.js';
 import { Attributor } from './agents/attribution.js';
 import { GitWatcher } from './agents/git.js';
 import { livemapHome, removeRuntime, runtimeFor, writeRuntime } from './agents/runtime.js';
-import { acquireLock, LockBusyError, releaseLock, setLockPort } from './lock.js';
+import { acquireLock, LockBusyError, lockId, releaseLock, setLockPort } from './lock.js';
 import { HistoryStore } from './history/store.js';
 import { buildExport, codeWarning } from './export/export.js';
 import { loadSummaryConfig } from './summarize/config.js';
@@ -194,21 +194,23 @@ async function main(): Promise<void> {
 
   let server: Awaited<ReturnType<typeof startServer>>;
   try {
-    server = await startServer({ model, watcher, port: args.port, uiDir, hub, attributor, history, summarizer, warn: m => process.stderr.write(`livemap: warning: ${m}\n`) });
+    server = await startServer({ model, watcher, port: args.port, uiDir, hub, attributor, history, summarizer, lockId: () => lockId(root), warn: m => process.stderr.write(`livemap: warning: ${m}\n`) });
   } catch (e) {
     fail(`could not start server: ${(e as Error).message}`);
   }
   // The port lets a later start tell this run from an unrelated process that reuses its pid after a crash.
   if (locked) {
     try {
-      if (!setLockPort(root, server.port)) {
-        // Another start replaced the lock meanwhile: it owns this project, so leave its runtime entry alone.
+      const state = setLockPort(root, server.port);
+      if (state !== 'held') {
+        // Another start holds the lock now, or it cannot be read: leave the runtime entry to its owner.
         locked = false;
-        process.stderr.write('livemap: warning: another LiveMap took over the project lock; agent hooks may not reach this run\n');
+        process.stderr.write(state === 'lost'
+          ? 'livemap: warning: another LiveMap took over the project lock; agent hooks may not reach this run\n'
+          : 'livemap: warning: could not read the project lock; agent hooks may not reach this run\n');
       }
     } catch (e) {
-      // Ownership is unknown, so do not take over a runtime entry another LiveMap may own.
-      locked = false;
+      // The lock is still this run's; only its port is unrecorded, so a later start relies on its age.
       process.stderr.write(`livemap: warning: could not record the port in the project lock: ${(e as Error).message}\n`);
     }
   }

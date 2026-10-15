@@ -584,6 +584,20 @@ describe('history and rewind', () => {
     expect(useStore.getState().rewound?.seq).toBe(6);
   });
 
+  it('in a replay, Back to live drops a seek requested before it, whichever arrives first', async () => {
+    const s = useStore.getState();
+    s.apply({ ...hello(), history: status, seq: 9 });
+    const { type: _t, ...state } = past();
+    s.rewind(state);
+    useStore.setState({ replay: true });
+    setHistorySource({ ...restHistorySource, stateAt: async () => ({ ...state, seq: 9 }) } as unknown as HistorySource);
+    // A seek captured the generation when it was requested, as the Timeline does.
+    const seekGen = liveGeneration();
+    await useStore.getState().backToLive();
+    expect(useStore.getState().rewound?.seq).toBe(9);
+    expect(liveGeneration()).not.toBe(seekGen);
+  });
+
   it('Play that cannot load its first state shows an error toast', async () => {
     const s = useStore.getState();
     s.apply({ ...hello(), history: status, seq: 9 });

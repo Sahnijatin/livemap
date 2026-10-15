@@ -126,6 +126,13 @@ describe('deps analyzer', () => {
     ]);
   });
 
+  it('reads only dependency configurations in Gradle, not other words before an "a:b" string', () => {
+    const src = "dependencies {\n  println \"stage:deploy\"\n  mainClassName 'com.app:Main'\n  archivesBaseName \"lib:core\"\n  debugImplementation 'com.squareup:leak:2.0'\n  kaptTest(\"com.google:dagger:2.5\")\n  coreLibraryDesugaring 'com.android:desugar:2.0'\n}\n";
+    expect(run('build.gradle', src)?.deps.map(d => d.name)).toEqual(['com.squareup:leak', 'com.google:dagger', 'com.android:desugar']);
+    const plugins = "dependencies {\n  shadow 'com.foo:bar:1.0'\n  antlr \"org.antlr:antlr4:4.13.1\"\n  errorprone(\"com.google.errorprone:error_prone_core:2.0\")\n  jmh 'org.openjdk.jmh:jmh-core:1.37'\n  provided 'javax:servlet-api:3.1'\n}\n";
+    expect(run('build.gradle', plugins)?.deps.map(d => d.name)).toEqual(['com.foo:bar', 'org.antlr:antlr4', 'com.google.errorprone:error_prone_core', 'org.openjdk.jmh:jmh-core', 'javax:servlet-api']);
+  });
+
   it('resolves Gradle catalog accessors against libs.versions.toml, bundles included', () => {
     const catalog = parseVersionCatalog(read('gradle/libs.versions.toml'));
     expect(catalog.get('androidx.room.runtime')).toEqual([{ name: 'androidx.room:room-runtime', version: '2.6.1' }]);

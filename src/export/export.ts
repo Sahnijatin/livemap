@@ -10,7 +10,8 @@ import { EXPORT_DATA_ID, EXPORT_GRAMMARS_ID, type ExportGrammars, type ExportPay
 import { grammarId, HIGHLIGHTED } from '../shared/grammars.js';
 import type { ServerMessage } from '../shared/protocol.js';
 import { emptyState, type ProjectState } from '../shared/state.js';
-import type { AgentEvent, AgentSession, Attribution, ChangeSummary } from '../shared/types.js';
+import type { SummariesState } from '../shared/summaries.js';
+import type { AgentEvent, AgentSession, Attribution, ChangeSummary, ControlState } from '../shared/types.js';
 
 const gzip = promisify(zlib.gzip);
 
@@ -132,48 +133,90 @@ async function sessionScope(store: HistoryStore, all: Rec[], id: string, firstSe
 export const CODE_REMOVED = '[code removed]';
 
 /**
- * Agent text with code replaced. A fence of three or more backticks or tildes (also one opened mid-line) runs
- * to a closing fence of the same character at least as long, so an inner shorter fence does not end it, and an
- * unclosed one runs to the end. An inline span ends at a backtick run of its own length; an unclosed one (as in
- * a truncated title) runs to the end of its line. Indented code blocks are not recognized.
+ * Agent text with code replaced, erring on the side of removing. A fence of three or more backticks or tildes
+ * (also one opened mid-line) runs to a line holding only a closing fence of the same character at least as
+ * long, so an inner shorter fence or a "```python" line does not end it, and an unclosed one runs to the end.
+ * An inline span ends at the next backtick run of its own length, on its line or a later one of the same
+ * paragraph (a hard-wrapped prompt); an unclosed one (as in a truncated title) runs to the end of its line.
+ * Indented code blocks are not recognized.
  */
 export function stripCode(text: string): string {
   const out: string[] = [];
+  let prose: string[] = [];
+  const flush = () => {
+    if (prose.length) out.push(inlineCode(prose.join('\n')));
+    prose = [];
+  };
   let fence: string | null = null;
   for (const line of text.split('\n')) {
-    let rest = line;
     if (fence !== null) {
-      const close = /^\s*(`{3,}|~{3,})/.exec(line);
-      if (!close || close[1][0] !== fence[0] || close[1].length < fence.length) continue;
-      fence = null;
-      rest = line.slice(close[0].length);
-      if (rest.trim() === '') continue;
+      const close = /^\s*(`{3,}|~{3,})\s*$/.exec(line);
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
+      continue;
     }
-    const open = /^\s*(~{3,})/.exec(rest);
-    if (open) { fence = open[1]; out.push(CODE_REMOVED); continue; }
-    const r = inlineCode(rest);
-    fence = r.fence;
-    out.push(r.text);
+    // A line starting with a fence opens a block, unless a backtick run closes on it (```npm test``` fails).
+    const open = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (open && (open[1][0] === '~' || !new RegExp(`(?<!\`)${open[1]}(?!\`)`).test(line.slice(open[0].length)))) {
+      flush();
+      fence = open[1];
+      out.push(CODE_REMOVED);
+      continue;
+    }
+    // A run of three or more backticks later on the line that never closes opens a fence there.
+    const mid = unclosedFence(line);
+    if (mid) {
+      prose.push(line.slice(0, mid.at));
+      flush();
+      out[out.length - 1] += CODE_REMOVED;
+      fence = mid.run;
+      continue;
+    }
+    prose.push(line);
   }
+  flush();
   return out.join('\n');
 }
 
-/** One line with its backtick spans replaced; `fence` is set when a run of three or more opens a block. */
-function inlineCode(line: string): { text: string; fence: string | null } {
-  let text = '';
+/**
+ * Where a run of three or more backticks opens a block on `line`: runs are paired left to right as inline
+ * spans (a run closes at the next run of its own length), and the first one left without a match opens it.
+ */
+function unclosedFence(line: string): { at: number; run: string } | null {
+  const runs = /`+/g;
+  for (let m = runs.exec(line); m; m = runs.exec(line)) {
+    const run = m[0];
+    const close = new RegExp(`(?<!\`)${run}(?!\`)`, 'g');
+    close.lastIndex = m.index + run.length;
+    const c = close.exec(line);
+    if (c) { runs.lastIndex = c.index + run.length; continue; }
+    return run.length >= 3 ? { at: m.index, run } : null;
+  }
+  return null;
+}
+
+/** Text with its backtick spans replaced, paragraph by paragraph: a span may cross lines but not a blank one. */
+function inlineCode(text: string): string {
+  return text.split(/(\n[ \t]*\n)/).map((part, i) => (i % 2 ? part : inlineSpans(part))).join('');
+}
+
+/** One paragraph with its backtick spans replaced; an unclosed span runs to its line's end. */
+function inlineSpans(text: string): string {
+  let out = '';
   let i = 0;
   for (;;) {
-    const start = line.indexOf('`', i);
-    if (start < 0) return { text: text + line.slice(i), fence: null };
+    const start = text.indexOf('`', i);
+    if (start < 0) return out + text.slice(i);
     let n = start;
-    while (line[n] === '`') n++;
-    const run = line.slice(start, n);
+    while (text[n] === '`') n++;
+    const run = text.slice(start, n);
     const close = new RegExp(`(?<!\`)${run}(?!\`)`, 'g');
     close.lastIndex = n;
-    const m = close.exec(line);
-    text += line.slice(i, start) + CODE_REMOVED;
-    if (!m) return { text, fence: run.length >= 3 ? run : null };
-    i = m.index + run.length;
+    const m = close.exec(text);
+    out += text.slice(i, start) + CODE_REMOVED;
+    if (m) { i = m.index + run.length; continue; }
+    const eol = text.indexOf('\n', n);
+    if (eol < 0) return out;
+    i = eol;
   }
 }
 
@@ -188,13 +231,18 @@ function shellLabel(label: string): string {
 /**
  * `--no-code`: the code map is not all of the source an export can carry. Diff hunks in change cards,
  * tool inputs and outputs in agent events (an Edit's old and new text), shell command lines in tool
- * labels, and code in prompts, messages, thinking, session titles and attribution intents are code
- * too. Symbol names and signatures stay: they are the structure the Map and the cards show.
+ * labels, and code in prompts, messages, thinking, commit messages, session titles, attribution intents,
+ * flag notes and AI summaries are code too. Symbol names and signatures stay: they are the structure the
+ * Map and the cards show.
  */
 function withoutCode(initial: ProjectState, messages: Rec[]): { initial: ProjectState; messages: Rec[] } {
   const attribution = (a: Attribution): Attribution => (a.intent === undefined ? a : { ...a, intent: stripCode(a.intent) });
-  const change = (c: ChangeSummary): ChangeSummary => ({ ...c, hunks: [], ...(c.attribution ? { attribution: attribution(c.attribution) } : {}) });
-  const prose = new Set<AgentEvent['type']>(['prompt', 'message', 'thinking']);
+  const change = (c: ChangeSummary): ChangeSummary => ({
+    ...c, hunks: [],
+    ...(c.attribution ? { attribution: attribution(c.attribution) } : {}),
+    ...(c.summary !== undefined ? { summary: stripCode(c.summary) } : {}),
+  });
+  const prose = new Set<AgentEvent['type']>(['prompt', 'message', 'thinking', 'commit']);
   const event = (e: AgentEvent): AgentEvent => {
     const out = e.text !== undefined && prose.has(e.type) ? { ...e, text: stripCode(e.text) } : e;
     if (!out.tool) return out;
@@ -202,8 +250,15 @@ function withoutCode(initial: ProjectState, messages: Rec[]): { initial: Project
     return { ...out, tool: { ...tool, label: toolFamily(tool.name) === 'shell' ? shellLabel(tool.label) : stripCode(tool.label) } };
   };
   const session = (s: AgentSession): AgentSession => ({ ...s, title: stripCode(s.title) });
-  const state = <T extends Pick<ProjectState, 'changes' | 'events' | 'sessions'>>(s: T): T =>
-    ({ ...s, changes: s.changes.map(change), events: s.events.map(event), sessions: s.sessions.map(session) });
+  const control = (c: ControlState): ControlState => ({ ...c, flags: c.flags.map(f => ({ ...f, note: stripCode(f.note) })) });
+  const summaries = (x: SummariesState): SummariesState => ({
+    ...x, files: Object.fromEntries(Object.entries(x.files).map(([p, f]) => [p, { ...f, summary: stripCode(f.summary) }])),
+  });
+  const state = <T extends Pick<ProjectState, 'changes' | 'events' | 'sessions'> & { control?: ControlState; summaries?: SummariesState }>(s: T): T => ({
+    ...s, changes: s.changes.map(change), events: s.events.map(event), sessions: s.sessions.map(session),
+    ...(s.control ? { control: control(s.control) } : {}),
+    ...(s.summaries ? { summaries: summaries(s.summaries) } : {}),
+  });
   const msg = (m: ServerMessage): ServerMessage => {
     switch (m.type) {
       case 'hello': return state(m);
@@ -212,6 +267,8 @@ function withoutCode(initial: ProjectState, messages: Rec[]): { initial: Project
       case 'agentEvents': return { ...m, events: m.events.map(event) };
       case 'attribution': return { ...m, attribution: attribution(m.attribution) };
       case 'session': return { ...m, session: session(m.session) };
+      case 'control': return { ...m, control: control(m.control) };
+      case 'summary': case 'fileSummary': return { ...m, summary: stripCode(m.summary) };
       default: return m;
     }
   };
