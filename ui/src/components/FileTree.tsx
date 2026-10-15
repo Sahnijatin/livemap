@@ -9,8 +9,8 @@ import { LAYERS } from '../layers';
 import { latestChange, type SymbolTag } from '../changes';
 import { useLiveRecent } from '../recent';
 import {
-  BIG_PROJECT, DIR_BATCH, ancestors, buildTree, cachedTags, chainOpen, closedAbove, dirActivity, loadTreeState, moreKey, saveTreeState,
-  visibleItems, type Activity, type Item, type Row,
+  BIG_PROJECT, DIR_BATCH, ancestors, buildTree, cachedTags, chainOpen, closedAbove, dirActivity, dirKey, loadTreeState, moreKey,
+  saveTreeState, visibleItems, type Activity, type DirState, type Item, type Row,
 } from '../treeModel';
 import { FileRow, MidName } from './FileRow';
 import { CollapseButton } from './Dock';
@@ -26,12 +26,16 @@ const USER_SCROLL_HOLD_MS = 5000;
 const SELF_SCROLL_MS = 900;
 /** Typed letters within this long of each other search as one prefix. */
 const TYPEAHEAD_MS = 700;
+/** Folder choices are saved this long after the last change (and right away when the page is hidden). */
+const SAVE_MS = 300;
 const EMPTY_TAGS = new Map<string, SymbolTag>();
-const NO_LIMITS: Record<string, number> = {};
-const NO_CLOSED: Record<string, true> = {};
-/** Folder state objects read from storage, which need no write back. */
+const NO_LIMITS: ReadonlyMap<string, number> = new Map();
+const NO_CLOSED: ReadonlySet<string> = new Set();
+/** Folder state read from storage, which needs no write back. */
 const fromStorage = new WeakSet<object>();
-const loadDirs = (root: string): Record<string, boolean> => {
+/** Own keys only: a file named `constructor` is not a stored entry. */
+const own = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
+const loadDirs = (root: string): DirState => {
   const open = loadTreeState(root);
   fromStorage.add(open);
   return open;
@@ -69,38 +73,62 @@ export function FileTree() {
   const born = useRef(new Map<string, number>());
   const typed = useRef({ text: '', at: 0 });
   const [focused, setFocused] = useState<string | null>(null);
-  // Open and closed folders by full path, remembered per project. Folders without an entry follow the defaults.
+  // Folders the user opened or closed, by full path, remembered per project. Folders without an entry follow the defaults.
   const [dirs, setDirs] = useState(() => ({ root: projectRoot, open: loadDirs(projectRoot) }));
-  if (dirs.root !== projectRoot) setDirs({ root: projectRoot, open: loadDirs(projectRoot) });
+  /** Folders opened to reveal a file (the agent's, or one selected elsewhere): open for this session only, never saved. */
+  const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set());
+  if (dirs.root !== projectRoot) {
+    setDirs({ root: projectRoot, open: loadDirs(projectRoot) });
+    setRevealed(new Set());
+  }
   /** Folders closed while a filter is on; forgotten with the filter. */
-  const [filterClosed, setFilterClosed] = useState<{ q: string; byDir: Record<string, true> }>({ q: '', byDir: {} });
+  const [filterClosed, setFilterClosed] = useState<{ q: string; dirs: ReadonlySet<string> }>({ q: '', dirs: NO_CLOSED });
   const reduced = usePrefersReducedMotion();
   /** Folders mid-animation: a folding one keeps its rows (inert) until its fold ends. */
-  const [moving, setMoving] = useState<Record<string, { kind: 'fold' | 'unfold'; until: number }>>({});
-  const [limits, setLimits] = useState<{ q: string; byDir: Record<string, number> }>({ q: '', byDir: {} });
+  const [moving, setMoving] = useState<ReadonlyMap<string, { kind: 'fold' | 'unfold'; until: number }>>(() => new Map());
+  const [limits, setLimits] = useState<{ q: string; byDir: ReadonlyMap<string, number> }>({ q: '', byDir: NO_LIMITS });
 
   const q = filter.trim().toLowerCase();
   const dirLimit = limits.q === q ? limits.byDir : NO_LIMITS;
-  const closedNow = filterClosed.q === q ? filterClosed.byDir : NO_CLOSED;
+  const closedNow = filterClosed.q === q ? filterClosed.dirs : NO_CLOSED;
   const { root: tree, layers } = useMemo(() => buildTree(files, q), [files, q]);
   const fileCount = useMemo(() => Object.keys(files).length, [files]);
   const big = fileCount >= BIG_PROJECT;
   const state = dirs.open;
 
+  const pending = useRef<{ root: string; open: DirState } | null>(null);
+  const flush = useCallback(() => {
+    const p = pending.current;
+    pending.current = null;
+    if (p) saveTreeState(p.root, p.open);
+  }, []);
   useEffect(() => {
-    if (fromStorage.has(dirs.open)) return;
-    saveTreeState(dirs.root, dirs.open);
-  }, [dirs]);
-  const latestBig = useRef(big);
-  latestBig.current = big;
-  /** Opens the closed folders above `path` (the user's state, so it is remembered). */
+    if (fromStorage.has(dirs.open)) { flush(); return; } // another project loaded: save the last one's choices now
+    pending.current = { root: dirs.root, open: dirs.open };
+    const t = window.setTimeout(flush, SAVE_MS);
+    return () => window.clearTimeout(t);
+  }, [dirs, flush]);
+  useEffect(() => {
+    window.addEventListener('pagehide', flush);
+    return () => { window.removeEventListener('pagehide', flush); flush(); };
+  }, [flush]);
+  const latest = useRef({ state, big });
+  latest.current = { state, big };
+  /** Shows `path`: opens the closed folders above it for this session, and any closed during the current filter. */
   const openAbove = useCallback((path: string) => {
-    setDirs(d => {
-      const need = closedAbove(path, d.open, latestBig.current);
-      if (!need.length) return d;
-      const open = { ...d.open };
-      for (const a of need) open[a] = true;
-      return { root: d.root, open };
+    setRevealed(r => {
+      const need = closedAbove(path, latest.current.state, latest.current.big, r);
+      if (!need.length) return r;
+      const next = new Set(r);
+      for (const a of need) next.add(a);
+      return next;
+    });
+    setFilterClosed(f => {
+      const above = ancestors(path).filter(a => f.dirs.has(a));
+      if (!above.length) return f;
+      const next = new Set(f.dirs);
+      for (const a of above) next.delete(a);
+      return { q: f.q, dirs: next };
     });
   }, []);
 
@@ -108,9 +136,9 @@ export function FileTree() {
   const selectedDirs = useMemo(() => new Set(selected === null ? [] : ancestors(selected)), [selected]);
   const dirOpen = useCallback((paths: string[]): boolean => {
     // A filter shows every folder above a match, except those closed during it.
-    if (q) return !closedNow[paths[paths.length - 1]];
-    return chainOpen(paths, state, big);
-  }, [q, closedNow, state, big]);
+    if (q) return !closedNow.has(paths[paths.length - 1]);
+    return chainOpen(paths, state, big, revealed);
+  }, [q, closedNow, state, big, revealed]);
 
   // Auto-reveal: open the target's folders, then scroll its row into view. Never selects or focuses.
   // During the hold after a user scroll the latest target waits, and is revealed when the hold ends.
@@ -131,7 +159,7 @@ export function FileTree() {
     openAbove(selected);
     setReveal(selected);
   }, [selected, openAbove]);
-  const rowOpen = useCallback((row: Row) => row.forceOpen || !!expanded[row.file.path], [expanded]);
+  const rowOpen = useCallback((row: Row) => row.forceOpen || (own(expanded, row.file.path) && expanded[row.file.path]), [expanded]);
   const pins = useMemo(() => {
     const out = Object.keys(live);
     if (selected !== null) out.push(selected);
@@ -142,25 +170,35 @@ export function FileTree() {
     () => visibleItems(tree, dirOpen, rowOpen, dirLimit, pins),
     [tree, dirOpen, rowOpen, dirLimit, pins],
   );
-  const dirItems = useMemo(() => {
-    const m = new Map<string, Extract<Item, { kind: 'dir' }>>();
-    for (const it of openItems) if (it.kind === 'dir') m.set(it.node.path, it);
-    return m;
+  /** Folder rows by path, and lowercase row names by nav key for typeahead. */
+  const { dirItems, labels } = useMemo(() => {
+    const byDir = new Map<string, Extract<Item, { kind: 'dir' }>>();
+    const names = new Map<string, string>();
+    for (const it of openItems) {
+      if (it.kind === 'dir') {
+        byDir.set(it.node.path, it);
+        names.set(dirKey(it.node.path), it.label.toLowerCase());
+      } else if (it.kind === 'file') names.set(it.row.file.path, it.row.name.toLowerCase());
+    }
+    return { dirItems: byDir, labels: names };
   }, [openItems]);
   // Rows of folding folders render until the fold ends, but are never part of keyboard navigation.
-  const folding = useMemo(() => Object.keys(moving).filter(d => moving[d].kind === 'fold' && dirItems.get(d)?.open === false), [moving, dirItems]);
+  const folding = useMemo(() => {
+    const f = new Set<string>();
+    for (const [d, m] of moving) if (m.kind === 'fold' && dirItems.get(d)?.open === false) f.add(d);
+    return f;
+  }, [moving, dirItems]);
   const items = useMemo(() => {
-    if (!folding.length) return openItems;
-    const f = new Set(folding);
-    return visibleItems(tree, paths => dirOpen(paths) || f.has(paths[paths.length - 1]), rowOpen, dirLimit, pins).items;
+    if (!folding.size) return openItems;
+    return visibleItems(tree, paths => dirOpen(paths) || folding.has(paths[paths.length - 1]), rowOpen, dirLimit, pins).items;
   }, [openItems, folding, tree, dirOpen, rowOpen, dirLimit, pins]);
   useEffect(() => {
-    const ends = Object.values(moving).map(m => m.until);
-    if (!ends.length) return;
+    if (!moving.size) return;
+    const soonest = Math.min(...[...moving.values()].map(m => m.until));
     const t = window.setTimeout(() => {
       const now = Date.now();
-      setMoving(m => Object.fromEntries(Object.entries(m).filter(([, v]) => v.until > now)));
-    }, Math.max(0, Math.min(...ends) - Date.now()));
+      setMoving(m => new Map([...m].filter(([, v]) => v.until > now)));
+    }, Math.max(0, soonest - Date.now()));
     return () => window.clearTimeout(t);
   }, [moving]);
   useEffect(() => {
@@ -182,7 +220,7 @@ export function FileTree() {
     return () => el.removeEventListener('scrollend', end);
   }, []);
   const showMore = (dir: string, shown: number) =>
-    setLimits(l => ({ q, byDir: { ...(l.q === q ? l.byDir : {}), [dir]: shown + DIR_BATCH } }));
+    setLimits(l => ({ q, byDir: new Map(l.q === q ? l.byDir : NO_LIMITS).set(dir, shown + DIR_BATCH) }));
   const navSet = useMemo(() => new Set(navKeys), [navKeys]);
   const wanted = focused ?? selected;
   const active = wanted !== null && navSet.has(wanted) ? wanted : navKeys[0] ?? null;
@@ -190,7 +228,7 @@ export function FileTree() {
   const onSelect = useCallback((path: string) => {
     const s = useStore.getState();
     s.select(path);
-    if (!s.expanded[path]) s.toggle(path);
+    if (!(own(s.expanded, path) && s.expanded[path])) s.toggle(path);
     afterSelect();
   }, []);
   const onToggle = useCallback((path: string) => useStore.getState().toggle(path), []);
@@ -205,30 +243,22 @@ export function FileTree() {
     const { open, chain } = item;
     if (q) {
       setFilterClosed(f => {
-        const byDir = { ...(f.q === q ? f.byDir : {}) };
-        if (open) byDir[dir] = true; else delete byDir[dir];
-        return { q, byDir };
+        const next = new Set(f.q === q ? f.dirs : NO_CLOSED);
+        if (open) next.add(dir); else next.delete(dir);
+        return { q, dirs: next };
       });
     } else {
       // A chain opens and closes as a whole, so each of its folders keeps the state when the chain splits.
       setDirs(d => {
-        const next = { ...d.open };
-        for (const p of chain) { delete next[p]; next[p] = !open; } // re-added last: the newest choices are kept longest
+        const next = new Map(d.open);
+        for (const p of chain) { next.delete(p); next.set(p, !open); } // re-added last: the newest choices are kept longest
         return { root: d.root, open: next };
       });
+      // The user's choice replaces a reveal.
+      setRevealed(r => (chain.some(p => r.has(p)) ? new Set([...r].filter(p => !chain.includes(p))) : r));
     }
-    if (!reduced) setMoving(m => ({ ...m, [dir]: { kind: open ? 'fold' : 'unfold', until: Date.now() + FOLD_MS } }));
+    if (!reduced) setMoving(m => new Map(m).set(dir, { kind: open ? 'fold' : 'unfold', until: Date.now() + FOLD_MS }));
   };
-
-  /** Lowercase row names by nav key, for typeahead. */
-  const labels = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const it of openItems) {
-      if (it.kind === 'dir') m.set(`dir:${it.node.path}`, it.label.toLowerCase());
-      else if (it.kind === 'file') m.set(it.row.file.path, it.row.name.toLowerCase());
-    }
-    return m;
-  }, [openItems]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const el = document.activeElement as HTMLElement | null;
@@ -289,9 +319,9 @@ export function FileTree() {
       const { node, label, level, up } = item;
       const dir = node.path;
       // A folding folder lists its rows until the fold ends, but shows as closed.
-      const open = item.open && !folding.includes(dir);
-      const k = `dir:${dir}`;
-      const m = moving[dir];
+      const open = item.open && !folding.has(dir);
+      const k = dirKey(dir);
+      const m = moving.get(dir);
       const fold = !open && m?.kind === 'fold';
       const act = open ? undefined : activity.get(dir);
       return [
@@ -326,7 +356,7 @@ export function FileTree() {
     const { row } = item;
     const path = row.file.path;
     if (!born.current.has(path)) born.current.set(path, now < animateFrom ? 0 : now);
-    const badge = live[path];
+    const badge = own(live, path) ? live[path] : undefined;
     const change = badge ? latestChange(changes, path) : undefined;
     return (
       <FileRow

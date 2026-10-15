@@ -340,6 +340,11 @@ describe('FileTree live target', () => {
   });
 });
 
+/** The element whose data-`key` is exactly `value` (jsdom has no CSS.escape). */
+const byData = (key: 'dir' | 'file', value: string) =>
+  [...host.querySelectorAll<HTMLElement>(`[data-${key}]`)].find(e => e.dataset[key] === value) ?? null;
+const stored = () => JSON.parse(localStorage.getItem('livemap:tree:/p/shop') ?? 'null') as [string, boolean][] | null;
+
 describe('FileTree folders', () => {
   const dir = (path: string) => host.querySelector<HTMLElement>(`[data-dir="${path}"]`);
   const key = (k: string, el = document.activeElement as HTMLElement) =>
@@ -385,7 +390,9 @@ describe('FileTree folders', () => {
     act(() => dir('a/b')!.click());
     act(() => dir('c')!.click());
     act(() => dir('c')!.click());
-    expect(JSON.parse(localStorage.getItem('livemap:tree:/p/shop')!)).toEqual({ 'a/b': false, c: true });
+    expect(localStorage.getItem('livemap:tree:/p/shop')).toBeNull(); // saved after a 300 ms pause
+    act(() => { vi.advanceTimersByTime(300); });
+    expect(stored()).toEqual([['a/b', false], ['c', true]]);
     act(() => root.unmount());
     root = createRoot(host);
     localStorage.setItem('livemap:tree:/p/shop', JSON.stringify({ 'a/b': false, c: false, gone: true, bad: 3 }));
@@ -495,7 +502,16 @@ describe('FileTree folders', () => {
     expect(dir('docs')!.getAttribute('aria-expanded')).toBe('false');
     expect(dir('src')!.getAttribute('aria-expanded')).toBe('true');
     expect(dir('src/app/(admin)')!.getAttribute('aria-expanded')).toBe('true');
-    expect(JSON.parse(localStorage.getItem('livemap:tree:/p/shop')!)).toEqual({ docs: false });
+    act(() => { vi.advanceTimersByTime(300); });
+    expect(stored()).toEqual([['docs', false]]);
+  });
+
+  it('shows a newline in a name as a visible symbol', () => {
+    useStore.getState().apply(hello([file('src/we\nird.ts')]));
+    mount();
+    const row = byData('file', 'src/we\nird.ts')!;
+    expect(row.querySelector('.fn')!.textContent).toBe('we\u2424ird.ts');
+    expect(row.getAttribute('title')).toBe('src/we\nird.ts');
   });
 
   it('keeps the start and end of a long name visible and the full path in the tooltip', () => {
@@ -505,5 +521,106 @@ describe('FileTree folders', () => {
     const parts = [...row.querySelectorAll('.fn > span')].map(s => s.textContent);
     expect(parts).toEqual(['bounty-contract-', 'route.test.ts']);
     expect(row.getAttribute('title')).toBe('tests/api/bounty-contract-route.test.ts');
+  });
+});
+
+describe('FileTree folder state', () => {
+  const dir = (path: string) => byData('dir', path);
+  const remount = () => { act(() => root.unmount()); root = createRoot(host); mount(); };
+  const working = () => session({ id: 's1', status: 'working', lastAt: Date.now() });
+  let tool = 0;
+  const target = (path: string) => {
+    act(() => useStore.getState().apply({ type: 'session', session: working() }));
+    act(() => useStore.getState().apply({ type: 'agentEvent', event: event({ sessionId: 's1', type: 'tool_start', at: Date.now(), tool: { id: `t${++tool}`, name: 'Edit', label: 'Edit', paths: [path] } }) }));
+  };
+  beforeEach(() => { (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView = vi.fn(); });
+  afterEach(() => { delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView; });
+
+  it('folders the agent opens stay open for the session only', () => {
+    const files = [];
+    for (let i = 0; i < 2100; i++) files.push(file(`d${i % 30}/sub/f${i}.ts`));
+    useStore.getState().apply(hello(files));
+    mount();
+    for (let d = 0; d < 30; d++) target(`d${d}/sub/f${d}.ts`);
+    expect(host.querySelector('[data-file="d29/sub/f29.ts"]')).not.toBeNull();
+    expect(host.querySelector('[data-file="d0/sub/f0.ts"]')).not.toBeNull();
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(stored()).toBeNull();
+    act(() => useStore.getState().apply({ type: 'session', session: { ...working(), status: 'idle' } }));
+    remount();
+    expect(host.querySelectorAll('.frow')).toHaveLength(0); // the big-project default is back
+    expect(host.querySelectorAll('[aria-expanded="true"]')).toHaveLength(0);
+  });
+
+  it('a folder the user closed is shown open while revealed, and stays closed in storage', () => {
+    useStore.getState().apply(hello([file('a/x.ts'), file('a/y.ts'), file('b/z.ts')]));
+    mount();
+    act(() => dir('a')!.click());
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(host.querySelector('[data-file="a/x.ts"]')).toBeNull();
+    target('a/x.ts');
+    expect(host.querySelector('[data-file="a/x.ts"]')).not.toBeNull();
+    act(() => useStore.getState().select('a/y.ts')); // a pick elsewhere is a session reveal too
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(stored()).toEqual([['a', false]]);
+    act(() => useStore.getState().apply({ type: 'session', session: { ...working(), status: 'idle' } }));
+    act(() => useStore.getState().select(null));
+    remount();
+    expect(dir('a')!.getAttribute('aria-expanded')).toBe('false');
+    // Closing a revealed folder closes it, and that choice is saved.
+    act(() => useStore.getState().select('a/y.ts'));
+    expect(dir('a')!.getAttribute('aria-expanded')).toBe('true');
+    act(() => dir('a')!.click());
+    expect(dir('a')!.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('a file selected elsewhere under a filter is shown even if the user closed its folder in the filter', () => {
+    useStore.getState().apply(hello([file('a/b/x.ts'), file('a/b/y.ts'), file('c/x.ts')]));
+    mount();
+    act(() => useStore.getState().setFilter('x'));
+    act(() => dir('a/b')!.click());
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(host.querySelector('[data-file="a/b/x.ts"]')).toBeNull();
+    act(() => useStore.getState().select('a/b/x.ts'));
+    expect(host.querySelector('[data-file="a/b/x.ts"]')).not.toBeNull();
+    expect(dir('a/b')!.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('handles folders named like object keys', () => {
+    const names = ['constructor', 'toString', '__proto__', 'valueOf', 'hasOwnProperty'];
+    useStore.getState().apply(hello(names.map(n => file(`${n}/f.ts`)).concat(file('constructor/sub/g.ts'))));
+    mount();
+    for (const n of names) {
+      expect(dir(n)!.getAttribute('aria-expanded')).toBe('true');
+      expect(byData('file', `${n}/f.ts`)).not.toBeNull();
+    }
+    act(() => dir('constructor')!.click());
+    act(() => dir('__proto__')!.click());
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(host.querySelector('[data-file="constructor/f.ts"]')).toBeNull();
+    expect(host.querySelector('[data-file="__proto__/f.ts"]')).toBeNull();
+    expect(stored()).toEqual([['constructor', false], ['__proto__', false]]);
+    act(() => useStore.getState().setFilter('f.ts'));
+    act(() => dir('toString')!.click());
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(host.querySelector('[data-file="toString/f.ts"]')).toBeNull();
+    expect(host.querySelector('[data-file="valueOf/f.ts"]')).not.toBeNull();
+    act(() => useStore.getState().setFilter(''));
+    remount();
+    expect(dir('constructor')!.getAttribute('aria-expanded')).toBe('false');
+    expect(dir('__proto__')!.getAttribute('aria-expanded')).toBe('false');
+    expect(dir('toString')!.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('saves after a pause, and right away when the page is hidden', () => {
+    useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts')]));
+    mount();
+    act(() => dir('a')!.click());
+    act(() => { vi.advanceTimersByTime(200); });
+    act(() => dir('b')!.click());
+    act(() => { vi.advanceTimersByTime(200); });
+    expect(stored()).toBeNull();
+    act(() => { window.dispatchEvent(new Event('pagehide')); });
+    expect(stored()).toEqual([['a', false], ['b', false]]);
   });
 });

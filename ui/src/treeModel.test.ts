@@ -3,7 +3,7 @@ import type { FileModel } from '@shared/types.js';
 import { file, sym } from './fixtures';
 import {
   ROW_BUDGET, DIR_BATCH, ancestors, buildTree, chainOf, closedAbove, chainOpen, compareNames, dirActivity, loadTreeState, parseTreeState,
-  saveTreeState, splitName, treeKey, visibleItems, type DirNode, type Item,
+  saveTreeState, serializeTreeState, splitName, treeKey, visibleItems, type DirNode, type Item,
 } from './treeModel';
 
 /** Slower CI runners scale wall-clock budgets (LIVEMAP_TIME_SCALE, set by CI on macOS and Windows). */
@@ -14,7 +14,7 @@ const tree = (paths: string[], q = '') => buildTree(byPath(paths.map(p => file(p
 const names = (n: DirNode) => [...n.dirs.map(d => `${d.name}/`), ...n.rows.map(r => r.file.path.slice(r.file.path.lastIndexOf('/') + 1))];
 const allOpen = () => true;
 const items = (root: DirNode, open: (paths: string[], level: number) => boolean = allOpen) =>
-  visibleItems(root, open, () => false, {}).items;
+  visibleItems(root, open, () => false, new Map()).items;
 const label = (i: Item): string => (i.kind === 'dir' ? `${'  '.repeat(i.level - 1)}${i.label}/` : i.kind === 'file' ? `${'  '.repeat(i.level - 1)}${i.row.file.path}` : `more:${i.dir}`);
 
 describe('buildTree', () => {
@@ -87,19 +87,25 @@ describe('compact folders', () => {
     const after = tree(['src/app/page.tsx', 'src/main.ts']);
     expect(items(after.root).map(label)).toEqual(['src/', '  app/', '    src/app/page.tsx', '  src/main.ts']);
     // The chain was opened as a whole, so both folders are open after the split, and closed again when it rejoins.
-    const state = { src: true, 'src/app': true };
+    const state = new Map([['src', true], ['src/app', true]]);
     const open = (paths: string[]) => chainOpen(paths, state, true);
     expect(items(after.root, open).map(label)).toContain('    src/app/page.tsx');
     expect(items(before.root, open).map(label)).toContain('  src/app/page.tsx');
   });
 
   it('a chain is open only when every folder in it is', () => {
-    expect(chainOpen(['a', 'a/b'], {}, false)).toBe(true); // a small project starts fully open
-    expect(chainOpen(['a', 'a/b'], {}, true)).toBe(false); // a big one starts closed
-    expect(chainOpen(['a', 'a/b'], { 'a/b': false }, false)).toBe(false);
-    expect(chainOpen(['a', 'a/b'], { a: true }, true)).toBe(false);
-    expect(chainOpen(['a', 'a/b'], { a: true, 'a/b': true }, true)).toBe(true);
-    expect(chainOpen(['constructor'], {}, true)).toBe(false); // inherited object keys are not stored choices
+    const m = (o: Record<string, boolean>) => new Map(Object.entries(o));
+    expect(chainOpen(['a', 'a/b'], m({}), false)).toBe(true); // a small project starts fully open
+    expect(chainOpen(['a', 'a/b'], m({}), true)).toBe(false); // a big one starts closed
+    expect(chainOpen(['a', 'a/b'], m({ 'a/b': false }), false)).toBe(false);
+    expect(chainOpen(['a', 'a/b'], m({ a: true }), true)).toBe(false);
+    expect(chainOpen(['a', 'a/b'], m({ a: true, 'a/b': true }), true)).toBe(true);
+    // Revealed folders are open for the session, even ones the user closed.
+    expect(chainOpen(['a', 'a/b'], m({ a: false }), true, new Set(['a', 'a/b']))).toBe(true);
+    for (const name of ['constructor', 'toString', '__proto__', 'valueOf', 'hasOwnProperty']) {
+      expect(chainOpen([name], new Map(), true)).toBe(false);
+      expect(chainOpen([name], new Map(), false)).toBe(true);
+    }
   });
 });
 
@@ -119,14 +125,14 @@ describe('visibleItems', () => {
     const paths: string[] = [];
     for (let d = 0; d < 7; d++) for (let i = 0; i < 300; i++) paths.push(`d${d}/f${i}.ts`);
     const { root } = tree(paths);
-    const all = visibleItems(root, allOpen, () => false, {});
+    const all = visibleItems(root, allOpen, () => false, new Map());
     expect(all.items.filter(i => i.kind === 'dir')).toHaveLength(7);
     expect(all.items.filter(i => i.kind === 'file')).toHaveLength(ROW_BUDGET);
     const more = all.items.filter(i => i.kind === 'more') as Extract<Item, { kind: 'more' }>[];
     expect(more.map(m => [m.dir, m.shown, m.hidden])).toEqual([['d0', 200, 100], ['d1', 200, 100], ['d2', 200, 100], ['d3', 200, 100], ['d4', 200, 100], ['d5', 0, 300], ['d6', 0, 300]]);
-    const closed = visibleItems(root, () => false, () => false, {});
+    const closed = visibleItems(root, () => false, () => false, new Map());
     expect(closed.items.map(label)).toEqual(['d0/', 'd1/', 'd2/', 'd3/', 'd4/', 'd5/', 'd6/']);
-    const limited = visibleItems(root, allOpen, () => false, { d6: DIR_BATCH * 2 });
+    const limited = visibleItems(root, allOpen, () => false, new Map([['d6', DIR_BATCH * 2]]));
     expect(limited.items.filter(i => i.kind === 'file' && i.row.file.path.startsWith('d6/'))).toHaveLength(300);
   });
 
@@ -135,7 +141,7 @@ describe('visibleItems', () => {
     for (let i = 0; i < 250; i++) paths.push(`big/s${String(i).padStart(3, '0')}/a.ts`);
     const { root } = tree(paths);
     const pin = 'big/s249/a.ts';
-    const { items: list } = visibleItems(root, allOpen, () => false, {}, [pin]);
+    const { items: list } = visibleItems(root, allOpen, () => false, new Map(), [pin]);
     const dirs = list.filter(i => i.kind === 'dir');
     expect(dirs).toHaveLength(1 + DIR_BATCH + 1);
     expect(list.some(i => i.kind === 'file' && i.row.file.path === pin)).toBe(true);
@@ -144,7 +150,7 @@ describe('visibleItems', () => {
 
   it('gives each row its level and parent, and lists the keyboard order', () => {
     const { root } = tree(['a/b/c.ts', 'a/d.ts', 'e.ts']);
-    const { items: list, navKeys } = visibleItems(root, allOpen, () => false, {});
+    const { items: list, navKeys } = visibleItems(root, allOpen, () => false, new Map());
     expect(list.map(i => [label(i).trim(), i.level, i.kind === 'more' ? null : i.up])).toEqual([
       ['a/', 1, null], ['b/', 2, 'dir:a'], ['a/b/c.ts', 3, 'dir:a/b'], ['a/d.ts', 2, 'dir:a'], ['e.ts', 1, null],
     ]);
@@ -203,20 +209,31 @@ describe('splitName', () => {
 describe('stored folder state', () => {
   beforeEach(() => globalThis.localStorage?.clear());
 
-  it('reads only path to boolean entries and ignores anything else', () => {
-    expect(parseTreeState(null)).toEqual({});
-    expect(parseTreeState('nope')).toEqual({});
-    expect(parseTreeState('[1,2]')).toEqual({});
-    expect(parseTreeState('{"a":true,"b":false,"c":1,"d":"x"}')).toEqual({ a: true, b: false });
+  it('reads [path, open] pairs and the older object format, ignoring anything else', () => {
+    expect(parseTreeState(null)).toEqual(new Map());
+    expect(parseTreeState('nope')).toEqual(new Map());
+    expect(parseTreeState('[1,2]')).toEqual(new Map());
+    expect([...parseTreeState('[["b",true],["2023",false],["x",1],[3,true],["c"]]')]).toEqual([['b', true], ['2023', false]]);
+    expect([...parseTreeState('{"a":true,"b":false,"c":1,"d":"x"}')]).toEqual([['a', true], ['b', false]]);
+    expect([...parseTreeState('[["constructor",true],["__proto__",false],["toString",true]]')]).toEqual([['constructor', true], ['__proto__', false], ['toString', true]]);
     expect(treeKey('/p/shop')).toBe('livemap:tree:/p/shop');
+  });
+
+  it('keeps the newest choices in order, integer-like names included, and drops the oldest past the cap', () => {
+    const state = new Map<string, boolean>([['b', true], ['2023', false], ['a', true]]);
+    state.delete('b');
+    state.set('b', false); // moved to the end: newest
+    expect(serializeTreeState(state)).toBe('[["2023",false],["a",true],["b",false]]');
+    expect(serializeTreeState(state, 2)).toBe('[["a",true],["b",false]]');
+    expect([...parseTreeState(serializeTreeState(state))]).toEqual([...state]);
   });
 
   it('survives missing or throwing storage', () => {
     const real = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
     Object.defineProperty(globalThis, 'localStorage', { configurable: true, get() { throw new Error('blocked'); } });
     try {
-      expect(loadTreeState('/p')).toEqual({});
-      expect(() => saveTreeState('/p', { a: true })).not.toThrow();
+      expect(loadTreeState('/p')).toEqual(new Map());
+      expect(() => saveTreeState('/p', new Map([['a', true]]))).not.toThrow();
     } finally {
       if (real) Object.defineProperty(globalThis, 'localStorage', real);
       else delete (globalThis as { localStorage?: unknown }).localStorage;
@@ -232,7 +249,7 @@ describe('tree performance', () => {
     buildTree(files, ''); // warm the per-file caches, as the first render does
     const t0 = performance.now();
     const { root } = buildTree(files, '');
-    visibleItems(root, allOpen, () => false, {});
+    visibleItems(root, allOpen, () => false, new Map());
     const ms = performance.now() - t0;
     console.log(`[tree perf] 5,000 files: ${ms.toFixed(1)} ms`);
     expect(root.count).toBe(5000);
@@ -242,9 +259,25 @@ describe('tree performance', () => {
 
 describe('closedAbove', () => {
   it('lists only the closed folders above a path', () => {
-    expect(closedAbove('a/b/c/x.ts', {}, false)).toEqual([]);
-    expect(closedAbove('a/b/c/x.ts', {}, true)).toEqual(['a', 'a/b', 'a/b/c']);
-    expect(closedAbove('a/b/c/x.ts', { a: true, 'a/b/c': false }, true)).toEqual(['a/b', 'a/b/c']);
-    expect(closedAbove('x.ts', {}, true)).toEqual([]);
+    const m = (o: Record<string, boolean>) => new Map(Object.entries(o));
+    expect(closedAbove('a/b/c/x.ts', m({}), false)).toEqual([]);
+    expect(closedAbove('a/b/c/x.ts', m({}), true)).toEqual(['a', 'a/b', 'a/b/c']);
+    expect(closedAbove('a/b/c/x.ts', m({ a: true, 'a/b/c': false }), true)).toEqual(['a/b', 'a/b/c']);
+    expect(closedAbove('a/b/c/x.ts', m({}), true, new Set(['a']))).toEqual(['a/b', 'a/b/c']);
+    expect(closedAbove('x.ts', m({}), true)).toEqual([]);
+  });
+});
+
+describe('row budget', () => {
+  it('gives each open folder level its files before deeper folders use up the budget', () => {
+    const paths = ['README.md', 'package.json'];
+    for (let i = 0; i < 1200; i++) paths.push(`src/m${i % 6}/f${i}.ts`);
+    const { root } = tree(paths);
+    const list = items(root);
+    const shown = list.filter(i => i.kind === 'file').map(i => (i as Extract<Item, { kind: 'file' }>).row.file.path);
+    expect(shown).toContain('README.md');
+    expect(shown).toContain('package.json');
+    expect(shown).toHaveLength(ROW_BUDGET);
+    expect(list.filter(i => i.kind === 'more' && i.dir === '')).toHaveLength(0);
   });
 });

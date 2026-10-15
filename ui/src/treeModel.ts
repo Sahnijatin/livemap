@@ -116,20 +116,21 @@ export function ancestors(path: string): string[] {
   return out;
 }
 
+/** Open (true) and closed (false) folders the user chose, by full path, oldest first. */
+export type DirState = ReadonlyMap<string, boolean>;
+
 /**
  * Whether a folder row is open. `paths` are the folders the row stands for (several for a compact chain): it is open
- * only when each is. A folder without a stored choice is open in a project under BIG_PROJECT files and closed above.
+ * only when each is. A folder revealed this session (`revealed`) is open; otherwise the user's choice counts, and
+ * without one a folder is open in a project under BIG_PROJECT files and closed above.
  */
-export function chainOpen(paths: string[], state: Record<string, boolean>, big: boolean): boolean {
-  return paths.every(p => {
-    const v = state[p];
-    return typeof v === 'boolean' ? v : !big;
-  });
+export function chainOpen(paths: string[], state: DirState, big: boolean, revealed?: ReadonlySet<string>): boolean {
+  return paths.every(p => revealed?.has(p) || (state.get(p) ?? !big));
 }
 
 /** The folders above `path` that are closed now, so revealing it opens only those. */
-export function closedAbove(path: string, state: Record<string, boolean>, big: boolean): string[] {
-  return ancestors(path).filter(a => !chainOpen([a], state, big));
+export function closedAbove(path: string, state: DirState, big: boolean, revealed?: ReadonlySet<string>): string[] {
+  return ancestors(path).filter(a => !chainOpen([a], state, big, revealed));
 }
 
 export type Activity = LiveBadge | 'now';
@@ -154,44 +155,61 @@ export type Item =
 /**
  * What the tree renders, depth first. Root's children always render. An open folder renders its subfolders (as
  * compact chains), then its files: up to its own limit (`dirLimit`, set by "Show more") or, without one, up to
- * DIR_BATCH, with files only while the shared budget of ROW_BUDGET file rows lasts. A folder with rows left over
- * gets a "more" item. Pinned files, and the folders that hold them, render even past the cap. `navKeys` lists the
+ * DIR_BATCH, with files only while the shared budget of ROW_BUDGET file rows lasts. The budget goes level by level
+ * (breadth first), so a deep subtree never hides the files of a shallower folder. A folder with rows left over gets
+ * a "more" item. Pinned files, and the folders that hold them, render even past the cap. `navKeys` lists the
  * focusable rows in order, including visible symbol rows.
  */
 export function visibleItems(
   root: DirNode,
   dirOpen: (paths: string[], level: number) => boolean,
   rowOpen: (row: Row) => boolean,
-  dirLimit: Record<string, number>,
+  dirLimit: ReadonlyMap<string, number>,
   pins: Iterable<string> = [],
 ): { items: Item[]; navKeys: string[]; rendered: number } {
-  const items: Item[] = [];
-  const navKeys: string[] = [];
   const pinned = new Set(pins);
   const pinnedDirs = new Set<string>();
   for (const p of pinned) for (const d of ancestors(p)) pinnedDirs.add(d);
+  type Sub = { chain: DirNode[]; open: boolean; past: boolean };
+  type Plan = { dirsShown: number; filesShown: number; subs: Map<DirNode, Sub> };
+  // Pass 1, breadth first: which subfolders show and are open, and how many files each open folder shows.
+  const plans = new Map<DirNode, Plan>();
   let budget = ROW_BUDGET;
-  let rendered = 0;
-  const walk = (node: DirNode, level: number, up: string | null) => {
-    const explicit = dirLimit[node.path];
+  const queue: [DirNode, number][] = [[root, 1]];
+  for (let qi = 0; qi < queue.length; qi++) {
+    const [node, level] = queue[qi];
+    const explicit = dirLimit.get(node.path);
     const limit = explicit ?? DIR_BATCH;
     const dirsShown = Math.min(node.dirs.length, limit);
-    let extra = 0;
-    for (let i = 0; i < node.dirs.length; i++) {
-      const d = node.dirs[i];
-      if (i >= dirsShown) { if (!pinnedDirs.has(d.path)) continue; extra++; }
-      const chain = chainOf(d);
-      const tail = chain[chain.length - 1];
-      const paths = chain.map(c => c.path);
-      const open = dirOpen(paths, level);
-      const key = dirKey(tail.path);
-      items.push({ kind: 'dir', node: tail, chain: paths, label: chain.map(c => c.name).join('/'), level, open, up });
-      navKeys.push(key);
-      if (open) walk(tail, level + 1, key);
-    }
     const cap = explicit !== undefined ? limit - dirsShown : Math.max(0, Math.min(limit - dirsShown, budget));
     const filesShown = Math.min(node.rows.length, cap);
     if (explicit === undefined) budget -= filesShown;
+    const subs = new Map<DirNode, Sub>();
+    for (let i = 0; i < node.dirs.length; i++) {
+      const d = node.dirs[i];
+      if (i >= dirsShown && !pinnedDirs.has(d.path)) continue;
+      const chain = chainOf(d);
+      const open = dirOpen(chain.map(c => c.path), level);
+      subs.set(d, { chain, open, past: i >= dirsShown });
+      if (open) queue.push([chain[chain.length - 1], level + 1]);
+    }
+    plans.set(node, { dirsShown, filesShown, subs });
+  }
+  // Pass 2, depth first: the rows in display order.
+  const items: Item[] = [];
+  const navKeys: string[] = [];
+  let rendered = 0;
+  const walk = (node: DirNode, level: number, up: string | null) => {
+    const { dirsShown, filesShown, subs } = plans.get(node)!;
+    let extra = 0;
+    for (const { chain, open, past } of subs.values()) {
+      if (past) extra++;
+      const tail = chain[chain.length - 1];
+      const key = dirKey(tail.path);
+      items.push({ kind: 'dir', node: tail, chain: chain.map(c => c.path), label: chain.map(c => c.name).join('/'), level, open, up });
+      navKeys.push(key);
+      if (open) walk(tail, level + 1, key);
+    }
     const fileUp = node.path === '' ? null : dirKey(node.path);
     let extraFiles = 0;
     for (let i = 0; i < node.rows.length; i++) {
@@ -253,32 +271,40 @@ export const treeKey = (root: string): string => `livemap:tree:${root}`;
 /** Stored choices beyond this many drop the oldest. */
 const MAX_STORED = 2000;
 
-export function parseTreeState(raw: string | null): Record<string, boolean> {
-  const out: Record<string, boolean> = {};
+/** Stored choices as [path, open] pairs, oldest first; an object (the first format) is read too. Anything else is ignored. */
+export function parseTreeState(raw: string | null): Map<string, boolean> {
+  const out = new Map<string, boolean>();
   let v: unknown;
   try {
     v = raw ? JSON.parse(raw) : null;
   } catch {
     return out;
   }
-  if (!v || typeof v !== 'object' || Array.isArray(v)) return out;
-  for (const [k, b] of Object.entries(v as Record<string, unknown>)) if (typeof b === 'boolean') out[k] = b;
+  if (Array.isArray(v)) {
+    for (const e of v) if (Array.isArray(e) && typeof e[0] === 'string' && typeof e[1] === 'boolean') out.set(e[0], e[1]);
+  } else if (v && typeof v === 'object') {
+    for (const [k, b] of Object.entries(v as Record<string, unknown>)) if (typeof b === 'boolean') out.set(k, b);
+  }
   return out;
 }
 
+/** The newest `max` choices as [path, open] pairs. */
+export function serializeTreeState(state: DirState, max = MAX_STORED): string {
+  return JSON.stringify([...state].slice(-max));
+}
+
 /** The project's stored folders; empty when storage is missing, blocked, throws or holds something unreadable. */
-export function loadTreeState(root: string): Record<string, boolean> {
+export function loadTreeState(root: string): Map<string, boolean> {
   try {
     return parseTreeState(globalThis.localStorage?.getItem(treeKey(root)) ?? null);
   } catch {
-    return {};
+    return new Map();
   }
 }
 
-export function saveTreeState(root: string, state: Record<string, boolean>): void {
+export function saveTreeState(root: string, state: DirState): void {
   try {
-    const entries = Object.entries(state);
-    globalThis.localStorage?.setItem(treeKey(root), JSON.stringify(Object.fromEntries(entries.slice(-MAX_STORED))));
+    globalThis.localStorage?.setItem(treeKey(root), serializeTreeState(state));
   } catch {
     // Private mode, quota or blocked storage: folders stay as set for this page only.
   }
