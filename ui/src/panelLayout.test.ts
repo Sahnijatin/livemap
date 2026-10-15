@@ -86,11 +86,12 @@ describe('shownLayout', () => {
   it('shows a collapsed inspector while peeking, without touching the stored layout', () => {
     const l = layout({ collapsed: { files: true, inspector: true } });
     const files = { 'a.ts': {} } as never;
-    expect(shownLayout({ layout: l, peek: false, selected: 'a.ts', files })).toBe(l);
-    expect(shownLayout({ layout: l, peek: true, selected: 'a.ts', files }).collapsed).toEqual({ files: true, inspector: false });
-    // Only while the selected file exists.
-    expect(shownLayout({ layout: l, peek: true, selected: null, files })).toBe(l);
-    expect(shownLayout({ layout: l, peek: true, selected: 'gone.ts', files })).toBe(l);
+    expect(shownLayout({ layout: l, peek: null, selected: 'a.ts', files })).toBe(l);
+    expect(shownLayout({ layout: l, peek: 'a.ts', selected: 'a.ts', files }).collapsed).toEqual({ files: true, inspector: false });
+    // Only for the peeked file, while it is selected and exists.
+    expect(shownLayout({ layout: l, peek: 'b.ts', selected: 'a.ts', files })).toBe(l);
+    expect(shownLayout({ layout: l, peek: 'a.ts', selected: null, files })).toBe(l);
+    expect(shownLayout({ layout: l, peek: 'gone.ts', selected: 'gone.ts', files })).toBe(l);
     expect(l.collapsed.inspector).toBe(true);
   });
 });

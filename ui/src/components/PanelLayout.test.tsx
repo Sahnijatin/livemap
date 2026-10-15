@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../store';
 import { file, emptyDomain } from '../fixtures';
 import { LAYOUT_KEY, fitLayout } from '../panelLayout';
+import { restHistorySource, setHistorySource } from '../history';
 
 vi.mock('../api', () => ({ addFlag: vi.fn(), removeFlag: vi.fn(), setPaused: vi.fn(), fetchFile: vi.fn(() => new Promise(() => {})) }));
 const { Toolbar } = await import('./Toolbar');
@@ -566,20 +567,39 @@ describe('docked panels at 1080 px and wider', () => {
     expect(now('Resize project panel')).toBe(272 + 32);
   });
 
-  it('a peek ends for good when the selected file disappears, even if it comes back', async () => {
+  it('a live deletion of the peeked file ends the peek; the file coming back does not reopen the inspector', async () => {
     await mount();
     act(() => btn('Hide inspector').click());
     act(() => useStore.getState().select('src/a.ts'));
+    expect(useStore.getState().peek).toBe('src/a.ts');
     expect(app().classList.contains('right-collapsed')).toBe(false);
-    const state = (files: string[], seq: number) => ({ seq, at: seq, root: '/p/shop', name: 'shop', files: files.map(f => file(f)), changes: [], usedBy: [], domain: emptyDomain(), indexing: false, events: [], sessions: [], control: { paused: false, flags: [] } });
-    // Rewound past its deletion (the selection stays), then forward to where it exists again.
-    act(() => useStore.getState().rewind(state(['src/b.ts'], 1)));
+    act(() => useStore.getState().apply({ type: 'files', files: [], removed: ['src/a.ts'] }));
+    expect(useStore.getState().peek).toBeNull();
     expect(app().classList.contains('right-collapsed')).toBe(true);
-    act(() => useStore.getState().rewind(state(['src/a.ts', 'src/b.ts'], 2)));
+    act(() => useStore.getState().apply({ type: 'files', files: [file('src/a.ts')], removed: [] }));
+    expect(app().classList.contains('right-collapsed')).toBe(true);
+  });
+
+  it('scrubbing past the peeked file\'s deletion keeps the peek: back to live with the file, the inspector shows', async () => {
+    await mount();
+    act(() => btn('Hide inspector').click());
+    act(() => useStore.getState().select('src/a.ts'));
+    const state = (files: string[]) => ({ root: '/p/shop', name: 'shop', files: files.map(f => file(f)), changes: [], usedBy: [], domain: emptyDomain(), indexing: false, events: [], sessions: [], control: { paused: false, flags: [] } });
+    act(() => useStore.getState().rewind({ ...state(['src/b.ts']), seq: 1, at: 1 }));
     expect(useStore.getState().selected).toBe('src/a.ts');
     expect(app().classList.contains('right-collapsed')).toBe(true);
-    expect(useStore.getState().peek).toBe(false);
+    expect(useStore.getState().peek).toBe('src/a.ts');
+    setHistorySource({ ...restHistorySource, live: async () => ({ ...state(['src/a.ts', 'src/b.ts']), seq: 2 }) });
+    try {
+      await act(async () => { await useStore.getState().backToLive(); });
+    } finally {
+      setHistorySource(restHistorySource);
+    }
+    expect(useStore.getState().rewound).toBeNull();
+    expect(app().classList.contains('right-collapsed')).toBe(false);
+    expect(stored().collapsed.inspector).toBe(true);
   });
+
 });
 
 describe('below 1080 px', () => {

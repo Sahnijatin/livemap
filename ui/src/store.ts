@@ -118,10 +118,11 @@ export interface StoreState {
   /** Wide layouts: docked panel widths and collapsed state as the user set them, remembered across reloads. */
   layout: PanelLayout;
   /**
-   * A selected file shows a collapsed docked inspector (not saved). It counts only while the selected file exists
-   * (see shownLayout); toggling the inspector ends it. Below 1080 px the docked layout is not used, so it does nothing there.
+   * The file whose selection shows a collapsed docked inspector (not saved); see shownLayout. Set by every selection,
+   * cleared by a toggle of the inspector or a live deletion of the selected file. Scrubbing history leaves it, so back
+   * to live with the file present shows the inspector again. Below 1080 px the docked layout is not used.
    */
-  peek: boolean;
+  peek: string | null;
   /** Bumped by every file selection, even of the selected file (the Inspector retries a failed file view load on it). */
   selects: number;
   /** The `.app` box width and the viewport width the docked layout fits, and whether a panel edge is being dragged. */
@@ -229,7 +230,7 @@ const initial = {
   filter: '',
   reveal: null,
   panel: null,
-  peek: false,
+  peek: null as string | null,
   selects: 0,
   events: [],
   sessions: {},
@@ -261,16 +262,16 @@ function routesByFileOf(domain: DomainIndex): Record<string, ApiRoute[]> {
 
 const freshDomain = () => ({ domain: emptyDomainIndex(), domainBase: baseOf(emptyDomainIndex()), routesByFile: {} });
 
-/** A peek ends for good once the selected file is missing, so the file coming back does not reopen the inspector. */
-const keepPeek = (st: StoreState, files: Record<string, FileModel>, selected: string | null): boolean => st.peek && !!selected && !!files[selected];
-
-/** Files after upserting and removing; clears the selection (and its peek) if its file is gone. */
+/**
+ * Files after upserting and removing; clears the selection if its file is gone. A live deletion of the selected file
+ * also ends its peek, so the file coming back does not reopen the inspector; a played (historical) one does not.
+ */
 function upsertFiles(st: StoreState, upserts: FileModel[], removed: string[]): Pick<StoreState, 'files' | 'selected' | 'peek'> {
   const files = { ...st.files };
   for (const p of removed) delete files[p];
   for (const f of upserts) files[f.path] = f;
   const selected = st.selected && files[st.selected] ? st.selected : null;
-  return { files, selected, peek: keepPeek(st, files, selected) };
+  return { files, selected, peek: !replaying && st.selected && !selected ? null : st.peek };
 }
 
 function recordRecent(recent: StoreState['recent'], c: ChangeSummary): void {
@@ -414,7 +415,6 @@ export const useStore = create<StoreState>()((set, get) => ({
           hellos: newRun(before, msg.events) ? get().hellos + 1 : get().hellos,
           historyStatus: msg.history ?? NO_HISTORY,
           selected: selected && data.files[selected] ? selected : null,
-          peek: keepPeek(get(), data.files, selected),
         });
         return;
       }
@@ -480,7 +480,7 @@ export const useStore = create<StoreState>()((set, get) => ({
   },
 
   select(path) {
-    set(path ? { selected: path, history: pushHistory(get().history, path), peek: true, selects: get().selects + 1 } : { selected: null, peek: false });
+    set(path ? { selected: path, history: pushHistory(get().history, path), peek: path, selects: get().selects + 1 } : { selected: null });
   },
 
   toggle(path) {
@@ -498,7 +498,7 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   revealLine(path, line) {
     const seq = (get().reveal?.seq ?? 0) + 1;
-    set({ selected: path, reveal: { path, line, seq }, history: pushHistory(get().history, path), peek: true, selects: get().selects + 1 });
+    set({ selected: path, reveal: { path, line, seq }, history: pushHistory(get().history, path), peek: path, selects: get().selects + 1 });
   },
 
   clearReveal() {
@@ -516,7 +516,7 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   collapse(p, on) {
     const layout = { ...get().layout, collapsed: { ...get().layout.collapsed, [p]: on } };
-    set(p === 'inspector' ? { layout, peek: false } : { layout });
+    set(p === 'inspector' ? { layout, peek: null } : { layout });
     saveLayout(layout);
   },
 
@@ -577,7 +577,7 @@ export const useStore = create<StoreState>()((set, get) => ({
     // The selection stays even when its file did not exist yet, so going back to live restores it.
     // The summarizer status is the engine's now, not history's: it stays live.
     const past = replaceData(data, get());
-    set({ ...past, summaries: { ...past.summaries, status: get().summaries.status }, rewound: { seq, at }, peek: keepPeek(get(), past.files, get().selected) });
+    set({ ...past, summaries: { ...past.summaries, status: get().summaries.status }, rewound: { seq, at } });
   },
 
   applyHistorical({ seq, at, msg }) {
@@ -640,7 +640,7 @@ export const useStore = create<StoreState>()((set, get) => ({
     const status = live.history && live.history.last >= historyStatus.last ? live.history : historyStatus;
     // Likewise a summarizer status that arrived while waiting (it is applied at once, never buffered).
     if (statusGen !== statusAt) data.summaries = { ...data.summaries, status: summaries.status };
-    set({ ...data, historyStatus: status, selected: selected && data.files[selected] ? selected : null, peek: keepPeek(get(), data.files, selected), rewound: null });
+    set({ ...data, historyStatus: status, selected: selected && data.files[selected] ? selected : null, rewound: null });
     // Then what arrived after the state was built, each once.
     for (const m of buffered) if (isAfter(m, live.seq)) get().apply(m);
   },
