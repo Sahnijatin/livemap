@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useStore } from '../store';
+import { READ_ONLY_TIP } from '../history';
 import type { Level } from './mapModel';
 import { useMapActions } from './MapContext';
 import { PHONE_QUERY, useMedia } from '../media';
@@ -96,6 +97,8 @@ function MoreMenu({ compact = false, followPaused = false }: { compact?: boolean
   const setLevel = useStore(s => s.setMapLevel);
   const follow = useStore(s => s.follow);
   const setFollow = useStore(s => s.setFollow);
+  // Reset layout clears pins, which are live edits: off while the UI shows the past.
+  const rewound = useStore(s => s.rewound !== null);
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -173,7 +176,10 @@ function MoreMenu({ compact = false, followPaused = false }: { compact?: boolean
                 <div className="mt-sep" role="separator" />
               </>
             )}
-            <button type="button" role="menuitem" tabIndex={-1} onClick={run(actions.resetLayout)}>Reset layout</button>
+            <button
+              type="button" role="menuitem" tabIndex={-1} onClick={run(actions.resetLayout)}
+              disabled={rewound} title={rewound ? READ_ONLY_TIP : undefined}
+            >Reset layout</button>
             <button type="button" role="menuitem" tabIndex={-1} onClick={run(actions.fitAll)}>Fit to screen</button>
           </motion.div>
         )}

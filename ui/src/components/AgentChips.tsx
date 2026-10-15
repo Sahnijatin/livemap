@@ -17,7 +17,7 @@ const STEER_HINT = 'Run livemap init to steer this agent';
 
 /**
  * One chip per agent session active in the last 30 minutes; a working agent gets a spinning ring.
- * Pause applies only to sessions wired with hooks; the others say they are not connected.
+ * Pause applies only to sessions wired with hooks; the others say they are not connected. None in a replay.
  */
 export function AgentChips() {
   const sessions = useStore(s => s.sessions);
@@ -25,7 +25,9 @@ export function AgentChips() {
   const now = useNow(15_000);
   const list = useMemo(() => chipSessions(sessions, now), [sessions, now]);
   const shown = usePresenceList(list.slice(0, MAX_CHIPS), sessionId, EXIT_MS);
-  if (!shown.length) return null;
+  // A replay has no agents to connect or steer: show nothing agent-related.
+  const replay = useStore(s => s.replay);
+  if (replay || !shown.length) return null;
   return (
     <div className="agentchips" role="list" aria-label="Agents">
       {shown.map(({ item: s, leaving }) => {

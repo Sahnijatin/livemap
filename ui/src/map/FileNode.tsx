@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import clsx from 'clsx';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { useStore } from '../store';
+import { READ_ONLY_TIP } from '../history';
 import { LAYERS } from '../layers';
 import { KindBadge, LayerTile, layerVars } from '../components/icons';
 import { ARROWS, HANDLE_Y, type FileFlowNode } from './mapFlow';
@@ -38,6 +39,8 @@ function FileNodeView({ id, data, positionAbsoluteX, positionAbsoluteY }: NodePr
   // Only this card re-renders when the selection moves to or from it.
   const sel = useStore(s => s.selected === id);
   const actions = useMapActions();
+  // File cards are draggable pins: read-only while the UI shows the past.
+  const ro = useStore(s => s.rewound !== null);
   // Read once, when the card mounts: a new file springs in from where the map says.
   const [enter] = useState(() => actions.spawnOf(id));
   const fnz = level === 'functions';
@@ -66,6 +69,7 @@ function FileNodeView({ id, data, positionAbsoluteX, positionAbsoluteY }: NodePr
       data-path={id}
       data-x={Math.round(positionAbsoluteX)}
       data-y={Math.round(positionAbsoluteY)}
+      title={ro ? READ_ONLY_TIP : undefined}
       onClick={() => actions.open(id)}
       onKeyDown={onKeyDown}
     >

@@ -5,6 +5,7 @@ import { useStore } from '../store';
 import { addFlag, ApiError, removeFlag } from '../api';
 import { agentName, ago } from '../agents';
 import { useNow } from '../recent';
+import { READ_ONLY_TIP } from '../history';
 import { FlagIcon } from './icons';
 
 const errText = (e: unknown) => (e instanceof Error && e.message ? e.message : 'Something went wrong. Try again.');
@@ -24,6 +25,9 @@ export function flagsFor(flags: Flag[], target: string | null): { pending?: Flag
 /** A note for the agent, delivered before its next action. Updating replaces the pending note. */
 export function FlagBox({ target }: { target: string | null }) {
   const flags = useStore(s => s.control.flags);
+  // While the UI shows the past, flags (which act on the live agent) are off.
+  const rewound = useStore(s => s.rewound !== null);
+  const replay = useStore(s => s.replay);
   const now = useNow(15_000);
   const { pending, delivered } = flagsFor(flags, target);
   const [note, setNote] = useState('');
@@ -33,7 +37,7 @@ export function FlagBox({ target }: { target: string | null }) {
   const submit = async (e?: FormEvent) => {
     e?.preventDefault();
     const text = note.trim();
-    if (!text || busy) return;
+    if (!text || busy || rewound) return;
     setBusy(true);
     setError(null);
     try {
@@ -70,6 +74,9 @@ export function FlagBox({ target }: { target: string | null }) {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void submit();
   };
 
+  // A replay has no agent to flag.
+  if (replay) return null;
+
   const status = pending
     ? "Waiting for the agent's next action"
     : delivered
@@ -77,12 +84,12 @@ export function FlagBox({ target }: { target: string | null }) {
       : "Delivered before the agent's next action";
 
   return (
-    <form className={clsx('flagbox', pending && 'pending')} onSubmit={submit}>
+    <form className={clsx('flagbox', pending && 'pending', rewound && 'readonly')} onSubmit={submit} title={rewound ? READ_ONLY_TIP : undefined}>
       {pending && (
         <div className="flag-pending">
           <FlagIcon />
           <span>“{pending.note}”</span>
-          <button type="button" className="linkbtn" onClick={remove} disabled={busy}>Remove</button>
+          <button type="button" className="linkbtn" onClick={remove} disabled={busy || rewound}>Remove</button>
         </div>
       )}
       <textarea
@@ -93,10 +100,11 @@ export function FlagBox({ target }: { target: string | null }) {
         aria-label={target ? 'Flag note for this file' : 'Flag note for the project'}
         rows={2}
         maxLength={4000}
+        disabled={rewound}
       />
       <div className="row">
         <span className={clsx('fstate', pending && 'wait', !pending && delivered && 'done')}>{status}</span>
-        <button type="submit" className="btn-red" disabled={busy || !note.trim()}>{pending ? 'Update flag' : 'Flag'}</button>
+        <button type="submit" className="btn-red" disabled={busy || rewound || !note.trim()}>{pending ? 'Update flag' : 'Flag'}</button>
       </div>
       {error && <p className="flag-err" role="alert">{error}</p>}
     </form>

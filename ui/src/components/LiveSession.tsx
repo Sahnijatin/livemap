@@ -12,6 +12,7 @@ function YourFlags() {
   const flags = useStore(s => s.control.flags);
   const select = useStore(s => s.select);
   const showToast = useStore(s => s.showToast);
+  const replay = useStore(s => s.replay);
   if (!flags.length) return null;
   const sorted = [...flags].sort((a, b) => Number(!!a.deliveredAt) - Number(!!b.deliveredAt) || b.createdAt - a.createdAt).slice(0, 12);
   return (
@@ -28,7 +29,7 @@ function YourFlags() {
               <span>{f.note}</span>
               <small>{f.deliveredAt ? `Delivered to ${agentName(f.deliveredTo?.agent)}` : 'Waiting for the next action'}</small>
             </div>
-            {!f.deliveredAt && (
+            {!f.deliveredAt && !replay && (
               <button type="button" className="fl-x" aria-label={`Remove flag: ${f.note}`} onClick={() => removeFlag(f.id).catch(e => showToast(e instanceof Error ? e.message : 'Could not remove the flag', 'error'))}>×</button>
             )}
           </div>
@@ -44,6 +45,9 @@ export function LiveSession() {
   const recent = useStore(s => s.recent);
   const events = useStore(s => s.events);
   const select = useStore(s => s.select);
+  // Showing the past: no Live tag (the center's banner says what is on show).
+  const rewound = useStore(s => s.rewound !== null);
+  const replay = useStore(s => s.replay);
   const { session, step, counts, working, paused } = useLiveState();
   const now = useNow();
   const msg = latestMessage(events, session?.id);
@@ -54,7 +58,7 @@ export function LiveSession() {
 
   return (
     <>
-      <div className="live-h"><h3>Live session</h3>{working && !paused && <span className="livetag"><i />Live</span>}{paused && <span className="livetag paused"><i />Paused</span>}</div>
+      <div className="live-h"><h3>Live session</h3>{working && !paused && !rewound && <span className="livetag"><i />Live</span>}{paused && <span className="livetag paused"><i />Paused</span>}</div>
       <div className={clsx('nowcard', working && !paused && 'working')}>
         <span className="lbl">{working && !paused ? <span className="spinner" aria-hidden="true" /> : <i className="ndot" aria-hidden="true" />}<span className="truncate">{step.line}</span></span>
         <p>{msg?.text ? msg.text.slice(0, 600) : session ? `${agentName(session.agent)} has not said anything yet.` : 'No agent has worked in this project since LiveMap started. Start one to watch it here.'}</p>
@@ -75,10 +79,12 @@ export function LiveSession() {
         </div>
       </div>
       <YourFlags />
-      <div className="sec">
-        <h4>Flag the project</h4>
-        <FlagBox target={null} />
-      </div>
+      {!replay && (
+        <div className="sec">
+          <h4>Flag the project</h4>
+          <FlagBox target={null} />
+        </div>
+      )}
       <div className="muted" style={{ fontSize: 12 }}>Select any file to see what is inside it, what it connects to, and why it changed.</div>
     </>
   );

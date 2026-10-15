@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { DomainIndex } from '@shared/domain.js';
+import type { SummaryStatus } from '@shared/summaries.js';
 import { useStore } from '../store';
 import { emptyDomain, file } from '../fixtures';
 import { StackView } from './StackView';
@@ -160,5 +161,46 @@ describe('StackView', () => {
     expect(rows.map(r => r.textContent)).toEqual(['numpy==1.24', 'numpy==1.26']);
     expect(err.mock.calls.some(c => String(c[0]).includes('same key'))).toBe(false);
     err.mockRestore();
+  });
+});
+
+describe('StackView: AI summaries', () => {
+  const status = (st: Partial<SummaryStatus>): SummaryStatus => ({ state: 'ready', provider: 'anthropic', model: 'claude-haiku-5-5', usedTokens: 500_000, capTokens: 2_000_000, month: '2026-10', ...st });
+  const ai = () => box('AI summaries');
+
+  it('says how to turn them on when off, and copies an example config', async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    mount();
+    expect(ai().textContent).toContain('Off. Add a key and enable summaries in ~/.livemap/config.json to get one-line explanations.');
+    expect(ai().querySelector('.ai-bar')).toBeNull();
+    await act(async () => (ai().querySelector('button') as HTMLButtonElement).click());
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const snippet = JSON.parse((writeText.mock.calls[0] as unknown as [string])[0]);
+    expect(snippet.summaries.enabled).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  it('shows provider, model, usage and state when on', () => {
+    mount();
+    act(() => useStore.getState().apply({ type: 'summaryStatus', status: status({}) }));
+    const text = ai().textContent!;
+    expect(text).toContain('Anthropic');
+    expect(text).toContain('claude-haiku-5-5');
+    expect(text).toContain('500,000 of 2,000,000 tokens');
+    expect(ai().querySelector('.ai-state')!.textContent).toBe('ready');
+    expect(ai().querySelector<HTMLElement>('.ai-bar i')!.style.width).toBe('25%');
+    act(() => useStore.getState().apply({ type: 'summaryStatus', status: status({ state: 'working' }) }));
+    expect(ai().querySelector('.ai-state')!.textContent).toBe('working');
+  });
+
+  it('shows the error text and cap reached', () => {
+    mount();
+    act(() => useStore.getState().apply({ type: 'summaryStatus', status: status({ state: 'error', error: '401 invalid x-api-key' }) }));
+    expect(ai().querySelector('.ai-state')!.textContent).toBe('error: 401 invalid x-api-key');
+    act(() => useStore.getState().apply({ type: 'summaryStatus', status: status({ state: 'cap', usedTokens: 2_100_000 }) }));
+    expect(ai().querySelector('.ai-state')!.textContent).toBe('cap reached');
+    // The bar never overflows its track.
+    expect(ai().querySelector<HTMLElement>('.ai-bar i')!.style.width).toBe('100%');
   });
 });

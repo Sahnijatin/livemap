@@ -3,6 +3,8 @@ import type { DomainIndex } from '@shared/domain.js';
 import { useStore, MAX_CHANGES, MAX_EVENTS, CENTER_TABS, loadTab, depKey, tableKey, fieldKey, routeBaseKey } from './store';
 import { LARGE_PROJECT } from './map/mapModel';
 import { file, change, event, session, emptyDomain } from './fixtures';
+import { restHistorySource, setHistorySource, type HistorySource } from './history';
+import { startPlayback } from './play';
 
 const hello = (files = [file('a.ts'), file('b.ts'), file('c.ts')]) => ({
   type: 'hello' as const, root: '/p/shop', name: 'shop', files, changes: [], usedBy: [], domain: emptyDomain(), indexing: false, events: [], sessions: [], control: { paused: false, flags: [] },
@@ -334,5 +336,227 @@ describe('store history and focus requests', () => {
     s.reset();
     const st = useStore.getState();
     expect([st.mapFocus, st.tableFocus, st.routeTrace, st.history]).toEqual([null, null, null, []]);
+  });
+});
+
+describe('history and rewind', () => {
+  const past = (files = [file('a.ts')]) => ({ ...hello(files), type: undefined, seq: 4, at: 1_700_000_000_000 });
+  const status = { enabled: true, first: 1, last: 9, firstAt: 1, lastAt: 9 };
+
+  afterEach(() => setHistorySource(restHistorySource));
+
+  it('takes the history status from hello and from history messages', () => {
+    const s = useStore.getState();
+    s.apply({ ...hello(), history: status, seq: 9 });
+    expect(useStore.getState().historyStatus).toEqual(status);
+    s.apply({ type: 'history', history: { ...status, enabled: false, error: 'disk full' } });
+    expect(useStore.getState().historyStatus).toMatchObject({ enabled: false, error: 'disk full' });
+  });
+
+  it('rewind replaces data but keeps tab, selected and panel', () => {
+    const s = useStore.getState();
+    s.apply(hello());
+    s.setTab('map');
+    s.select('c.ts');
+    s.setPanel('inspector');
+    const { type: _t, ...state } = past();
+    s.rewind(state);
+    const st = useStore.getState();
+    expect(Object.keys(st.files)).toEqual(['a.ts']);
+    expect(st.rewound).toEqual({ seq: 4, at: 1_700_000_000_000 });
+    expect([st.tab, st.selected, st.panel]).toEqual(['map', 'c.ts', 'inspector']);
+  });
+
+  it('drops live data messages while rewound, but still applies history status', () => {
+    const s = useStore.getState();
+    s.apply(hello());
+    const { type: _t, ...state } = past([file('a.ts')]);
+    s.rewind(state);
+    const before = useStore.getState();
+    s.apply({ type: 'change', change: change('z.ts', 'created'), files: [file('z.ts')], removed: [] });
+    s.apply({ type: 'files', files: [file('y.ts')], removed: [] });
+    expect(useStore.getState().files).toBe(before.files);
+    expect(useStore.getState().changes).toBe(before.changes);
+    s.apply({ type: 'history', history: status });
+    expect(useStore.getState().historyStatus).toEqual(status);
+  });
+
+  it('summaries: rewind takes file summaries from the past state but keeps the live summarizer status', () => {
+    const s = useStore.getState();
+    const ready = { state: 'ready' as const, provider: 'anthropic' as const, model: 'm', usedTokens: 5, capTokens: 100, month: '2026-10' };
+    s.apply({ ...hello(), summaries: { status: ready, files: { 'a.ts': { hash: 'h2', summary: 'Now' } } } });
+    const { type: _t, ...state } = past();
+    s.rewind({ ...state, summaries: { status: { ...ready, state: 'off' }, files: { 'a.ts': { hash: 'h1', summary: 'Then' } } } });
+    expect(useStore.getState().summaries).toEqual({ status: ready, files: { 'a.ts': { hash: 'h1', summary: 'Then' } } });
+    // A past state recorded before summaries existed has none.
+    s.rewind(state);
+    expect(useStore.getState().summaries).toEqual({ status: ready, files: {} });
+    // The status is the engine's, not history's: it still updates while rewound; file summaries do not.
+    s.apply({ type: 'summaryStatus', status: { ...ready, state: 'working' } });
+    s.apply({ type: 'fileSummary', path: 'a.ts', hash: 'h3', summary: 'Later' });
+    expect(useStore.getState().summaries).toEqual({ status: { ...ready, state: 'working' }, files: {} });
+  });
+
+  it('backToLive keeps a summarizer status that arrived while it waited', async () => {
+    const s = useStore.getState();
+    const ready = { state: 'ready' as const, provider: 'anthropic' as const, model: 'm', usedTokens: 5, capTokens: 100, month: '2026-10' };
+    s.apply({ ...hello(), summaries: { status: ready, files: {} } });
+    const { type: _t, ...state } = past();
+    s.rewind(state);
+    let answer!: (v: unknown) => void;
+    const live = vi.fn(() => new Promise(r => { answer = r; }));
+    setHistorySource({ ...restHistorySource, live } as unknown as HistorySource);
+    const done = s.backToLive();
+    s.apply({ type: 'summaryStatus', status: { ...ready, state: 'cap', usedTokens: 100 } });
+    // The live state was built before that status.
+    answer({ ...hello(), type: undefined, seq: 12, summaries: { status: ready, files: { 'a.ts': { hash: 'h', summary: 'S' } } } });
+    await done;
+    expect(useStore.getState().summaries).toEqual({ status: { ...ready, state: 'cap', usedTokens: 100 }, files: { 'a.ts': { hash: 'h', summary: 'S' } } });
+
+    // Without a status in between, the fetched one wins.
+    s.rewind(state);
+    setHistorySource({ ...restHistorySource, live: async () => ({ ...hello(), type: undefined, seq: 13, summaries: { status: { ...ready, usedTokens: 7 }, files: {} } }) } as unknown as HistorySource);
+    await s.backToLive();
+    expect(useStore.getState().summaries.status.usedTokens).toBe(7);
+  });
+
+  it('a fileSummary with an empty hash clears the entry', () => {
+    const s = useStore.getState();
+    s.apply({ ...hello(), summaries: { status: { state: 'off', usedTokens: 0, capTokens: 1, month: '' }, files: { 'a.ts': { hash: 'h', summary: 'S' }, 'b.ts': { hash: 'g', summary: 'T' } } } });
+    s.apply({ type: 'fileSummary', path: 'a.ts', hash: '', summary: '' });
+    expect(useStore.getState().summaries.files).toEqual({ 'b.ts': { hash: 'g', summary: 'T' } });
+  });
+
+  it('backToLive applies the live state like a hello, keeping tab, selection and panel', async () => {
+    const s = useStore.getState();
+    s.apply(hello());
+    s.setTab('schema');
+    s.select('b.ts');
+    s.setPanel('files');
+    const { type: _t, ...state } = past();
+    s.rewind(state);
+    const live = vi.fn(async () => ({ ...hello([file('a.ts'), file('b.ts'), file('new.ts')]), type: undefined, seq: 12, history: status }));
+    setHistorySource({ ...restHistorySource, live } as unknown as HistorySource);
+    await s.backToLive();
+    const st = useStore.getState();
+    expect(live).toHaveBeenCalledTimes(1);
+    expect(st.rewound).toBeNull();
+    expect(Object.keys(st.files).sort()).toEqual(['a.ts', 'b.ts', 'new.ts']);
+    expect([st.tab, st.selected, st.panel]).toEqual(['schema', 'b.ts', 'files']);
+    expect(st.historyStatus).toEqual(status);
+    // Live again: messages apply.
+    s.apply({ type: 'files', files: [file('y.ts')], removed: [] });
+    expect(useStore.getState().files['y.ts']).toBeDefined();
+  });
+
+  it('backToLive replays live messages that arrive while it waits, once, by seq', async () => {
+    const s = useStore.getState();
+    s.apply({ ...hello(), history: status, seq: 9 });
+    const { type: _t, ...state } = past();
+    s.rewind(state);
+    let resolve!: (v: unknown) => void;
+    const live = vi.fn(() => new Promise(r => { resolve = r; }));
+    setHistorySource({ ...restHistorySource, live } as unknown as HistorySource);
+    const done = s.backToLive();
+    const included = change('a.ts', 'modified');
+    const after = change('late.ts', 'created');
+    // Broadcast before the server built the state (so it is in it), and after (so it is not).
+    s.apply({ type: 'change', change: included, files: [file('a.ts')], removed: [], seq: 11 });
+    s.apply({ type: 'change', change: after, files: [file('late.ts')], removed: [], seq: 13 });
+    s.apply({ type: 'history', history: { ...status, last: 13 } });
+    expect(useStore.getState().rewound).not.toBeNull();
+    expect(useStore.getState().files['late.ts']).toBeUndefined();
+    resolve({ ...hello([file('a.ts'), file('b.ts')]), changes: [included], type: undefined, seq: 12, history: status });
+    await done;
+    const st = useStore.getState();
+    expect(st.rewound).toBeNull();
+    expect(st.changes.map(c => c.id)).toEqual([included.id, after.id]);
+    expect(st.files['late.ts']).toBeDefined();
+    expect(st.historyStatus.last).toBe(13);
+  });
+
+  it('a reset hello buffered during backToLive is replayed only when its seq is newer than the live state', async () => {
+    for (const [helloSeq, replayed] of [[13, true], [12, false]] as const) {
+      useStore.getState().reset();
+      const s = useStore.getState();
+      s.apply({ ...hello(), history: status, seq: 9 });
+      const { type: _t, ...state } = past();
+      s.rewind(state);
+      let resolve!: (v: unknown) => void;
+      setHistorySource({ ...restHistorySource, live: () => new Promise(r => { resolve = r; }) } as unknown as HistorySource);
+      const done = s.backToLive();
+      s.apply({ ...hello([file('reset.ts')]), history: { ...status, last: helloSeq }, seq: helloSeq });
+      resolve({ ...hello([file('live.ts')]), type: undefined, seq: 12, history: status });
+      await done;
+      expect(Object.keys(useStore.getState().files)).toEqual([replayed ? 'reset.ts' : 'live.ts']);
+    }
+  });
+
+  it('a buffered message without a seq is dropped when the live state has one', async () => {
+    const s = useStore.getState();
+    s.apply(hello());
+    const { type: _t, ...state } = past();
+    s.rewind(state);
+    let resolve!: (v: unknown) => void;
+    setHistorySource({ ...restHistorySource, live: () => new Promise(r => { resolve = r; }) } as unknown as HistorySource);
+    const done = s.backToLive();
+    s.apply({ type: 'files', files: [file('noseq.ts')], removed: [] });
+    resolve({ ...hello(), type: undefined, seq: 12, history: status });
+    await done;
+    expect(useStore.getState().files['noseq.ts']).toBeUndefined();
+  });
+
+  it('Back to live stops the play engine itself, so a played hello cannot cancel it', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = useStore.getState();
+      s.apply({ ...hello(), history: status, seq: 9 });
+      const { type: _t, ...state } = past();
+      s.rewind(state);
+      let resolve!: (v: unknown) => void;
+      // The next record is a run-start hello, due 100 ms after the rewound point.
+      const pages = [[{ seq: 5, at: state.at + 800, msg: hello([file('restart.ts')]) }]];
+      const messages = vi.fn(() => (pages.length ? Promise.resolve(pages.shift()!) : new Promise(() => {})));
+      const live = vi.fn(() => new Promise(r => { resolve = r; }));
+      setHistorySource({ ...restHistorySource, messages, live } as unknown as HistorySource);
+      await startPlayback(() => true, () => {});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(messages).toHaveBeenCalledTimes(1);
+      // No Timeline is mounted: nothing but backToLive itself can stop the engine.
+      const done = s.backToLive();
+      await vi.advanceTimersByTimeAsync(500);
+      resolve({ ...hello([file('live.ts')]), type: undefined, seq: 12, history: status });
+      await done;
+      const st = useStore.getState();
+      expect(st.rewound).toBeNull();
+      expect(Object.keys(st.files)).toEqual(['live.ts']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('Play from live starts at the current run, not the first recorded event', async () => {
+    const s = useStore.getState();
+    s.apply({ ...hello(), history: { ...status, first: 1, last: 90 }, seq: 90 });
+    const runs = [{ id: 'r1', firstSeq: 1, lastSeq: 40, startAt: 1 }, { id: 'r2', firstSeq: 41, lastSeq: 90, startAt: 2 }];
+    const stateAt = vi.fn(async (seq: number) => ({ ...past(), seq, at: 5 }));
+    const info = vi.fn(async () => ({ ...status, runs, bytes: 0 }));
+    const messages = vi.fn(() => new Promise(() => {}));
+    setHistorySource({ ...restHistorySource, info, stateAt, messages } as unknown as HistorySource);
+    const stop = await startPlayback(() => true, () => {});
+    stop?.();
+    expect(stateAt).toHaveBeenCalledWith(41);
+    expect(useStore.getState().rewound?.seq).toBe(41);
+  });
+
+  it('a played hello (a run boundary) replaces the data and moves the rewound point', () => {
+    const s = useStore.getState();
+    s.apply(hello());
+    const { type: _t, ...state } = past();
+    s.rewind(state);
+    s.applyHistorical({ seq: 5, at: 2, msg: hello([file('restart.ts')]) });
+    const st = useStore.getState();
+    expect(Object.keys(st.files)).toEqual(['restart.ts']);
+    expect(st.rewound).toEqual({ seq: 5, at: 2 });
   });
 });

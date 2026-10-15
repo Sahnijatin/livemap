@@ -40,6 +40,8 @@ export interface ChangeSummary {
   env: { added: string[]; removed: string[] };
   lines: { added: number; removed: number }; hunks: Hunk[]; truncated: boolean;
   attribution?: Attribution;
+  /** AI one-liner, when summaries are enabled. Plain text. */
+  summary?: string;
 }
 
 export type AgentKind = 'claude-code' | 'codex' | 'cursor' | 'git' | 'other';

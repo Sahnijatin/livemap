@@ -7,7 +7,7 @@
   "files": ["dist"],
   "scripts": {
     "prebuild": "node scripts/ui-deps.mjs",
-    "build": "tsup && npm --prefix ui run build",
+    "build": "tsup && npm --prefix ui run build && npm --prefix ui run build:export",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "test:perf": "vitest run --config vitest.perf.config.ts",

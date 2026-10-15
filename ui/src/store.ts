@@ -1,8 +1,11 @@
 import { create } from 'zustand';
 import type { ApiRoute, DomainIndex, Table } from '@shared/domain.js';
-import type { ServerMessage, UsedByEntry } from '@shared/protocol.js';
+import type { HistoryStatus, UsedByEntry, WireMessage } from '@shared/protocol.js';
+import { patchChanges, withFileSummary, type ProjectState } from '@shared/state.js';
+import { emptySummaries, type SummariesState } from '@shared/summaries.js';
 import type { AgentEvent, AgentSession, ChangeSummary, ControlState, Dep, FileModel } from '@shared/types.js';
 import { LARGE_PROJECT, codeFileCount, edgeBaseline, type Level } from './map/mapModel';
+import { historySource, type HistoryRecord, type HistoryState, type LiveState } from './history';
 
 export const MAX_CHANGES = 2000;
 export const MAX_EVENTS = 2000;
@@ -86,6 +89,9 @@ function pushHistory(history: string[], path: string): string[] {
 }
 export type ConnectionState = 'connecting' | 'open' | 'closed' | 'unauthorized';
 
+/** Recording status before a hello says otherwise (and from a server without history). */
+export const NO_HISTORY: HistoryStatus = { enabled: false, first: 0, last: 0, firstAt: 0, lastAt: 0 };
+
 export interface StoreState {
   connected: boolean;
   /** Finer connection detail for the status chip; `unauthorized` stops reconnecting. */
@@ -141,8 +147,19 @@ export interface StoreState {
   routeTrace: { id: string; seq: number } | null;
   /** The ⌘K palette is open. */
   paletteOpen: boolean;
+  /** Recording status, from hello and `history` messages. (`history` above is the recent-files list.) */
+  historyStatus: HistoryStatus;
+  /** The UI shows a past moment: live data messages are dropped until `backToLive`. */
+  rewound: { seq: number; at: number } | null;
+  /** The timeline is playing history forward. */
+  playing: boolean;
+  /** Summarizer status (always live, even while rewound) and file summaries by path. */
+  summaries: SummariesState;
+  /** An exported replay: no server, always rewound; its end state stands in for live. */
+  replay: boolean;
 
-  apply(msg: ServerMessage): void;
+  /** Applies a socket message (or a played one); while rewound, live data is dropped or buffered. */
+  apply(msg: WireMessage): void;
   select(path: string | null): void;
   toggle(path: string): void;
   setFilter(q: string): void;
@@ -163,6 +180,13 @@ export interface StoreState {
   /** Ask the API view to trace a route (by route id). */
   traceRoute(id: string): void;
   setPalette(open: boolean): void;
+  /** Shows the project as it was at a recorded seq; keeps the tab, selection and panel. */
+  rewind(state: HistoryState): void;
+  /** Applies one played record while rewound (a `hello` is a run boundary: a full replace). */
+  applyHistorical(rec: HistoryRecord): void;
+  /** Fetches the live state and applies it like a hello, keeping the tab, selection and panel. */
+  backToLive(): Promise<void>;
+  setPlaying(on: boolean): void;
   reset(): void;
 }
 
@@ -197,6 +221,11 @@ const initial = {
   tableFocus: null,
   routeTrace: null,
   paletteOpen: false,
+  historyStatus: NO_HISTORY,
+  rewound: null as StoreState['rewound'],
+  playing: false,
+  summaries: emptySummaries(),
+  replay: false,
 };
 
 function routesByFileOf(domain: DomainIndex): Record<string, ApiRoute[]> {
@@ -220,6 +249,88 @@ function recordRecent(recent: StoreState['recent'], c: ChangeSummary): void {
   else recent[c.path] = { kind: c.kind, at: c.at };
 }
 
+/**
+ * Project data from a hello (or a past state): replaces every data slice and resets the "new since hello"
+ * baselines, so nothing that arrives with it animates in. View state is the caller's business.
+ */
+function replaceData(msg: ProjectState, st: StoreState) {
+  const files: Record<string, FileModel> = {};
+  for (const f of msg.files) files[f.path] = f;
+  const changes = msg.changes.slice(-MAX_CHANGES);
+  const recent: StoreState['recent'] = {};
+  for (const c of changes) recordRecent(recent, c);
+  // Tolerate a hello without agent fields (agent activity unavailable).
+  const events = (msg.events ?? []).slice(-MAX_EVENTS);
+  const sessions: Record<string, AgentSession> = {};
+  for (const x of msg.sessions ?? []) sessions[x.id] = x;
+  // Tolerate a hello without a domain (older server).
+  const domain = msg.domain ?? emptyDomainIndex();
+  return {
+    domain,
+    domainBase: baseOf(domain),
+    routesByFile: routesByFileOf(domain),
+    events,
+    sessions,
+    control: msg.control ?? { paused: false, flags: [] },
+    liveAfterId: events.reduce((m, e) => Math.max(m, e.id), 0),
+    loaded: true,
+    helloAt: Date.now(),
+    root: msg.root,
+    name: msg.name,
+    files,
+    changes,
+    usedBy: msg.usedBy,
+    // Tolerate a hello (or past state) without summaries: older server or recording.
+    summaries: msg.summaries ?? emptySummaries(),
+    recent,
+    indexing: msg.indexing ? st.indexing ?? { done: 0, total: 0 } : null,
+    helloEdges: edgeBaseline(files),
+    helloFiles: new Set(Object.keys(files)),
+    // The first hello of a large project opens the map at folders; a reconnect keeps the user's level.
+    ...(!st.loaded && codeFileCount(files) > LARGE_PROJECT ? { mapLevel: 'folders' as Level } : {}),
+  };
+}
+
+/**
+ * File summaries this page asked for and has no answer to yet (path to request time, 0 once it failed): the
+ * Inspector asks once per file. Any `fileSummary` for a path, a summary or a clear, settles it, so a file whose
+ * summary was withdrawn is asked for again when next viewed.
+ */
+export const summaryRequests = new Map<string, number>();
+/** Bumped by every `summaryStatus`, so `backToLive` can tell one arrived while it waited. */
+let statusGen = 0;
+
+/** True while `applyHistorical` feeds a played record through `apply`, past the rewound guard. */
+let replaying = false;
+/** Bumped by every rewind and return to live, so a slow `backToLive` never overrides a later rewind. */
+let viewGen = 0;
+/** Bumped by every `backToLive`: a past state requested before it must not rewind the UI again. */
+let liveGen = 0;
+export const liveGeneration = (): number => liveGen;
+/**
+ * Stops the running play engine. `backToLive` calls it before anything else, so a played record (such as
+ * a run-start hello, which rewinds) cannot land while it waits and make it give up.
+ */
+let stopPlayEngine: (() => void) | null = null;
+export function setPlayEngine(stop: (() => void) | null): void {
+  stopPlayEngine = stop;
+}
+function stopPlayback(): void {
+  stopPlayEngine?.();
+  stopPlayEngine = null;
+}
+/** Live data messages that arrive while `backToLive` waits for the live state; null when not waiting. */
+let liveBuffer: WireMessage[] | null = null;
+
+/**
+ * Whether a message buffered during `backToLive` is newer than the fetched live state (seq `stateSeq`).
+ * A message without a seq (recording off or failed) cannot be placed: it is replayed only when the
+ * state's seq is unknown too, so a delta the state may already include is never applied twice.
+ */
+export const isAfter = (msg: WireMessage, stateSeq: number | undefined): boolean =>
+  msg.seq === undefined ? stateSeq === undefined : stateSeq === undefined || msg.seq > stateSeq;
+
+
 export const useStore = create<StoreState>()((set, get) => ({
   ...initial,
   ...freshDomain(),
@@ -227,47 +338,30 @@ export const useStore = create<StoreState>()((set, get) => ({
   follow: loadFollow(),
 
   apply(msg) {
+    if (msg.type === 'fileSummary') summaryRequests.delete(msg.path); // even while rewound: see summaryRequests
+    if (get().rewound && !replaying && msg.type !== 'history' && msg.type !== 'summaryStatus') {
+      // Rewound: live data is dropped (backToLive refetches it), or kept while backToLive waits, for
+      // replay after the state it fetches. A reconnect's hello still updates the status.
+      if (msg.type === 'hello' && msg.history) set({ historyStatus: msg.history });
+      liveBuffer?.push(msg);
+      return;
+    }
     switch (msg.type) {
       case 'hello': {
         // Replaces all project data. View state (selection, expansion, filter) survives a
         // reconnect as long as the selected file still exists.
-        const files: Record<string, FileModel> = {};
-        for (const f of msg.files) files[f.path] = f;
-        const changes = msg.changes.slice(-MAX_CHANGES);
-        const recent: StoreState['recent'] = {};
-        for (const c of changes) recordRecent(recent, c);
-        const { selected, loaded } = get();
-        // Tolerate a hello without agent fields (agent activity unavailable).
-        const events = (msg.events ?? []).slice(-MAX_EVENTS);
-        const sessions: Record<string, AgentSession> = {};
-        for (const x of msg.sessions ?? []) sessions[x.id] = x;
-        // Tolerate a hello without a domain (older server).
-        const domain = msg.domain ?? emptyDomainIndex();
+        const { selected } = get();
+        const data = replaceData(msg, get());
         set({
-          domain,
-          domainBase: baseOf(domain),
-          routesByFile: routesByFileOf(domain),
-          events,
-          sessions,
-          control: msg.control ?? { paused: false, flags: [] },
-          liveAfterId: events.reduce((m, e) => Math.max(m, e.id), 0),
-          loaded: true,
-          helloAt: Date.now(),
-          root: msg.root,
-          name: msg.name,
-          files,
-          changes,
-          usedBy: msg.usedBy,
-          recent,
-          indexing: msg.indexing ? get().indexing ?? { done: 0, total: 0 } : null,
-          selected: selected && files[selected] ? selected : null,
-          helloEdges: edgeBaseline(files),
-          helloFiles: new Set(Object.keys(files)),
-          // The first hello of a large project opens the map at folders; a reconnect keeps the user's level.
-          ...(!loaded && codeFileCount(files) > LARGE_PROJECT ? { mapLevel: 'folders' as Level } : {}),
+          ...data,
+          historyStatus: msg.history ?? NO_HISTORY,
+          selected: selected && data.files[selected] ? selected : null,
         });
         return;
       }
+      case 'history':
+        set({ historyStatus: msg.history });
+        return;
       case 'files':
         set(upsertFiles(get(), msg.files, msg.removed));
         return;
@@ -302,17 +396,21 @@ export const useStore = create<StoreState>()((set, get) => ({
       case 'control':
         set({ control: msg.control });
         return;
-      case 'attribution': {
-        const prev = get().changes;
-        for (let i = prev.length - 1; i >= 0; i--) {
-          if (prev[i].id !== msg.changeId) continue;
-          const changes = prev.slice();
-          changes[i] = { ...prev[i], attribution: msg.attribution };
-          set({ changes });
-          return;
-        }
+      case 'attribution':
+      case 'summary': {
+        const changes = patchChanges(get().changes, msg.changeId, msg.type === 'summary' ? { summary: msg.summary } : { attribution: msg.attribution });
+        if (changes) set({ changes });
         return;
       }
+      case 'fileSummary': {
+        const prev = get().summaries;
+        set({ summaries: { ...prev, files: withFileSummary(prev.files, msg) } });
+        return;
+      }
+      case 'summaryStatus':
+        statusGen++;
+        set({ summaries: { ...get().summaries, status: msg.status } });
+        return;
     }
   },
 
@@ -391,7 +489,74 @@ export const useStore = create<StoreState>()((set, get) => ({
     set({ paletteOpen });
   },
 
+  rewind(state) {
+    viewGen++;
+    liveBuffer = null;
+    const { seq, at, ...data } = state;
+    // The selection stays even when its file did not exist yet, so going back to live restores it.
+    // The summarizer status is the engine's now, not history's: it stays live.
+    const past = replaceData(data, get());
+    set({ ...past, summaries: { ...past.summaries, status: get().summaries.status }, rewound: { seq, at } });
+  },
+
+  applyHistorical({ seq, at, msg }) {
+    if (!get().rewound) return;
+    // A hello is a run boundary: the recorded start state of the next LiveMap run.
+    if (msg.type === 'hello') return get().rewind({ ...msg, seq, at });
+    const { selected } = get();
+    replaying = true;
+    try {
+      get().apply(msg);
+    } finally {
+      replaying = false;
+    }
+    set({ rewound: { seq, at }, selected });
+  },
+
+  async backToLive() {
+    if (!get().rewound) return;
+    stopPlayback();
+    if (get().replay) {
+      // No live in a replay: its end.
+      set({ playing: false });
+      return get().rewind(await historySource().stateAt(get().historyStatus.last));
+    }
+    const gen = ++viewGen;
+    liveGen++;
+    liveBuffer = [];
+    const statusAt = statusGen;
+    set({ playing: false });
+    let live: LiveState;
+    try {
+      live = await historySource().live();
+    } catch {
+      if (gen === viewGen) {
+        liveBuffer = null;
+        get().showToast('LiveMap is not reachable. Is it still running?', 'error');
+      }
+      return;
+    }
+    if (gen !== viewGen || !get().rewound) return;
+    const buffered = liveBuffer ?? [];
+    liveBuffer = null;
+    // Like a hello: the selection stays while its file exists; tab and panel are untouched. A status that
+    // arrived while waiting is newer than the one in the fetched state.
+    const { selected, historyStatus, summaries } = get();
+    const data = replaceData(live, get());
+    const status = live.history && live.history.last >= historyStatus.last ? live.history : historyStatus;
+    // Likewise a summarizer status that arrived while waiting (it is applied at once, never buffered).
+    if (statusGen !== statusAt) data.summaries = { ...data.summaries, status: summaries.status };
+    set({ ...data, historyStatus: status, selected: selected && data.files[selected] ? selected : null, rewound: null });
+    // Then what arrived after the state was built, each once.
+    for (const m of buffered) if (isAfter(m, live.seq)) get().apply(m);
+  },
+
+  setPlaying(playing) {
+    set({ playing });
+  },
+
   reset() {
-    set({ ...initial, ...freshDomain(), tab: 'activity', follow: loadFollow(), helloFiles: new Set(), files: {}, changes: [], usedBy: [], recent: {}, expanded: {}, events: [], sessions: {}, control: { paused: false, flags: [] }, mapExpanded: {}, helloEdges: new Set(), history: [] });
+    summaryRequests.clear();
+    set({ ...initial, ...freshDomain(), tab: 'activity', follow: loadFollow(), historyStatus: NO_HISTORY, rewound: null, playing: false, summaries: emptySummaries(), helloFiles: new Set(), files: {}, changes: [], usedBy: [], recent: {}, expanded: {}, events: [], sessions: {}, control: { paused: false, flags: [] }, mapExpanded: {}, helloEdges: new Set(), history: [] });
   },
 }));

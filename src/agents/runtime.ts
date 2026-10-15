@@ -9,12 +9,17 @@ import path from 'node:path';
  */
 export interface RuntimeEntry { root: string; port: number; token: string; pid: number }
 
-export function runtimeDir(): string {
-  const home = process.env.LIVEMAP_HOME || path.join(os.homedir(), '.livemap');
-  return path.join(home, 'run');
+/** LiveMap's home directory: `LIVEMAP_HOME` when set and non-empty, else `~/.livemap`. */
+export function livemapHome(): string {
+  return process.env.LIVEMAP_HOME || path.join(os.homedir(), '.livemap');
 }
 
-function real(p: string): string {
+export function runtimeDir(): string {
+  return path.join(livemapHome(), 'run');
+}
+
+/** The canonical project root: its realpath, or the resolved path when it does not exist. History hashes it the same way. */
+export function real(p: string): string {
   try {
     return fs.realpathSync(p);
   } catch {

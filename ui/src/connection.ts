@@ -1,4 +1,4 @@
-import type { ServerMessage } from '@shared/protocol.js';
+import type { WireMessage } from '@shared/protocol.js';
 import { useStore } from './store';
 
 const WS_UNAUTHORIZED = 4401;
@@ -91,9 +91,9 @@ export function connect(): void {
       useStore.getState().setConnection('open');
     };
     ws.onmessage = ev => {
-      let msg: ServerMessage;
+      let msg: WireMessage;
       try {
-        msg = JSON.parse(String(ev.data)) as ServerMessage;
+        msg = JSON.parse(String(ev.data)) as WireMessage;
       } catch {
         return;
       }

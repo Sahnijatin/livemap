@@ -1,7 +1,7 @@
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useReducer, useRef } from 'react';
 import clsx from 'clsx';
 import type { ChangeSummary, FileModel } from '@shared/types.js';
-import { useStore } from '../store';
+import { summaryRequests, useStore } from '../store';
 import { LAYERS, layerOf } from '../layers';
 import { flattenSymbols, latestChange, symbolTags } from '../changes';
 import { agentName, clock } from '../agents';
@@ -15,6 +15,7 @@ import { MethodPill } from './MethodPill';
 import { LEAVING, useGlide, useLeaving } from '../motion';
 import { NARROW_QUERY, useMedia } from '../media';
 import { INERT } from '../panels';
+import { authHeaders } from '../connection';
 
 function FileChip({ path, note }: { path: string; note?: string }) {
   const file = useStore(s => s.files[path]);
@@ -24,6 +25,64 @@ function FileChip({ path, note }: { path: string; note?: string }) {
     <button type="button" className="chip" style={layerVars(layer)} title={note ? `${path}\n${note}` : path} onClick={() => select(path)}>
       <i /><span>{baseName(path)}</span>
     </button>
+  );
+}
+
+/** How long the summary shimmer waits for a `fileSummary` before giving up. */
+const PENDING_MS = 15_000;
+/**
+ * Asks the server for a file summary unless a request for it is unanswered (see `summaryRequests`); false then.
+ * A cached summary applies at once and a pending one arrives as `fileSummary`; `done` runs when the request fails.
+ */
+function requestSummary(path: string, done: () => void): boolean {
+  if (summaryRequests.has(path)) return false;
+  summaryRequests.set(path, Date.now());
+  const fail = () => { summaryRequests.set(path, 0); done(); };
+  fetch(`/api/summary?path=${encodeURIComponent(path)}`, { headers: authHeaders() })
+    .then(async res => {
+      if (res.status === 202) return;
+      if (res.status !== 200) return fail();
+      const j = (await res.json()) as { summary?: unknown; hash?: unknown };
+      if (typeof j.summary !== 'string' || typeof j.hash !== 'string') return fail();
+      useStore.getState().apply({ type: 'fileSummary', path, hash: j.hash, summary: j.summary });
+    })
+    .catch(fail);
+  return true;
+}
+
+/**
+ * "In plain English": the AI file summary, else the agent's own words for the latest change, else nothing.
+ * Summaries render as text only.
+ */
+function PlainEnglish({ path }: { path: string }) {
+  const entry = useStore(s => s.summaries.files[path]);
+  const state = useStore(s => s.summaries.status.state);
+  const on = state !== 'off';
+  // At the cap or after an error a cached summary can still come back, but no new one is being written.
+  const writing = state === 'ready' || state === 'working';
+  const rewound = useStore(s => s.rewound !== null);
+  const changes = useStore(s => s.changes);
+  const intent = useMemo(() => latestChange(changes, path)?.attribution?.intent, [changes, path]);
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    if (!entry && on && !rewound && requestSummary(path, rerender)) rerender(); // show the shimmer
+  }, [path, entry, on, rewound]);
+  const since = summaryRequests.get(path) ?? 0;
+  const left = entry || !writing || rewound ? 0 : since + PENDING_MS - Date.now();
+  useEffect(() => {
+    if (left <= 0) return;
+    const t = setTimeout(rerender, left);
+    return () => clearTimeout(t);
+  }, [left > 0, since]);
+
+  if (!entry && left <= 0 && !intent) return null;
+  return (
+    <div className="ai fi">
+      <small><span aria-hidden="true">✦ </span>In plain English</small>
+      {entry ? <p>{entry.summary}</p>
+        : left > 0 ? <div className="ai-wait" aria-busy="true" aria-label="Writing a summary"><i /><i /></div>
+        : <><span className="ai-src">In the agent's words</span><p>{intent}</p></>}
+    </div>
   );
 }
 
@@ -175,6 +234,8 @@ function FileDetail({ file }: { file: FileModel }) {
           </div>
         </div>
       </div>
+
+      <PlainEnglish path={file.path} />
 
       {file.flags.parseError && (
         <div className="note err">

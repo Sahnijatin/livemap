@@ -58,6 +58,17 @@ afterEach(async () => {
 });
 
 describe('livemap CLI', () => {
+  // buildOnce runs `npm run build` from vitest, where NODE_ENV is "test": the UI must still be a production build.
+  it('builds the UI and the export page for production even when NODE_ENV is set', () => {
+    const assets = path.join(repo, 'dist', 'ui', 'assets');
+    const bundles = [
+      ...fs.readdirSync(assets).filter(f => f.endsWith('.js')).map(f => path.join(assets, f)),
+      path.join(repo, 'dist', 'ui-export', 'index.html'),
+    ];
+    const dev = bundles.filter(f => fs.readFileSync(f, 'utf8').includes('jsxDEV'));
+    expect(dev.map(f => path.relative(repo, f))).toEqual([]);
+  });
+
   it('prints the project name and a tokened URL whose /api/health answers 200', async () => {
     run([root, '--no-open', '--port', '0']);
     await waitFor(() => URL_RE.test(out));
