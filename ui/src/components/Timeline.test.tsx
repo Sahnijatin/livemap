@@ -10,7 +10,7 @@ import { file, emptyDomain } from '../fixtures';
 import { Timeline } from './Timeline';
 import { FlagBox } from './FlagBox';
 import { PauseButton, Toolbar } from './Toolbar';
-import { LiveSession } from './LiveSession';
+import { LiveHead, LiveSession } from './LiveSession';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -331,7 +331,7 @@ describe('read-only while rewound', () => {
     const now = Date.now();
     useStore.getState().setConnection('open');
     useStore.getState().apply({ type: 'session', session: { id: 's1', agent: 'claude-code', title: 't', cwd: '/p', startedAt: now - 1000, lastAt: now, status: 'working', hooks: true } });
-    render(<><Toolbar /><LiveSession /></>);
+    render(<><Toolbar /><LiveHead /><LiveSession /></>);
     expect(host.querySelector('.statuschip')!.textContent).toContain('Live');
     expect(host.querySelector('.livetag')).not.toBeNull();
     act(() => useStore.getState().rewind({ ...projectState(), sessions: [{ id: 's1', agent: 'claude-code', title: 't', cwd: '/p', startedAt: now - 1000, lastAt: now, status: 'working', hooks: true }], seq: 40, at: T0 }));

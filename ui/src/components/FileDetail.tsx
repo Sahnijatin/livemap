@@ -11,7 +11,6 @@ import { Avatar } from './Avatar';
 import { KindBadge, LayerTile, layerVars } from './icons';
 import { MethodPill } from './MethodPill';
 import { authHeaders } from '../connection';
-import { CollapseButton } from './Dock';
 
 /* The inspector's file view. It only shows once a file is selected, so it loads after first paint (see Inspector). */
 
@@ -194,7 +193,7 @@ export function FileDetail({ file }: { file: FileModel }) {
   const files = useStore(s => s.files);
   const changes = useStore(s => s.changes);
   const usedByIndex = useStore(s => s.usedBy);
-  const { select, revealLine } = useStore.getState();
+  const { revealLine } = useStore.getState();
   const layer = layerOf(file.path, file);
   const change = latestChange(changes, file.path);
   const tags = useMemo(() => symbolTags(file, change), [file, change]);
@@ -220,10 +219,6 @@ export function FileDetail({ file }: { file: FileModel }) {
 
   return (
     <>
-      <div className="ins-top">
-        <button type="button" className="backbtn" onClick={() => select(null)}>‹ Live session</button>
-        <CollapseButton panel="inspector" />
-      </div>
       <div className="sh-head">
         <LayerTile layer={layer} className="ic" />
         <div style={{ minWidth: 0 }}>

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { useStore } from '../store';
-import { LiveSession } from './LiveSession';
+import { LiveHead, LiveSession } from './LiveSession';
+import { CollapseButton } from './Dock';
 import { LEAVING, useGlide, useLeaving } from '../motion';
 import { NARROW_QUERY, useMedia } from '../media';
 import { INERT, shownLayout } from '../panels';
@@ -42,6 +43,7 @@ function Pane({ id, entering, leaving, failed, retry }: { id: string; entering: 
 
 export function Inspector() {
   const id = useStore(s => s.selected ?? OVERVIEW);
+  const hasFile = useStore(s => s.selected !== null && !!s.files[s.selected]);
   const panel = useStore(s => s.panel);
   const collapsed = useStore(s => shownLayout(s).collapsed.inspector);
   // Below 1080 px a closed slide-over is off screen, and wider a collapsed panel is hidden: keep it out of the tab order.
@@ -63,7 +65,14 @@ export function Inspector() {
       tabIndex={-1}
       {...((narrow ? panel !== 'inspector' : collapsed) ? INERT : {})}
     >
-      {ids.map(k => <Pane key={k} id={k} entering={from !== null && k === id} leaving={k === prev} failed={failed} retry={retry} />)}
+      {/* The bar stays put above the scrolling view: its header and the hide button, so nothing scrolls under them. */}
+      <div className="ins-bar">
+        {hasFile ? <button type="button" className="backbtn" onClick={() => useStore.getState().select(null)}>‹ Live session</button> : <LiveHead />}
+        <CollapseButton panel="inspector" />
+      </div>
+      <div className="ins-body">
+        {ids.map(k => <Pane key={k} id={k} entering={from !== null && k === id} leaving={k === prev} failed={failed} retry={retry} />)}
+      </div>
     </aside>
   );
 }
