@@ -340,24 +340,38 @@ describe('SchemaView layout direction (pane aspect)', () => {
       dirs.push(String(g.layoutOptions?.['elk.direction']));
       return rowRun(g);
     };
-    // The desktop center pane: narrower than it is tall.
+    // The desktop center pane: narrower than it is tall. A fresh layout tries the pane's direction first, then the other.
     pane = { width: 490, height: 1000 };
     await mount([bare('DirA'), bare('DirB')], run);
-    expect(dirs).toEqual(['DOWN']);
+    expect(dirs).toEqual(['DOWN', 'RIGHT']);
     expect(host.querySelector('.sv-canvas')?.getAttribute('data-direction')).toBe('DOWN');
 
     // Still tall: no new layout.
     await resize(520, 980);
-    expect(dirs).toEqual(['DOWN']);
-
-    // Wide: every card is laid out again, left to right.
-    await resize(1200, 700);
     expect(dirs).toEqual(['DOWN', 'RIGHT']);
+
+    // Wide: every card is laid out again, left to right first.
+    await resize(1200, 700);
+    expect(dirs).toEqual(['DOWN', 'RIGHT', 'RIGHT', 'DOWN']);
     expect(host.querySelector('.sv-canvas')?.getAttribute('data-direction')).toBe('RIGHT');
     expect(posOf('dira')).not.toBeNull();
 
     // Wider still: same direction, no thrash.
     await resize(1400, 700);
-    expect(dirs).toEqual(['DOWN', 'RIGHT']);
+    expect(dirs).toEqual(['DOWN', 'RIGHT', 'RIGHT', 'DOWN']);
+  });
+
+  it('keeps the direction that fits the schema larger, even against the pane aspect', async () => {
+    // RIGHT puts the cards in a row, DOWN in a column, as ELK would for a chain of tables.
+    const byDir: ElkRun = async g => ({
+      ...g,
+      children: g.children!.map((c, i) => (g.layoutOptions?.['elk.direction'] === 'DOWN' ? { ...c, x: 0, y: i * 180 } : { ...c, x: i * 400, y: 0 })),
+    });
+    // Slightly wider than tall: the pane alone says RIGHT, but three stacked cards fit far larger.
+    pane = { width: 900, height: 700 };
+    await mount([bare('ChainA'), bare('ChainB'), bare('ChainC')], byDir);
+    const [a, b] = [posOf('chaina')!, posOf('chainb')!];
+    expect(a.x).toBe(b.x);
+    expect(b.y).toBeGreaterThan(a.y);
   });
 });

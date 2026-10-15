@@ -42,6 +42,36 @@ export function layoutDirection(width: number, height: number, current: Directio
   return height > width * HYSTERESIS ? 'DOWN' : 'RIGHT';
 }
 
+/** Fit padding, per side: the bottom keeps clear of the caption and zoom buttons over the canvas. */
+export const FIT_PADDING = { top: '24px', right: '24px', bottom: '72px', left: '24px' } as const;
+/** Most tables for which a fresh layout is tried both ways (each try is one ELK run). */
+export const BOTH_WAYS_MAX = 80;
+
+/** The zoom at which `pos` fits a `width` x `height` pane inside `FIT_PADDING`, capped at 1. */
+export function fitZoom(tables: Table[], pos: Map<string, Pos>, width: number, height: number): number {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const t of tables) {
+    const p = pos.get(tableKey(t));
+    if (!p) continue;
+    x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y);
+    x1 = Math.max(x1, p.x + NODE_W); y1 = Math.max(y1, p.y + nodeHeight(t));
+  }
+  if (!(x1 > x0) || !(y1 > y0)) return 1;
+  const px = (v: string) => Number.parseFloat(v);
+  const w = width - px(FIT_PADDING.left) - px(FIT_PADDING.right);
+  const h = height - px(FIT_PADDING.top) - px(FIT_PADDING.bottom);
+  if (w <= 0 || h <= 0) return 1;
+  return Math.min(1, w / (x1 - x0), h / (y1 - y0));
+}
+
+/**
+ * Of a layout in the pane's direction and one in the other direction, the one that fits larger.
+ * The pane's direction keeps ties: the other must fit at least 15% larger to win.
+ */
+export function pickLayout<T>(preferred: { dir: Direction; zoom: number; value: T }, other: { dir: Direction; zoom: number; value: T }): { dir: Direction; value: T } {
+  return other.zoom > preferred.zoom * HYSTERESIS ? other : preferred;
+}
+
 const OPTIONS = {
   'elk.algorithm': 'layered',
   'elk.spacing.nodeNode': '44',

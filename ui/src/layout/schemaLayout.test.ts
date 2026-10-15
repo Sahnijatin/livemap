@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import ELK from 'elkjs/lib/elk.bundled.js';
 import type { Table } from '@shared/domain.js';
-import { elkGraph, layoutDirection, layoutTables, nodeHeight, settle, tableKey, workerRun, LAYOUT_TIMEOUT, NARROW_PANE, NODE_W, type ElkRun, type Pos } from './schemaLayout';
+import { elkGraph, fitZoom, pickLayout, layoutDirection, layoutTables, nodeHeight, settle, tableKey, workerRun, LAYOUT_TIMEOUT, NARROW_PANE, NODE_W, type ElkRun, type Pos } from './schemaLayout';
 
 const elk = new ELK();
 const run: ElkRun = g => elk.layout(g);
@@ -65,6 +65,28 @@ describe('layoutDirection', () => {
     expect(layoutDirection(1050, 1000, 'DOWN')).toBe('DOWN');
     expect(layoutDirection(1000, 1300, 'RIGHT')).toBe('DOWN');
     expect(layoutDirection(1300, 1000, 'DOWN')).toBe('RIGHT');
+  });
+});
+
+describe('fitZoom and pickLayout', () => {
+  const t = (name: string): Table => ({ name, table: name, orm: 'prisma', sources: [], fields: [], relations: [] } as unknown as Table);
+  const tables = [t('a'), t('b'), t('c')];
+  const h = nodeHeight(tables[0]);
+  const row = new Map<string, Pos>(tables.map((x, i) => [tableKey(x), { x: i * 400, y: 0 }]));
+  const column = new Map<string, Pos>(tables.map((x, i) => [tableKey(x), { x: 0, y: i * 180 }]));
+
+  it('fits inside the per-side padding and never zooms past 1', () => {
+    // 900 wide less 48 px of side padding, over a row 2 * 400 + NODE_W wide.
+    expect(fitZoom(tables, row, 900, 700)).toBeCloseTo(852 / (800 + NODE_W));
+    expect(fitZoom(tables, column, 900, 700)).toBe(1);
+    // 400 tall less 96 px of top and bottom padding, over a column 2 * 180 + h tall.
+    expect(fitZoom(tables, column, 900, 400)).toBeCloseTo(304 / (360 + h));
+    expect(fitZoom([], row, 900, 700)).toBe(1);
+  });
+
+  it('keeps the preferred layout unless the other fits more than 15% larger', () => {
+    expect(pickLayout({ dir: 'RIGHT', zoom: 0.8, value: 1 }, { dir: 'DOWN', zoom: 0.9, value: 2 }).dir).toBe('RIGHT');
+    expect(pickLayout({ dir: 'RIGHT', zoom: 0.8, value: 1 }, { dir: 'DOWN', zoom: 1, value: 2 })).toEqual({ dir: 'DOWN', zoom: 1, value: 2 });
   });
 });
 
