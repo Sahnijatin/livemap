@@ -126,7 +126,7 @@ describe('review fixes: absolute paths with ..', () => {
 
 describe('symlinked project folder (#32)', () => {
   it('maps paths named through a symlink onto the real root', () => {
-    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-link-')));
+    const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-link-')));
     try {
       const real = path.join(tmp, 'real', 'app');
       fs.mkdirSync(path.join(real, 'src'), { recursive: true });
@@ -147,7 +147,7 @@ describe('symlinked project folder (#32)', () => {
 
   it('#40: resolves an outside path once, then answers repeats from the cache', () => {
     const outside = path.join(os.tmpdir(), `lm-outside-${process.pid}-${Date.now()}`, 'deep', 'missing', 'x.ts');
-    const spy = vi.spyOn(fs, 'realpathSync');
+    const spy = vi.spyOn(fs.realpathSync, 'native');
     try {
       expect(toolPaths('Read', { file_path: outside }, '/p')).toEqual([]);
       expect(toolLabel('Read', { file_path: outside }, '/p')).toBe('Read deep/missing/x.ts');
@@ -163,7 +163,7 @@ describe('symlinked project folder (#32)', () => {
     }
   });
   it('#40: sees a symlink created after an earlier lookup missed, once the cache entry expires', () => {
-    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-late-')));
+    const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-late-')));
     vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] });
     try {
       const real = path.join(tmp, 'real');

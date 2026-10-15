@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildOnce } from './build.js';
+import { hookCommand } from '../src/init.js';
+import { IS_WIN, expectMode, expectStopped, rmTree, withHome } from './helpers/platform.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cli = path.join(repo, 'dist', 'cli.js');
@@ -28,7 +30,7 @@ async function waitFor(pred: () => boolean, ms = 5000): Promise<void> {
 }
 function run(args: string[]): ChildProcess {
   out = ''; err = ''; exit = null;
-  const env = { ...process.env, LIVEMAP_HOME: lmHome, HOME: userHome };
+  const env = withHome({ ...process.env, LIVEMAP_HOME: lmHome }, userHome);
   const c = spawn(process.execPath, [cli, ...args], { stdio: ['ignore', 'pipe', 'pipe'], env });
   c.stdout!.setEncoding('utf8').on('data', d => (out += d));
   c.stderr!.setEncoding('utf8').on('data', d => (err += d));
@@ -45,7 +47,7 @@ const runFiles = () => (fs.existsSync(path.join(lmHome, 'run')) ? fs.readdirSync
 beforeAll(buildOnce, 120_000);
 
 beforeEach(() => {
-  const mk = (p: string) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p)));
+  const mk = (p: string) => fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), p)));
   root = mk('lm-cliag-');
   lmHome = mk('lm-cliag-lmhome-');
   userHome = mk('lm-cliag-home-');
@@ -56,7 +58,7 @@ afterEach(async () => {
     child.kill('SIGKILL');
     await waitFor(() => exit !== null).catch(() => {});
   }
-  for (const d of [root, lmHome, userHome]) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of [root, lmHome, userHome]) rmTree(d);
 });
 
 describe('livemap init', () => {
@@ -67,9 +69,9 @@ describe('livemap init', () => {
     expect(out).not.toContain('Codex');
     const hook = path.join(lmHome, 'bin', 'livemap-hook.mjs');
     expect(fs.readFileSync(hook, 'utf8')).toBe(fs.readFileSync(path.join(repo, 'dist', 'hook.mjs'), 'utf8'));
-    expect(fs.statSync(hook).mode & 0o777).toBe(0o755);
+    expectMode(hook, 0o755);
     const cfg = JSON.parse(fs.readFileSync(path.join(root, '.claude/settings.local.json'), 'utf8'));
-    expect(cfg.hooks.Stop[0].hooks[0].command).toBe(`node '${hook}' claude-code Stop`);
+    expect(cfg.hooks.Stop[0].hooks[0].command).toBe(hookCommand(hook, 'claude-code', 'Stop'));
 
     await runToEnd(['init', root, '--agents=claude']);
     expect(exit!.code).toBe(0);
@@ -128,8 +130,9 @@ describe('livemap serve with agents', () => {
     expect(entry).toEqual({ root, port: Number(port), token, pid: c.pid });
     c.kill('SIGTERM');
     await waitFor(() => exit !== null);
-    expect(exit).toEqual({ code: 0, signal: null });
-    expect(runFiles()).toEqual([]);
+    expectStopped(exit);
+    // A forced kill (Windows) cannot remove its runtime file; the next start replaces a stale one.
+    if (!IS_WIN) expect(runFiles()).toEqual([]);
   });
 
   it('accepts --pull and --pull=SEC and rejects out-of-range values', async () => {
@@ -137,7 +140,7 @@ describe('livemap serve with agents', () => {
     await waitFor(() => URL_RE.test(out));
     c.kill('SIGTERM');
     await waitFor(() => exit !== null);
-    expect(exit!.code).toBe(0);
+    expectStopped(exit);
     await runToEnd([root, '--no-open', '--port', '0', '--pull=2']);
     expect(exit!.code).not.toBe(0);
     expect(err).toContain('--pull');

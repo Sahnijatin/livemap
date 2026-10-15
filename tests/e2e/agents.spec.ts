@@ -83,9 +83,9 @@ const render = (i: number): string =>
   `${tplLines()[i].replaceAll('__NOW__', new Date().toISOString()).replaceAll('__SESSION__', SESSION).replaceAll('__ROOT__', tmp)}\n`;
 
 test.beforeAll(async () => {
-  tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-agents-e2e-')));
-  home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-home-')));
-  claudeDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-claude-')));
+  tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-agents-e2e-')));
+  home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-home-')));
+  claudeDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-claude-')));
   // `node` in hook commands must resolve to this Node.
   env = {
     ...process.env,

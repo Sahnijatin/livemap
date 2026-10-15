@@ -21,7 +21,7 @@ export function runtimeDir(): string {
 /** The canonical project root: its realpath, or the resolved path when it does not exist. History hashes it the same way. */
 export function real(p: string): string {
   try {
-    return fs.realpathSync(p);
+    return fs.realpathSync.native(p);
   } catch {
     return path.resolve(p);
   }

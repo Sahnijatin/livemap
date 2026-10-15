@@ -22,7 +22,7 @@ let claudeDir: string;
 let url: string;
 
 const tempDir = (prefix: string): string => {
-  const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  const d = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   dirs.push(d);
   return d;
 };

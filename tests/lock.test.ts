@@ -28,8 +28,8 @@ async function closedPort(): Promise<number> {
 
 beforeEach(() => {
   saved = process.env.LIVEMAP_HOME;
-  home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-lockhome-')));
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-lockroot-')));
+  home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-lockhome-')));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-lockroot-')));
   process.env.LIVEMAP_HOME = home;
 });
 afterEach(() => {
@@ -203,7 +203,7 @@ describe('project lock (#21)', () => {
   });
 
   it('keeps a heartbeat per lock when one process holds two roots', async () => {
-    const root2 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-lockroot2-')));
+    const root2 = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-lockroot2-')));
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     try {
       expect(await acquireLock(root)).toEqual({ ok: true });
@@ -322,8 +322,8 @@ describe('project lock (#21)', () => {
     });
   });
 
-  it('is shared by every path to the same root', () => {
-    if (process.platform === 'win32') return;
+  // Windows: creating a symlink needs admin rights or Developer Mode.
+  it.skipIf(process.platform === 'win32')('is shared by every path to the same root', () => {
     const link = path.join(home, 'link');
     fs.symlinkSync(root, link);
     expect(lockFile(link)).toBe(lockFile(root));

@@ -5,14 +5,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { GitWatcher } from '../../src/agents/git.js';
 import type { RawAgentEvent } from '../../src/shared/types.js';
+import { IS_WIN, rmTree } from '../helpers/platform.js';
 
 const dirs: string[] = [];
 const watchers: GitWatcher[] = [];
 afterEach(() => {
   for (const w of watchers.splice(0)) w.stop();
-  for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of dirs.splice(0)) rmTree(d);
 });
-const tmp = () => { const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-git-'))); dirs.push(d); return d; };
+const tmp = () => { const d = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-git-'))); dirs.push(d); return d; };
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=Bot', '-c', 'user.email=bot@x', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 const commit = (cwd: string, subject: string, body?: string) => {
   fs.writeFileSync(path.join(cwd, `${subject.replace(/\W+/g, '_')}.txt`), subject);
@@ -267,6 +268,27 @@ describe('GitWatcher', () => {
     expect(got).toHaveLength(100);
     expect(got[0].text).toBe('c21');
     expect(got[99].text).toBe('c120');
+    // 120 git processes in a row: each start costs tens of ms on Windows, past vitest's 5 s default.
+  }, 30_000);
+
+  // Windows: a shell script cannot stand in for git.exe.
+  it.skipIf(IS_WIN)('stop() ends a git command still running (on Windows it would keep the repo from being deleted)', async () => {
+    const d = tmp();
+    const bin = tmp();
+    fs.writeFileSync(path.join(bin, 'git'), '#!/bin/sh\nsleep 5\necho ok\n', { mode: 0o755 });
+    const saved = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${saved}`;
+    try {
+      const { w } = watch(d);
+      const t = Date.now();
+      const started = w.start();
+      await new Promise((r) => setTimeout(r, 200));
+      w.stop();
+      expect(await started).toBe(false);
+      expect(Date.now() - t).toBeLessThan(2000);
+    } finally {
+      process.env.PATH = saved;
+    }
   });
 
   it('start is idempotent', async () => {

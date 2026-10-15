@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { AgentHub, transcriptKey } from '../../src/agents/hub.js';
+import { claudeProjectDirName } from '../../src/agents/discovery.js';
 import type { ClaudeTailer } from '../../src/agents/claude.js';
 import type { AgentEvent, RawAgentEvent } from '../../src/shared/types.js';
 
@@ -127,7 +128,8 @@ describe('AgentHub claude tailers', () => {
     h.watchClaudeTranscript('/t/x.jsonl');
     expect(made).toHaveLength(1);
     made[0].emit('events', [{ agent: 'claude-code', sessionId: 'z', at: 1, type: 'message', text: 'hi' }]);
-    expect(h.sessions()[0]).toMatchObject({ id: 'z', agent: 'claude-code', cwd: ROOT, transcriptPath: '/t/x.jsonl', hooks: false, title: 'Claude Code' });
+    // The transcript is keyed by its resolved path (D:\\t\\x.jsonl on Windows).
+    expect(h.sessions()[0]).toMatchObject({ id: 'z', agent: 'claude-code', cwd: ROOT, transcriptPath: path.resolve('/t/x.jsonl'), hooks: false, title: 'Claude Code' });
   });
 
   it('a tailer error never crashes; it is forwarded only when the hub has an error listener', () => {
@@ -342,7 +344,7 @@ describe('startDiscovery', () => {
   it('watches fresh transcripts immediately and on each tick, and stops with the hub', async () => {
     const claude = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hubdisc-'));
     try {
-      const pd = path.join(claude, 'projects', '-proj');
+      const pd = path.join(claude, 'projects', claudeProjectDirName(path.resolve(ROOT)));
       fs.mkdirSync(pd, { recursive: true });
       const made: FakeTailer[] = [];
       const h = mk({ discoveryMs: 40, tailerFactory: (f) => { const t = new FakeTailer(f); made.push(t); return t as unknown as ClaudeTailer; } });
@@ -486,7 +488,7 @@ describe('I4: tailer lifetime', () => {
       h.watchClaudeTranscript(path.join(dir, 'link.jsonl'));
       h.watchClaudeTranscript(path.join(dir, '.', 't.jsonl'));
       expect(made).toHaveLength(1);
-      expect(made[0].file).toBe(fs.realpathSync(file));
+      expect(made[0].file).toBe(fs.realpathSync.native(file));
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -541,7 +543,7 @@ describe('review fixes: session status', () => {
 
 describe('review fixes: transcript keys', () => {
   it('a transcript that does not exist yet gets the same key as once it exists, through a symlinked dir', () => {
-    const real = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-tk-')));
+    const real = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-tk-')));
     const link = `${real}-link`;
     try {
       fs.mkdirSync(path.join(real, 'projects'));

@@ -20,9 +20,9 @@ class GitError extends Error {
   constructor(message: string, readonly exitCode: unknown, readonly stderr: string) { super(message); }
 }
 
-function git(cwd: string, args: string[]): Promise<string> {
+function git(cwd: string, args: string[], signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile('git', args, { cwd, timeout: 10_000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (err, stdout, stderr) => {
+    execFile('git', args, { cwd, timeout: 10_000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }, signal }, (err, stdout, stderr) => {
       if (err) reject(new GitError((String(stderr).trim() || err.message).slice(0, 500), (err as { code?: unknown }).code, String(stderr).trim()));
       else resolve(String(stdout));
     });
@@ -43,18 +43,24 @@ export class GitWatcher extends EventEmitter {
   private polling = false;
   private pulling = false;
   private stopped = true;
+  /**
+   * Aborts the git commands still running when stop() is called. On Windows a running git keeps the repo
+   * as its working directory, which nothing can delete until it exits.
+   */
+  private abort = new AbortController();
   private readonly seenErrors = new Set<string>();
 
   constructor(private readonly root: string, opts: GitWatcherOptions = {}) {
     super();
     this.pollMs = opts.pollMs ?? 3000;
     this.pullSec = opts.pullSec ?? null;
-    this.run = opts.run ?? git;
+    this.run = opts.run ?? ((cwd, args) => git(cwd, args, this.abort.signal));
   }
 
   async start(): Promise<boolean> {
     if (this.pollTimer) return true;
     this.stopped = false;
+    if (this.abort.signal.aborted) this.abort = new AbortController();
     try {
       if ((await this.run(this.root, ['rev-parse', '--is-inside-work-tree'])).trim() !== 'true') return false;
     } catch {
@@ -79,6 +85,7 @@ export class GitWatcher extends EventEmitter {
 
   stop(): void {
     this.stopped = true;
+    this.abort.abort();
     if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.pullTimer) clearInterval(this.pullTimer);
     this.pollTimer = this.pullTimer = undefined;
@@ -95,6 +102,7 @@ export class GitWatcher extends EventEmitter {
   }
 
   private fail(err: unknown): void {
+    if (this.stopped) return; // a command stop() aborted, or one that lost its race with stop()
     const msg = err instanceof Error ? err.message : String(err);
     if (this.seenErrors.has(msg)) return;
     this.seenErrors.add(msg);
