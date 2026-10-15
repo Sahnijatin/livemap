@@ -48,8 +48,8 @@ describe('runtime file', () => {
     expect(findRuntime(root)).toEqual({ root, port: 4321, token: 'tok', pid: process.pid });
   });
 
-  it('is found through a symlinked path to root', () => {
-    if (process.platform === 'win32') return;
+  // Windows: creating a symlink needs admin rights or Developer Mode.
+  it.skipIf(process.platform === 'win32')('is found through a symlinked path to root', () => {
     writeRuntime(root, 4321, 'tok');
     const link = path.join(home, 'link');
     fs.symlinkSync(root, link);

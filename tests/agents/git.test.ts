@@ -271,9 +271,8 @@ describe('GitWatcher', () => {
     // 120 git processes in a row: each start costs tens of ms on Windows, past vitest's 5 s default.
   }, 30_000);
 
-  it('stop() ends a git command still running (on Windows it would keep the repo from being deleted)', async () => {
-    // A stand-in git that sleeps; a shell script cannot stand in for git.exe on Windows.
-    if (IS_WIN) return;
+  // Windows: a shell script cannot stand in for git.exe.
+  it.skipIf(IS_WIN)('stop() ends a git command still running (on Windows it would keep the repo from being deleted)', async () => {
     const d = tmp();
     const bin = tmp();
     fs.writeFileSync(path.join(bin, 'git'), '#!/bin/sh\nsleep 5\necho ok\n', { mode: 0o755 });

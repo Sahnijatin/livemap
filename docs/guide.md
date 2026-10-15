@@ -64,7 +64,7 @@ Writes the recorded history as one HTML file. See [Exporting a replay](#exportin
 | `LIVEMAP_HISTORY_MB` | History size cap per project, in MB. Default 200. |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | Keys for AI summaries when the config has no `apiKey`. |
 | `CLAUDE_CONFIG_DIR` | Where LiveMap looks for Claude Code transcripts. Default `~/.claude`. |
-| `BROWSER` | The program that opens LiveMap's URL instead of the default browser. It gets the URL as its only argument. On Windows it can be a `.exe`, `.cmd` or `.bat` file. |
+| `BROWSER` | The program that opens LiveMap's URL instead of the default browser. It gets the URL as its only argument, so the value is a program path without arguments. On Windows it can be a `.exe`, `.cmd` or `.bat` file. `none` opens nothing, like `--no-open`. |
 
 ## Using LiveMap
 

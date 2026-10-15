@@ -53,8 +53,8 @@ describe('hookCommand', () => {
     expect(hookCommand(hookPath, 'claude-code', 'Stop', 'linux')).toBe(`node '${hookPath}' claude-code Stop`);
     expect(hookCommand(hookPath, 'claude-code', 'Stop', 'win32')).toBe(`node "${hookPath}" claude-code Stop`);
   });
-  it('POSIX: the shell passes a path holding $, backticks, backslashes and quotes through unchanged', () => {
-    if (process.platform === 'win32') return;
+  // Windows: the stand-in `node` is a shell script, and /bin/sh does not exist there.
+  it.skipIf(process.platform === 'win32')('POSIX: the shell passes a path holding $, backticks, backslashes and quotes through unchanged', () => {
     // A stand-in `node` that prints the words the shell passed it, one per line.
     const bin = path.join(root, 'bin');
     fs.mkdirSync(bin);

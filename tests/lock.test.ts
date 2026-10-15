@@ -322,8 +322,8 @@ describe('project lock (#21)', () => {
     });
   });
 
-  it('is shared by every path to the same root', () => {
-    if (process.platform === 'win32') return;
+  // Windows: creating a symlink needs admin rights or Developer Mode.
+  it.skipIf(process.platform === 'win32')('is shared by every path to the same root', () => {
     const link = path.join(home, 'link');
     fs.symlinkSync(root, link);
     expect(lockFile(link)).toBe(lockFile(root));

@@ -27,6 +27,10 @@ describe('openerFor', () => {
     expect(openerFor(url, 'win32', { BROWSER: 'C:\\Apps\\chrome.exe' })).toEqual({ cmd: 'C:\\Apps\\chrome.exe', args: [url], opts: {} });
     expect(openerFor(url, 'darwin', { BROWSER: '  ' })).toEqual({ cmd: 'open', args: [url], opts: {} });
   });
+  it('opens nothing for BROWSER=none, in any case', () => {
+    expect(openerFor(url, 'linux', { BROWSER: 'none' })).toBeNull();
+    expect(openerFor(url, 'win32', { BROWSER: ' None ' })).toBeNull();
+  });
   it('runs a Windows .cmd or .bat BROWSER through cmd, both quoted', () => {
     const b = 'C:\\My Tools\\open it.cmd';
     expect(openerFor(url, 'win32', { BROWSER: b })).toEqual({ cmd: 'cmd', args: ['/d', '/s', '/c', `""${b}" "${url}""`], opts: { windowsVerbatimArguments: true } });

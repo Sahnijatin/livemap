@@ -13,9 +13,11 @@ export interface Opener { cmd: string; args: string[]; opts: SpawnOptions }
  * The command that opens `url`: the program named by `BROWSER` when set (run with the URL as its one
  * argument), else `open` on macOS, `cmd /c start` on Windows and `xdg-open` elsewhere. A Windows
  * `.cmd` or `.bat` in `BROWSER` needs cmd to run it; the URL is a checked loopback URL, so quoting it is safe.
+ * `BROWSER=none` means open nothing (null), as create-react-app reads it.
  */
-export function openerFor(url: string, platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): Opener {
+export function openerFor(url: string, platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): Opener | null {
   const browser = env.BROWSER?.trim();
+  if (browser?.toLowerCase() === 'none') return null;
   if (browser) {
     if (platform === 'win32' && /\.(cmd|bat)$/i.test(browser)) {
       return { cmd: 'cmd', args: ['/d', '/s', '/c', `""${browser}" "${url}""`], opts: { windowsVerbatimArguments: true } };
@@ -31,7 +33,9 @@ export function openerFor(url: string, platform: NodeJS.Platform = process.platf
 export function openBrowser(url: string): void {
   if (!isOpenableUrl(url)) return;
   try {
-    const { cmd, args, opts } = openerFor(url);
+    const opener = openerFor(url);
+    if (!opener) return;
+    const { cmd, args, opts } = opener;
     const child = spawn(cmd, args, { stdio: 'ignore', detached: true, ...opts });
     child.on('error', () => {});
     child.unref();
