@@ -294,6 +294,18 @@ describe('buildDomainIndex: deps, env, counts', () => {
     expect(idx.counts).toEqual({ routes: 1, pages: 1, screens: 0, tables: 1, deps: 2, env: 3 });
     expect(idx.stack.map(t => t.id)).toEqual(expect.arrayContaining(['express', 'fastapi']));
   });
+
+  it('resolves Gradle catalog accessors with the nearest gradle/libs.versions.toml, so Room is detected', () => {
+    const gradle = (path: string, name: string): FileModel => fm(path, { lang: 'other', deps: { deps: [{ name, version: '', eco: 'maven', line: 2 }] } });
+    const catalog = '[versions]\nroom = "2.6.1"\n[libraries]\nandroidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }\n';
+    const idx = buildDomainIndex([gradle('android/app/build.gradle.kts', 'libs.androidx.room.runtime')], texts({ 'android/gradle/libs.versions.toml': catalog }));
+    expect(idx.deps).toEqual([{ name: 'androidx.room:room-runtime', version: '2.6.1', eco: 'maven', line: 2, file: 'android/app/build.gradle.kts' }]);
+    expect(idx.stack.find(t => t.id === 'room')).toMatchObject({ category: 'orm', source: 'android/app/build.gradle.kts' });
+    // No catalog: the accessor is kept as written.
+    expect(buildDomainIndex([gradle('app/build.gradle.kts', 'libs.androidx.room.runtime')], noText).deps.map(d => d.name)).toEqual(['libs.androidx.room.runtime']);
+    // Room from a plain coordinate under ksp.
+    expect(buildDomainIndex([gradle('build.gradle', 'androidx.room:room-compiler')], noText).stack.map(t => t.id)).toContain('room');
+  });
 });
 
 describe('buildDomainIndex: performance (Review Focus 4)', () => {

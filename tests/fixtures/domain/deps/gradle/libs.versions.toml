@@ -1,0 +1,23 @@
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx_room_runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
+androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
+junit = "junit:junit:4.13.2"
+compose-bom = { group = "androidx.compose", name = "compose-bom", version = "2024.06.00" }
+ktor-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+ktor-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
+
+[bundles]
+ktor = [
+  "ktor-core",
+  "ktor.cio",
+]
+
+[plugins]
+android-application = { id = "com.android.application", version = "8.5.0" }
+
+# After [libraries], so version.ref resolves only once the whole file is read.
+[versions]
+room = "2.6.1"
+coreKtx = "1.13.1"
+ktor = "2.3.12"
