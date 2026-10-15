@@ -77,8 +77,8 @@ async function boot(opts: { ready?: boolean; port?: number; ui?: string; warn?: 
 }
 
 beforeEach(() => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-srv-')));
-  uiDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-ui-')));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-srv-')));
+  uiDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-ui-')));
   put(root, 'src/a.ts', 'import { b } from "./b";\nexport const a = b + 1;\n');
   put(root, 'src/b.ts', 'export const b = 1;\n');
   put(root, 'src/a b/ü.ts', 'export const umlaut = "ü";\n');

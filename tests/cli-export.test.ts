@@ -8,6 +8,7 @@ import { buildOnce } from './build.js';
 import { HistoryStore } from '../src/history/store.js';
 import { emptyState } from '../src/shared/state.js';
 import type { ChangeSummary, FileModel } from '../src/shared/types.js';
+import { rmTree } from './helpers/platform.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cli = path.join(repo, 'dist', 'cli.js');
@@ -19,13 +20,13 @@ let cwd: string;
 beforeAll(buildOnce, 180_000);
 
 beforeEach(() => {
-  const mk = (p: string) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p)));
+  const mk = (p: string) => fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), p)));
   root = mk('lm-cliexp-root-');
   lmHome = mk('lm-cliexp-home-');
   cwd = mk('lm-cliexp-cwd-');
 });
 afterEach(() => {
-  for (const d of [root, lmHome, cwd]) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of [root, lmHome, cwd]) rmTree(d);
 });
 
 const file = (p: string): FileModel => ({

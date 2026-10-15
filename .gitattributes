@@ -1,0 +1,5 @@
+# Text files are LF in every checkout, Windows included: fixtures and snapshots compare byte for byte.
+* text=auto eol=lf
+*.gz binary
+*.png binary
+*.wasm binary

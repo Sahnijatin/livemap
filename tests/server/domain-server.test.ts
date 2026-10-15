@@ -59,8 +59,8 @@ async function boot(extra: Partial<ServerOptions> = {}): Promise<{ s: Started; c
 const ROUTER = (paths: string[]) => `import { Router } from 'express';\nconst router = Router();\n${paths.map(p => `router.get('${p}', (req, res) => res.json([]));`).join('\n')}\nexport default router;\n`;
 
 beforeEach(() => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-dom-')));
-  uiDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-ui-')));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-dom-')));
+  uiDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-ui-')));
   put('package.json', JSON.stringify({ dependencies: { express: '^4.19.0' } }, null, 2));
   put('src/index.ts', "import express from 'express';\nimport orders from './routes/orders';\nconst app = express();\napp.use('/api', orders);\n");
   put('src/routes/orders.ts', ROUTER(['/orders']));

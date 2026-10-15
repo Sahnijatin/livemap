@@ -9,13 +9,14 @@ import { applyMessage, emptyState } from '../../src/shared/state.js';
 import type { ProjectState } from '../../src/shared/state.js';
 import type { ServerMessage } from '../../src/shared/protocol.js';
 import type { AgentEvent, AgentEventType, ChangeSummary, FileModel } from '../../src/shared/types.js';
+import { expectMode } from '../helpers/platform.js';
 
 let home: string;
 let root: string;
 
 beforeEach(() => {
-  home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hist-home-')));
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hist-root-')));
+  home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hist-home-')));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-hist-root-')));
 });
 // A test may leave a nested dir read-only (write failure); non-root rm needs every dir writable again.
 function makeWritable(d: string): void {
@@ -70,7 +71,7 @@ const open = (opts: Parameters<typeof HistoryStore.open>[1] = {}) =>
 
 describe('projectDir', () => {
   it('is <home>/projects/<sha1(realpath root)>', () => {
-    const sha = crypto.createHash('sha1').update(fs.realpathSync(root)).digest('hex');
+    const sha = crypto.createHash('sha1').update(fs.realpathSync.native(root)).digest('hex');
     expect(projectDir(root, home)).toBe(path.join(home, 'projects', sha));
   });
 });
@@ -210,11 +211,10 @@ describe('HistoryStore basics', () => {
     const dir = projectDir(root, home);
     const snaps = fs.readdirSync(path.join(dir, 'snapshots')).sort((a, b) => parseInt(a) - parseInt(b));
     expect(snaps).toEqual(['1.json.gz', '500.json.gz', '1000.json.gz']);
-    const mode = (p: string) => fs.statSync(p).mode & 0o777;
-    expect(mode(dir)).toBe(0o700);
-    expect(mode(path.join(dir, 'snapshots'))).toBe(0o700);
-    for (const f of fs.readdirSync(dir).filter(f => f !== 'snapshots')) expect(mode(path.join(dir, f))).toBe(0o600);
-    for (const f of snaps) expect(mode(path.join(dir, 'snapshots', f))).toBe(0o600);
+    expectMode(dir, 0o700);
+    expectMode(path.join(dir, 'snapshots'), 0o700);
+    for (const f of fs.readdirSync(dir).filter(f => f !== 'snapshots')) expectMode(path.join(dir, f), 0o600);
+    for (const f of snaps) expectMode(path.join(dir, 'snapshots', f), 0o600);
     expect(fs.existsSync(path.join(dir, 'index.json'))).toBe(true);
   });
 

@@ -59,7 +59,7 @@ function realPrefix(p: string): string | null {
   const hit = realCache.get(p);
   if (hit && now - hit.at < REAL_CACHE_MS) return hit.real;
   let real: string | null;
-  try { real = posix(fs.realpathSync(p)); } catch { real = null; }
+  try { real = posix(fs.realpathSync.native(p)); } catch { real = null; }
   if (realCache.size >= REAL_CACHE_MAX) realCache.clear();
   realCache.set(p, { real, at: now });
   return real;

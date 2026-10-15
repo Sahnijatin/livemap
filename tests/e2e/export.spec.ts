@@ -34,8 +34,8 @@ const change = (id: number, p: string, at: number): ChangeSummary => ({
 });
 
 test.beforeAll(async () => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-e2e-export-')));
-  home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-e2e-export-home-')));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-e2e-export-')));
+  home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-e2e-export-home-')));
   fs.mkdirSync(path.join(root, 'src'));
   fs.writeFileSync(path.join(root, APP), `export function hello() {\n  return '${MARKER}';\n}\n`);
   fs.writeFileSync(path.join(root, 'src/util.ts'), 'export const util = 1;\n');
@@ -61,7 +61,7 @@ test.beforeAll(async () => {
   outNoCode = exportTo('replay-no-code.html', '--no-code');
 
   // A project whose only file is in a language with no grammar.
-  textRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-e2e-export-text-')));
+  textRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-e2e-export-text-')));
   fs.writeFileSync(path.join(textRoot, NOTES), `plain notes\n${MARKER}\n`);
   const notes: FileModel = { ...file(NOTES), lang: 'text' };
   const textStore = await HistoryStore.open(textRoot, { home, now: () => (clock += 1000) });

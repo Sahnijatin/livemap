@@ -12,8 +12,8 @@ let saved: string | undefined;
 
 beforeEach(() => {
   saved = process.env.LIVEMAP_HOME;
-  home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-home-')));
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-root-')));
+  home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-home-')));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-root-')));
   process.env.LIVEMAP_HOME = home;
 });
 afterEach(() => {

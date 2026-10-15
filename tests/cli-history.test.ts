@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildOnce } from './build.js';
+import { expectStopped, rmTree, withHome } from './helpers/platform.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cli = path.join(repo, 'dist', 'cli.js');
@@ -28,7 +29,7 @@ async function waitFor(pred: () => boolean | Promise<boolean>, ms = 10000): Prom
 }
 function run(args: string[]): ChildProcess {
   out = ''; err = ''; exit = null;
-  const env = { ...process.env, LIVEMAP_HOME: lmHome, HOME: userHome };
+  const env = withHome({ ...process.env, LIVEMAP_HOME: lmHome }, userHome);
   const c = spawn(process.execPath, [cli, ...args], { stdio: ['ignore', 'pipe', 'pipe'], env });
   c.stdout!.setEncoding('utf8').on('data', d => (out += d));
   c.stderr!.setEncoding('utf8').on('data', d => (err += d));
@@ -57,7 +58,7 @@ async function stop(c: ChildProcess): Promise<void> {
 beforeAll(buildOnce, 120_000);
 
 beforeEach(() => {
-  const mk = (p: string) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p)));
+  const mk = (p: string) => fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), p)));
   root = mk('lm-clihist-');
   lmHome = mk('lm-clihist-lmhome-');
   userHome = mk('lm-clihist-home-');
@@ -69,13 +70,13 @@ afterEach(async () => {
     child.kill('SIGKILL');
     await waitFor(() => exit !== null).catch(() => {});
   }
-  for (const d of [root, lmHome, userHome]) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of [root, lmHome, userHome]) rmTree(d);
 });
 
 describe('livemap history', () => {
   it('records each run, and run 2 starts from the state on disk', async () => {
     await stop(await start([root, '--no-open', '--port', '0']));
-    expect(exit!.code).toBe(0);
+    expectStopped(exit);
 
     // Edited while LiveMap was not running: only run 2's start state can know about it.
     fs.writeFileSync(path.join(root, 'a.ts'), 'export function first() { return 1; }\nexport function second() { return 2; }\n');
@@ -89,7 +90,7 @@ describe('livemap history', () => {
     const before = (await api(`/api/history/state?seq=${info.runs[0].firstSeq}`)).body;
     expect(before.files.find((f: any) => f.path === 'a.ts').symbols.map((s: any) => s.name)).not.toContain('second');
     await stop(c);
-    expect(exit!.code).toBe(0);
+    expectStopped(exit);
   }, 30_000);
 
   it('--no-history records nothing', async () => {
@@ -113,7 +114,7 @@ describe('livemap history', () => {
     // A failure, not the user's choice: the UI shows the error, not "History is off".
     expect((await api('/api/state')).body.history.off).toBeUndefined();
     await stop(c);
-    expect(exit!.code).toBe(0);
+    expectStopped(exit);
   }, 30_000);
 });
 
@@ -139,7 +140,7 @@ describe('livemap summaries', () => {
     const status = (await api('/api/state')).body.summaries.status;
     expect(status).toMatchObject({ state: 'ready', provider: 'ollama', model: 'tiny', usedTokens: 0, capTokens: 2_000_000 });
     await stop(s);
-    expect(exit!.code).toBe(0);
+    expectStopped(exit);
 
     fs.writeFileSync(path.join(lmHome, 'config.json'), JSON.stringify({ summaries: { provider: 'openai' } }));
     const saved = process.env.OPENAI_API_KEY;

@@ -37,7 +37,7 @@ const READ_CONCURRENCY = 16;
  * Reads the store read-only, so it works with or without a running LiveMap.
  */
 export async function buildExport(root: string, opts: ExportOptions): Promise<ExportResult> {
-  const realRoot = fs.realpathSync(root);
+  const realRoot = fs.realpathSync.native(root);
   const name = path.basename(realRoot);
   if (!fs.existsSync(projectDir(realRoot, opts.home))) throw new Error(NO_HISTORY);
   const store = await HistoryStore.open(realRoot, { home: opts.home, readOnly: true });

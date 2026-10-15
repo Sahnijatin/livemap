@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildOnce } from './build.js';
 import WebSocket from 'ws';
+import { IS_WIN, expectStopped, rmTree } from './helpers/platform.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cli = path.join(repo, 'dist', 'cli.js');
@@ -47,7 +48,7 @@ function getStatus(url: string): Promise<number> {
 beforeAll(buildOnce, 120_000);
 
 beforeEach(() => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-cli-')));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-cli-')));
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-cli-home-'));
   fs.mkdirSync(path.join(root, 'src'));
   fs.writeFileSync(path.join(root, 'src', 'a.ts'), 'export const a = 1;\n');
@@ -58,7 +59,7 @@ afterEach(async () => {
     child.kill('SIGKILL');
     await waitFor(() => exit !== null).catch(() => {});
   }
-  for (const d of [root, home]) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of [root, home]) rmTree(d);
 });
 
 describe('livemap CLI', () => {
@@ -104,7 +105,7 @@ describe('livemap CLI', () => {
     await waitFor(() => URL_RE.test(out));
     c.kill('SIGINT');
     await waitFor(() => exit !== null);
-    expect(exit).toEqual({ code: 0, signal: null });
+    expectStopped(exit);
   });
 
   it('exits 0 when SIGINT arrives twice', async () => {
@@ -113,7 +114,7 @@ describe('livemap CLI', () => {
     c.kill('SIGINT');
     c.kill('SIGINT');
     await waitFor(() => exit !== null);
-    expect(exit).toEqual({ code: 0, signal: null });
+    expectStopped(exit);
   });
 
   it('exits 1 on an unknown flag', async () => {
@@ -142,7 +143,7 @@ describe('livemap CLI', () => {
     expect(out).toContain(`LiveMap is watching ${path.basename(root)}`);
     c.kill('SIGTERM');
     await waitFor(() => exit !== null);
-    expect(exit!.code).toBe(0);
+    expectStopped(exit);
   });
 
   it('rejects --pull 3 with the interval error', async () => {
@@ -160,7 +161,7 @@ describe('livemap CLI', () => {
     expect(out).toContain('LiveMap is watching 30');
     c.kill('SIGTERM');
     await waitFor(() => exit !== null);
-    expect(exit!.code).toBe(0);
+    expectStopped(exit);
   });
 
   it('keeps edits and new files made while the initial index is running', async () => {
@@ -200,10 +201,11 @@ describe('livemap CLI', () => {
     for (let i = 0; i < 1500; i++) fs.writeFileSync(path.join(root, 'src', `f${i}.ts`), `export function f${i}(x: number) { return x + ${i}; }\n`);
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-bin-'));
     const marker = path.join(bin, 'opened');
-    // openBrowser runs `open` on macOS and `xdg-open` elsewhere; fake both so no real browser starts.
-    for (const name of ['xdg-open', 'open']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "$1" > "${marker}"\n`, { mode: 0o755 });
+    // BROWSER names the opener on every platform, so no real browser starts (Safari, Edge) on CI.
+    const opener = path.join(bin, IS_WIN ? 'opener.cmd' : 'opener');
+    fs.writeFileSync(opener, IS_WIN ? `@echo off\r\n> "${marker}" echo %~1\r\n` : `#!/bin/sh\necho "$1" > "${marker}"\n`, { mode: 0o755 });
     try {
-      run([root, '--port', '0'], { ...isolated(), PATH: `${bin}${path.delimiter}${process.env.PATH}` });
+      run([root, '--port', '0'], { ...isolated(), BROWSER: opener });
       await waitFor(() => URL_RE.test(out));
       const [, port, token] = out.match(URL_RE)!;
       const msgs: { type: string }[] = [];

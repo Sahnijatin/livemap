@@ -35,9 +35,9 @@ function startCli(dir: string): Promise<string> {
 }
 
 test.beforeAll(async () => {
-  tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-e2e-resp-')));
-  home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-resp-home-')));
-  claudeDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-resp-claude-')));
+  tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-e2e-resp-')));
+  home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-resp-home-')));
+  claudeDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-resp-claude-')));
   // `node` in hook commands must resolve to this Node.
   env = { ...process.env, LIVEMAP_HOME: home, CLAUDE_CONFIG_DIR: claudeDir, PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ''}` };
   fs.cpSync(path.join(root, 'tests/fixtures/shop'), tmp, { recursive: true });

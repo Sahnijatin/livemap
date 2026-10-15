@@ -39,7 +39,7 @@ async function startWatcher(opts: WatcherOptions = {}): Promise<Watcher> {
 const names = (c: ChangeSummary) => c.symbols.added.map(s => s.name);
 
 beforeEach(() => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-watch-')));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-watch-')));
   put('src/keep.ts', 'export const keep = 1;\n');
   changes = [];
   errors = [];

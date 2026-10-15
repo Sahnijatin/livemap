@@ -13,12 +13,16 @@ describe('claudeProjectDirName', () => {
     expect(claudeProjectDirName('/Users/a/my_app.v2')).toBe('-Users-a-my-app-v2');
     expect(claudeProjectDirName('/Users/a/my_app')).toBe('-Users-a-my-app');
   });
+  it('names a Windows project the way Claude Code does: drive colon and backslashes become dashes', () => {
+    expect(claudeProjectDirName('C:\\Users\\jatin\\my_app.v2')).toBe('C--Users-jatin-my-app-v2');
+  });
 });
 
 describe('findClaudeSessions', () => {
   it('returns only fresh jsonl files, newest first', () => {
     const claude = tmp();
-    const root = '/work/my_app.v2';
+    // On Windows a POSIX path resolves onto the current drive (D:\\work\\...), and so does discovery.
+    const root = path.resolve('/work/my_app.v2');
     const pd = path.join(claude, 'projects', claudeProjectDirName(root));
     fs.mkdirSync(pd, { recursive: true });
     const now = Date.now();
@@ -36,7 +40,7 @@ describe('findClaudeSessions', () => {
 
   it('defaults claudeDir from CLAUDE_CONFIG_DIR at call time', () => {
     const claude = tmp();
-    const root = '/work/envproj';
+    const root = path.resolve('/work/envproj');
     const pd = path.join(claude, 'projects', claudeProjectDirName(root));
     fs.mkdirSync(pd, { recursive: true });
     const f = path.join(pd, 's.jsonl');
@@ -49,7 +53,7 @@ describe('findClaudeSessions', () => {
 
   it('also finds sessions under the realpath of a symlinked root', () => {
     const claude = tmp();
-    const base = fs.realpathSync(tmp());
+    const base = fs.realpathSync.native(tmp());
     const real = path.join(base, 'real');
     const link = path.join(base, 'link');
     fs.mkdirSync(real);

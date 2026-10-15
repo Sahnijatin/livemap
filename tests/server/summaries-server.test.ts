@@ -116,9 +116,9 @@ function symbolHash(f: FileModel): string {
 
 beforeEach(() => {
   savedHome = process.env.LIVEMAP_HOME;
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-sum-')));
-  home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-sum-home-')));
-  uiDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-sum-ui-')));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-sum-')));
+  home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-sum-home-')));
+  uiDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-sum-ui-')));
   process.env.LIVEMAP_HOME = home;
   put('src/a.ts', 'export function alpha() { return 1; }\n');
   put('src/b.ts', 'export function beta() { return 2; }\n');

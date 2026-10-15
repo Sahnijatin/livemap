@@ -5,14 +5,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { GitWatcher } from '../../src/agents/git.js';
 import type { RawAgentEvent } from '../../src/shared/types.js';
+import { rmTree } from '../helpers/platform.js';
 
 const dirs: string[] = [];
 const watchers: GitWatcher[] = [];
 afterEach(() => {
   for (const w of watchers.splice(0)) w.stop();
-  for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of dirs.splice(0)) rmTree(d);
 });
-const tmp = () => { const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-git-'))); dirs.push(d); return d; };
+const tmp = () => { const d = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-git-'))); dirs.push(d); return d; };
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=Bot', '-c', 'user.email=bot@x', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 const commit = (cwd: string, subject: string, body?: string) => {
   fs.writeFileSync(path.join(cwd, `${subject.replace(/\W+/g, '_')}.txt`), subject);
@@ -267,7 +268,8 @@ describe('GitWatcher', () => {
     expect(got).toHaveLength(100);
     expect(got[0].text).toBe('c21');
     expect(got[99].text).toBe('c120');
-  });
+    // 120 git processes in a row: each start costs tens of ms on Windows, past vitest's 5 s default.
+  }, 30_000);
 
   it('start is idempotent', async () => {
     const d = initRepo();

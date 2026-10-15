@@ -5,6 +5,7 @@ import path from 'node:path';
 import { Summarizer, PROMPT_VERSION } from '../../src/summarize/summarizer.js';
 import type { SummaryConfig, SummaryStatus } from '../../src/shared/summaries.js';
 import type { ChangeSummary, FileModel } from '../../src/shared/types.js';
+import { expectMode } from '../helpers/platform.js';
 
 const KEY = 'sk-ant-SECRET-KEY-123';
 const cfg: SummaryConfig = { provider: 'anthropic', apiKey: KEY, model: 'claude-haiku-5-5', monthlyTokenCap: 1_000_000 };
@@ -88,7 +89,7 @@ describe('Summarizer', () => {
     const dir = path.join(home, 'cache', 'summaries');
     const [name] = fs.readdirSync(dir);
     expect(name).toMatch(/^[0-9a-f]{64}\.json$/);
-    expect(fs.statSync(path.join(dir, name)).mode & 0o777).toBe(0o600);
+    expectMode(path.join(dir, name), 0o600);
     expect(fs.readFileSync(path.join(dir, name), 'utf8')).not.toContain(KEY);
   });
 
@@ -106,7 +107,7 @@ describe('Summarizer', () => {
     await s.summarizeFile(file('a.ts'), 'one');
     const usage = path.join(home, 'usage.json');
     expect(JSON.parse(fs.readFileSync(usage, 'utf8'))).toEqual({ month: '2026-10', tokens: 15 });
-    expect(fs.statSync(usage).mode & 0o777).toBe(0o600);
+    expectMode(usage, 0o600);
     vi.setSystemTime(new Date('2026-11-01T00:00:01Z'));
     expect(s.status()).toMatchObject({ month: '2026-11', usedTokens: 0 });
     await s.summarizeFile(file('b.ts'), 'two');

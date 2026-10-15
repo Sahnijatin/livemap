@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildOnce } from './build.js';
+import { IS_WIN, expectStopped, rmTree, withHome } from './helpers/platform.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cli = path.join(repo, 'dist', 'cli.js');
@@ -26,7 +27,7 @@ async function waitFor(pred: () => boolean, r: Run, ms = 10_000): Promise<void> 
   }
 }
 function start(args: string[]): Run {
-  const env = { ...process.env, LIVEMAP_HOME: lmHome, HOME: userHome };
+  const env = withHome({ ...process.env, LIVEMAP_HOME: lmHome }, userHome);
   const child = spawn(process.execPath, [cli, root, '--no-open', '--port', '0', ...args], { stdio: ['ignore', 'pipe', 'pipe'], env });
   const r: Run = { child, out: '', err: '', exit: null };
   child.stdout!.setEncoding('utf8').on('data', d => (r.out += d));
@@ -49,7 +50,7 @@ const dirFiles = (d: string) => (fs.existsSync(path.join(lmHome, d)) ? fs.readdi
 beforeAll(buildOnce, 120_000);
 
 beforeEach(() => {
-  const mk = (p: string) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p)));
+  const mk = (p: string) => fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), p)));
   root = mk('lm-clilock-');
   lmHome = mk('lm-clilock-lmhome-');
   userHome = mk('lm-clilock-home-');
@@ -62,7 +63,7 @@ afterEach(async () => {
       await ended(r).catch(() => {});
     }
   }
-  for (const d of [root, lmHome, userHome]) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of [root, lmHome, userHome]) rmTree(d);
 });
 
 describe('one LiveMap per project (#21)', () => {
@@ -90,15 +91,18 @@ describe('one LiveMap per project (#21)', () => {
 
       first.child.kill('SIGTERM');
       await ended(first);
-      expect(first.exit).toEqual({ code: 0, signal: null });
-      expect(dirFiles('locks')).toEqual([]);
-      expect(dirFiles('run')).toEqual([]);
+      expectStopped(first.exit);
+      // A forced kill (Windows) cannot remove its lock and runtime files; the next start replaces stale ones.
+      if (!IS_WIN) {
+        expect(dirFiles('locks')).toEqual([]);
+        expect(dirFiles('run')).toEqual([]);
+      }
 
       const third = await started(args);
       third.child.kill('SIGINT');
       await ended(third);
-      expect(third.exit!.code).toBe(0);
-      expect(dirFiles('locks')).toEqual([]);
+      expectStopped(third.exit);
+      if (!IS_WIN) expect(dirFiles('locks')).toEqual([]);
     }, 30_000);
   }
 
@@ -147,9 +151,9 @@ describe('one LiveMap per project (#21)', () => {
 
   it('allows LiveMap on another project at the same time', async () => {
     await started();
-    const other = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-clilock-b-')));
+    const other = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-clilock-b-')));
     try {
-      const env = { ...process.env, LIVEMAP_HOME: lmHome, HOME: userHome };
+      const env = withHome({ ...process.env, LIVEMAP_HOME: lmHome }, userHome);
       const child = spawn(process.execPath, [cli, other, '--no-open', '--port', '0'], { stdio: ['ignore', 'pipe', 'pipe'], env });
       const r: Run = { child, out: '', err: '', exit: null };
       child.stdout!.setEncoding('utf8').on('data', d => (r.out += d));
@@ -160,7 +164,7 @@ describe('one LiveMap per project (#21)', () => {
       expect(dirFiles('locks')).toHaveLength(2);
     } finally {
       for (const r of runs) if (r.exit === null) { r.child.kill('SIGTERM'); await ended(r).catch(() => {}); }
-      fs.rmSync(other, { recursive: true, force: true });
+      rmTree(other);
     }
   }, 30_000);
 });

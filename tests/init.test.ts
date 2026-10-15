@@ -4,12 +4,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { initAgents, removeAgents, detectAgents, hookCommand } from '../src/init.js';
+import { expectMode } from './helpers/platform.js';
 
 let root: string;
 /** LiveMap home (init state lives here). */
 let home: string;
 let userHome: string;
 let savedHome: string | undefined;
+let savedProfile: string | undefined;
+/** Assigning undefined to process.env stores the string 'undefined', so a missing variable is deleted. */
+const restore = (k: string, v: string | undefined) => { if (v === undefined) delete process.env[k]; else process.env[k] = v; };
 const hookPath = '/opt/lm/bin/livemap-hook.mjs';
 
 const read = (rel: string) => JSON.parse(fs.readFileSync(path.join(root, rel), 'utf8'));
@@ -20,15 +24,19 @@ const write = (rel: string, v: unknown) => {
 const isLm = (cmd: unknown) => typeof cmd === 'string' && cmd.includes('livemap-hook.mjs');
 
 beforeEach(() => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-init-')));
-  home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-inithome-')));
-  userHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-inituser-')));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-init-')));
+  home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-inithome-')));
+  userHome = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-inituser-')));
   savedHome = process.env.HOME;
-  process.env.HOME = userHome; // detection reads os.homedir()
+  savedProfile = process.env.USERPROFILE;
+  // detection reads os.homedir(): HOME on POSIX, USERPROFILE on Windows
+  process.env.HOME = userHome;
+  process.env.USERPROFILE = userHome;
 });
 afterEach(() => {
   vi.restoreAllMocks();
-  process.env.HOME = savedHome;
+  restore('HOME', savedHome);
+  restore('USERPROFILE', savedProfile);
   for (const d of [root, home, userHome]) fs.rmSync(d, { recursive: true, force: true });
 });
 
@@ -65,7 +73,7 @@ describe('hookCommand', () => {
     const odd = "/opt/it's/livemap-hook.mjs";
     write('.codex/hooks.json', { hooks: { Stop: [{ hooks: [{ type: 'command', command: `node "${hookPath}" codex Stop`, timeout: 5 }] }] } });
     expect(initAgents(root, { agents: ['codex'], hookPath: odd, home })[0].action).toBe('updated');
-    expect(read('.codex/hooks.json').hooks.Stop).toEqual([{ hooks: [{ type: 'command', command: `node '/opt/it'\\''s/livemap-hook.mjs' codex Stop`, timeout: 5 }] }]);
+    expect(read('.codex/hooks.json').hooks.Stop).toEqual([{ hooks: [{ type: 'command', command: hookCommand(odd, 'codex', 'Stop'), timeout: 5 }] }]);
     expect(initAgents(root, { agents: ['codex'], hookPath: odd, home })[0].action).toBe('unchanged');
     expect(removeAgents(root, { home })[0].action).toBe('deleted');
     write('.codex/hooks.json', { hooks: { Stop: [{ hooks: [{ type: 'command', command: `node "${hookPath}" codex Stop` }, { type: 'command', command: 'mine.sh' }] }] } });
@@ -83,8 +91,8 @@ describe('initAgents: claude', () => {
     expect(raw).toContain('\n  "hooks"');
     const cfg = JSON.parse(raw);
     expect(Object.keys(cfg.hooks)).toEqual(CLAUDE_EVENTS);
-    expect(cfg.hooks.PreToolUse).toEqual([{ matcher: '*', hooks: [{ type: 'command', command: `node '${hookPath}' claude-code PreToolUse`, timeout: 5 }] }]);
-    expect(cfg.hooks.SessionStart).toEqual([{ hooks: [{ type: 'command', command: `node '${hookPath}' claude-code SessionStart`, timeout: 5 }] }]);
+    expect(cfg.hooks.PreToolUse).toEqual([{ matcher: '*', hooks: [{ type: 'command', command: hookCommand(hookPath, 'claude-code', 'PreToolUse'), timeout: 5 }] }]);
+    expect(cfg.hooks.SessionStart).toEqual([{ hooks: [{ type: 'command', command: hookCommand(hookPath, 'claude-code', 'SessionStart'), timeout: 5 }] }]);
   });
 
   it('preserves user hooks and permissions, is idempotent, and remove restores the original', () => {
@@ -148,7 +156,7 @@ describe('initAgents: codex', () => {
     initAgents(root, { agents: ['codex'], hookPath, home });
     const cfg = read('.codex/hooks.json');
     expect(Object.keys(cfg.hooks)).toEqual(CODEX_EVENTS);
-    expect(cfg.hooks.Stop).toEqual([{ hooks: [{ type: 'command', command: `node '${hookPath}' codex Stop`, timeout: 5 }] }]);
+    expect(cfg.hooks.Stop).toEqual([{ hooks: [{ type: 'command', command: hookCommand(hookPath, 'codex', 'Stop'), timeout: 5 }] }]);
     expect(removeAgents(root, { home })).toEqual([{ agent: 'codex', file: '.codex/hooks.json', action: 'deleted' }]);
     expect(fs.existsSync(path.join(root, '.codex/hooks.json'))).toBe(false);
   });
@@ -163,7 +171,7 @@ describe('initAgents: cursor', () => {
     expect(initAgents(root, { agents: ['cursor'], hookPath, home })[0].action).toBe('unchanged');
     const cfg = read('.cursor/hooks.json');
     expect(cfg.version).toBe(1);
-    expect(cfg.hooks.afterFileEdit).toEqual([{ command: './format.sh' }, { command: `node '${hookPath}' cursor afterFileEdit` }]);
+    expect(cfg.hooks.afterFileEdit).toEqual([{ command: './format.sh' }, { command: hookCommand(hookPath, 'cursor', 'afterFileEdit') }]);
     for (const ev of CURSOR_EVENTS) expect(cfg.hooks[ev].filter((h: { command: string }) => isLm(h.command))).toHaveLength(1);
     expect(removeAgents(root, { home })[0].action).toBe('removed');
     expect(read('.cursor/hooks.json')).toEqual(USER_CURSOR);
@@ -286,7 +294,7 @@ describe('malformed configs are skipped and left byte-identical', () => {
 
 describe('safe writes', () => {
   it('writes through a symlink, keeps the file mode, and leaves no temp files', () => {
-    const elsewhere = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-initlink-')));
+    const elsewhere = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-initlink-')));
     try {
       const target = path.join(elsewhere, 'settings.json');
       fs.writeFileSync(target, JSON.stringify(USER_CLAUDE), { mode: 0o600 });
@@ -296,7 +304,7 @@ describe('safe writes', () => {
       initAgents(root, { agents: ['claude'], hookPath, home });
       expect(fs.lstatSync(path.join(root, '.claude/settings.local.json')).isSymbolicLink()).toBe(true);
       expect(JSON.parse(fs.readFileSync(target, 'utf8')).hooks.Stop).toHaveLength(1);
-      expect(fs.statSync(target).mode & 0o777).toBe(0o600);
+      expectMode(target, 0o600);
       expect(fs.readdirSync(elsewhere)).toEqual(['settings.json']);
       expect(fs.readdirSync(path.join(root, '.claude'))).toEqual(['settings.local.json']);
     } finally {
@@ -323,7 +331,7 @@ describe('safe writes', () => {
     initAgents(root, { agents: ['codex', 'cursor'], hookPath, home });
     const real = fs.unlinkSync;
     vi.spyOn(fs, 'unlinkSync').mockImplementation(p => {
-      if (String(p).endsWith('.codex/hooks.json')) throw Object.assign(new Error('EACCES: nope'), { code: 'EACCES' });
+      if (String(p).endsWith(path.join('.codex', 'hooks.json'))) throw Object.assign(new Error('EACCES: nope'), { code: 'EACCES' });
       return real(p);
     });
     const res = removeAgents(root, { home });
@@ -359,7 +367,7 @@ describe('init records', () => {
   });
 
   it('writes no record when LiveMap entries exist without one, so remove falls back to pruning', () => {
-    const other = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-inithome2-')));
+    const other = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-inithome2-')));
     try {
       initAgents(root, { agents: ['cursor'], hookPath, home: other });
       expect(initAgents(root, { agents: ['cursor'], hookPath: '/moved/livemap-hook.mjs', home })[0].action).toBe('updated');
