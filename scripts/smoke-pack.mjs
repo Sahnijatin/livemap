@@ -36,7 +36,7 @@ async function serve(bin, fixture) {
   try {
     for (;;) {
       check(Date.now() < deadline, `server did not answer in 5 s:\n${out}`);
-      check(child.exitCode === null, `server exited with ${child.exitCode}:\n${out}`);
+      check(child.exitCode === null && child.signalCode === null, `server exited with ${child.exitCode ?? child.signalCode}:\n${out}`);
       await new Promise((r) => setTimeout(r, 100));
       const m = /http:\/\/127\.0\.0\.1:\d+\/\?t=([\w-]+)/.exec(out);
       if (!m) continue;
@@ -49,12 +49,20 @@ async function serve(bin, fixture) {
       return await state.json();
     }
   } finally {
-    child.kill('SIGTERM');
-    if (child.exitCode === null) await new Promise((r) => child.once('exit', r));
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise((r) => child.once('exit', r));
+      child.kill('SIGTERM');
+      const timer = setTimeout(() => child.kill('SIGKILL'), 3000);
+      await exited;
+      clearTimeout(timer);
+    }
   }
 }
 
 async function main() {
+  for (const built of ['dist/grammars', 'dist/ui-export/index.html']) {
+    check(fs.existsSync(path.join(repo, built)), `${built} is missing; run npm run build first`);
+  }
   const [packed] = JSON.parse(execFileSync(npm, ['pack', '--json', '--pack-destination', tmp], { cwd: repo, encoding: 'utf8' }));
   const tarball = path.join(tmp, packed.filename);
   console.log(`smoke: ${packed.filename}: ${packed.entryCount} files, ${mb(packed.size)} packed, ${mb(packed.unpackedSize)} unpacked`);
