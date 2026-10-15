@@ -14,3 +14,12 @@ dependencies = [
 python = "^3.11"
 sqlalchemy = "^2.0"
 celery = { version = "^5.3", extras = ["redis"] }
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+
+[project.optional-dependencies]
+test = ["coverage>=7"]
+postgres = [
+  "psycopg[binary]>=3.1",
+]

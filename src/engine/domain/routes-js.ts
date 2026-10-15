@@ -80,12 +80,17 @@ function ctorFramework(name: string, imports: Map<string, string>, fileFw: strin
 const ASSIGN = new RegExp(`(?:\\b(?:const|let|var)\\s+|(?<![\\w$.])this\\s*\\.\\s*|^[ \\t]*(?:(?:private|public|protected|readonly|static)\\s+)*)(${ID})\\s*(?::[^=\\n]{0,200})?=(?![=>])\\s*`, 'gm');
 const THIS_RECEIVERS = new Set(['app', 'router', 'server']);
 
-/** Router receivers of this file: the conventional names plus identifiers assigned from a router factory. */
+/**
+ * Router receivers of this file: identifiers assigned from a router factory, plus the conventional names
+ * when the file imports a server framework (elsewhere `api.get('/users')` is usually an HTTP client).
+ */
 function receiversOf(code: string, scan: string, imports: Map<string, string>, fileFw: string): Map<string, Receiver> {
   const recv = new Map<string, Receiver>();
   const importsServer = [...imports.values()].some(s => SERVER_MODULES.has(s) || s.startsWith('hono/'));
-  for (const n of DEFAULT_RECEIVERS) if (importsServer || !imports.has(n)) recv.set(n, { fw: fileFw, prefix: '' });
-  if (importsServer || !imports.has('fastify')) recv.set('fastify', { fw: 'fastify', prefix: '' });
+  if (importsServer) {
+    for (const n of DEFAULT_RECEIVERS) recv.set(n, { fw: fileFw, prefix: '' });
+    recv.set('fastify', { fw: 'fastify', prefix: '' });
+  }
   const basePathFrom = new RegExp(`(${ID})\\s*\\.\\s*basePath\\s*\\(\\s*(['"\`])([^'"\`\\n]*)\\2\\s*\\)`, 'y');
   const init = new RegExp(`(?:await\\s+)?(?:new\\s+)?(${ID})(\\s*\\.\\s*Router)?\\s*(?:<[^>\\n]{0,200}>)?\\s*\\(`, 'y');
   const basePath = /\s*\.\s*basePath\s*\(\s*(['"`])([^'"`\n]*)\1\s*\)/y;

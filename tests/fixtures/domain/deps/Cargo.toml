@@ -9,3 +9,16 @@ local = { path = "../local" }
 
 [dev-dependencies]
 proptest = "1.4"
+
+[build-dependencies]
+cc = "1.0"
+
+[dependencies.reqwest]
+version = "0.12"
+features = ["json"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = "0.29"
+
+[target.'cfg(windows)'.dev-dependencies.winapi]
+version = "0.3"

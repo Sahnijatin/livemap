@@ -5,3 +5,7 @@ requests
 -r requirements-dev.txt
 -e git+https://github.com/x/y.git#egg=y
 SQLAlchemy>=2.0,<3 ; python_version >= "3.8"
+urllib3==2.2.1 \
+    --hash=sha256:aaaa \
+    --hash=sha256:bbbb
+idna==3.7 --hash=sha256:cccc
