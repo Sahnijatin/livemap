@@ -15,8 +15,12 @@ import { FOCUS_WAIT_MS, MapView, forgetMapSession } from './MapView';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-/** Every camera `setCenter` call (Follow's moves among them), passed through to React Flow. */
+/**
+ * Every camera `setCenter` call (Follow's moves among them), passed through to React Flow unless a test
+ * turns `passThrough` off (the camera then stays where it is, like a move cut short at its start).
+ */
 const centers: { x: number; y: number; duration?: number }[] = [];
+let passThrough = true;
 vi.mock('@xyflow/react', async importOriginal => {
   const m = await importOriginal<typeof import('@xyflow/react')>();
   const wrapped = new WeakMap<object, ReturnType<typeof m.useReactFlow>>();
@@ -26,7 +30,7 @@ vi.mock('@xyflow/react', async importOriginal => {
       const rf = m.useReactFlow();
       let w = wrapped.get(rf);
       if (!w) {
-        w = { ...rf, setCenter: (x, y, o) => { centers.push({ x, y, duration: o?.duration }); return rf.setCenter(x, y, o); } };
+        w = { ...rf, setCenter: (x, y, o) => { centers.push({ x, y, duration: o?.duration }); return passThrough ? rf.setCenter(x, y, o) : Promise.resolve(true); } };
         wrapped.set(rf, w);
       }
       return w;
@@ -123,6 +127,7 @@ const levelBtn = (label: string) => [...tools.querySelectorAll<HTMLButtonElement
 beforeEach(() => {
   reducedMotion(true);
   centers.length = 0;
+  passThrough = true;
   useStore.getState().reset();
   forgetMapSession();
   host = document.createElement('div');
@@ -348,7 +353,8 @@ describe('level of detail (#15)', () => {
     await mount();
     expect(far()).toBe(false);
     // Zoom out until about 0.5, then once more to about 0.4.
-    while (viewport().zoom >= 0.5) zoomOut();
+    for (let i = 0; i < 10 && viewport().zoom >= 0.5; i++) zoomOut();
+    expect(viewport().zoom).toBeLessThan(0.5);
     expect(viewport().zoom).toBeGreaterThanOrEqual(0.45);
     expect(far()).toBe(false);
     zoomOut();
@@ -483,38 +489,44 @@ describe('Follow', () => {
   it('a click on empty canvas in the middle of a Follow move does not stall Follow (#15)', async () => {
     memStorage(new Map());
     useStore.getState().reset();
-    // Animated camera moves: in jsdom a d3 transition starts but the click below interrupts it.
-    reducedMotion(false);
     const web = Array.from({ length: 12 }, (_, i) => imp(`src/web/w${i}.tsx`, []));
     hello([...web, imp(ORDERS, [])], { live: 'src/web/w0.tsx' });
     await mount();
-    await act(async () => { await new Promise(r => setTimeout(r, 700)); });
-    centers.length = 0;
-    // The agent starts writing a file off screen: Follow eases toward it.
-    act(() => useStore.getState().apply({
-      type: 'agentEvent', event: event({ id: 9, at: Date.now(), type: 'tool_start', tool: { id: 't9', name: 'Edit', label: 'Edit', paths: [ORDERS] } }),
-    }));
-    await settle();
-    expect(centers.length).toBe(1);
-    const first = centers[0];
-    // A plain click on the canvas: d3-zoom interrupts the move and ends a gesture that moved nothing.
-    const pane = host.querySelector<HTMLElement>('.react-flow__pane')!;
-    const win = pane.ownerDocument.defaultView!;
-    // d3-zoom listens for the mouseup on `event.view` (jsdom refuses vitest's window in the constructor).
-    const mouse = (type: string) => {
-      const e = new MouseEvent(type, { bubbles: true, button: 0, clientX: 100, clientY: 100 });
-      Object.defineProperty(e, 'view', { value: win });
-      return e;
-    };
-    act(() => {
-      pane.dispatchEvent(mouse('mousedown'));
-      win.dispatchEvent(mouse('mouseup'));
-    });
-    // Follow asks for the same file again once its interval has passed, instead of waiting for the next file.
-    await act(async () => { await new Promise(r => setTimeout(r, 700)); });
-    expect(followBtn().textContent).toBe('Follow');
-    expect(centers.length).toBe(2);
-    expect(centers[1]).toEqual(first);
+    // From here the camera never reaches Follow's target, as when a click interrupts the move at its start
+    // (no real d3 transition, whose progress would depend on wall time). Fake clocks drive Follow's interval.
+    passThrough = false;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      // Past Follow's interval since the first view.
+      act(() => { vi.advanceTimersByTime(1000); });
+      centers.length = 0;
+      // The agent starts writing a file off screen: Follow moves toward it.
+      act(() => useStore.getState().apply({
+        type: 'agentEvent', event: event({ id: 9, at: Date.now(), type: 'tool_start', tool: { id: 't9', name: 'Edit', label: 'Edit', paths: [ORDERS] } }),
+      }));
+      expect(centers.length).toBe(1);
+      const first = centers[0];
+      // A plain click on the canvas: d3-zoom ends a gesture that moved nothing.
+      const pane = host.querySelector<HTMLElement>('.react-flow__pane')!;
+      const win = pane.ownerDocument.defaultView!;
+      // d3-zoom listens for the mouseup on `event.view` (jsdom refuses vitest's window in the constructor).
+      const mouse = (type: string) => {
+        const e = new MouseEvent(type, { bubbles: true, button: 0, clientX: 100, clientY: 100 });
+        Object.defineProperty(e, 'view', { value: win });
+        return e;
+      };
+      act(() => {
+        pane.dispatchEvent(mouse('mousedown'));
+        win.dispatchEvent(mouse('mouseup'));
+      });
+      // Follow asks for the same file again once its interval has passed, instead of waiting for the next file.
+      act(() => { vi.advanceTimersByTime(1000); });
+      expect(followBtn().textContent).toBe('Follow');
+      expect(centers.length).toBe(2);
+      expect(centers[1]).toEqual(first);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('in a large project, Follow opens the collapsed folder the agent is writing in', async () => {
