@@ -1,28 +1,21 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { useStore } from '../store';
-import { setCollapsed } from '../panels';
-import { PANELS, fitLayout, shownLayout, type Panel } from '../panelLayout';
+import { PANELS, setCollapsed, shownLayout } from '../panels';
+import type { Panel } from '../panelLayout';
 import { PanelIcon, SidebarIcon } from './icons';
 
-/** The docked layout as drawn: the shown layout, the box it fits and each panel's drawn width. */
-export function useDrawn() {
-  const l = shownLayout(useStore(s => s.layout), useStore(s => s.peek));
-  const { width, vw } = useStore(s => s.dock);
-  return { l, width, vw, fit: fitLayout(l, width, vw) };
-}
-
 /**
- * The `.app` grid. It alone follows the docked layout (styles.css reads `--left-w` and `--right-w` at 1080 px and
- * wider), so a drag or a window resize re-renders it and the handles, not the panels and center it is given.
+ * The `.app` grid. React owns its classes (collapsed panels, the collapse glide, a drag); dockFit.ts, loaded after
+ * first paint, owns the column widths, so a drag or a window resize re-renders nothing here.
  */
 export function Dock({ gated, children }: { gated: boolean; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
-  const { l, fit } = useDrawn();
+  const { collapsed } = shownLayout(useStore(s => s.layout), useStore(s => s.peek));
   const dragging = useStore(s => s.dock.dragging);
   // The columns animate only while a panel collapses or expands, never during a drag or a window resize. Set during
   // render, so the class lands in the same commit as the collapsed class and the transition starts.
-  const shape = `${l.collapsed.files} ${l.collapsed.inspector}`;
+  const shape = `${collapsed.files} ${collapsed.inspector}`;
   const [seen, setSeen] = useState(shape);
   const [glide, setGlide] = useState(false);
   if (seen !== shape) {
@@ -35,25 +28,17 @@ export function Dock({ gated, children }: { gated: boolean; children: ReactNode 
     return () => window.clearTimeout(t);
   }, [glide, shape]);
 
-  // Fit the real box (safe-area insets and gutters included); jsdom has no layout, so it falls back to the 12 px gutters.
-  useLayoutEffect(() => {
-    const el = ref.current!;
-    const measure = () => useStore.getState().setDock({ width: el.clientWidth || window.innerWidth - 24, vw: window.innerWidth });
-    measure();
-    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
-    ro?.observe(el);
-    window.addEventListener('resize', measure);
-    return () => {
-      ro?.disconnect();
-      window.removeEventListener('resize', measure);
-    };
+  useEffect(() => {
+    let live = true;
+    let off: (() => void) | undefined;
+    void import('../dockFit').then(m => { if (live) off = m.attach(ref.current!); });
+    return () => { live = false; off?.(); };
   }, []);
 
   return (
     <div
       ref={ref}
-      className={clsx('app', l.collapsed.files && 'left-collapsed', l.collapsed.inspector && 'right-collapsed', glide && 'glide', dragging && 'resizing')}
-      style={{ '--left-w': `${fit.files}px`, '--right-w': `${fit.inspector}px` } as CSSProperties}
+      className={clsx('app', collapsed.files && 'left-collapsed', collapsed.inspector && 'right-collapsed', glide && 'glide', dragging && 'resizing')}
       {...(gated ? { inert: '', 'aria-hidden': true } : {})}
     >
       {children}

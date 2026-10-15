@@ -6,7 +6,7 @@ import { emptySummaries, type SummariesState } from '@shared/summaries.js';
 import type { AgentEvent, AgentSession, ChangeSummary, ControlState, Dep, FileModel } from '@shared/types.js';
 import { LARGE_PROJECT, codeFileCount, edgeBaseline, type Level } from './map/mapModel';
 import { historySource, type HistoryRecord, type HistoryState, type LiveState } from './history';
-import { loadLayout, saveLayout, type Panel, type PanelLayout } from './panelLayout';
+import type { Panel, PanelLayout } from './panelLayout';
 
 export const MAX_CHANGES = 2000;
 export const MAX_EVENTS = 2000;
@@ -115,7 +115,7 @@ export interface StoreState {
   reveal: { path: string; line: number; seq: number } | null;
   /** Narrow layouts: which slide-over panel is open. */
   panel: 'files' | 'inspector' | null;
-  /** Wide layouts: docked panel widths and collapsed state as the user set them, remembered across reloads. */
+  /** Wide layouts: docked panel widths and collapsed state as the user set them (dockFit.ts loads and saves them). */
   layout: PanelLayout;
   /** A selected file shows a collapsed inspector for the session (not saved); toggling the inspector ends it. */
   peek: boolean;
@@ -179,9 +179,8 @@ export interface StoreState {
   revealLine(path: string, line: number): void;
   clearReveal(): void;
   setPanel(panel: StoreState['panel']): void;
-  /** Replaces the docked layout; `save` false skips storage (mid-drag). */
-  setLayout(layout: PanelLayout, save?: boolean): void;
-  /** Collapses or expands a docked panel, ending a peek at the inspector, and saves. */
+  setLayout(layout: PanelLayout): void;
+  /** Collapses or expands a docked panel, ending a peek at the inspector. */
   collapse(p: Panel, on: boolean): void;
   setDock(patch: Partial<StoreState['dock']>): void;
   showToast(text: string, tone?: 'info' | 'error'): void;
@@ -224,6 +223,7 @@ const initial = {
   filter: '',
   reveal: null,
   panel: null,
+  layout: { w: { files: null, inspector: null }, collapsed: { files: false, inspector: false } } as PanelLayout,
   peek: false,
   dock: { width: 1416, vw: 1440, dragging: false },
   events: [],
@@ -373,7 +373,6 @@ export const useStore = create<StoreState>()((set, get) => ({
   ...freshDomain(),
   tab: loadTab(),
   follow: loadFollow(),
-  layout: loadLayout(),
 
   apply(msg) {
     if (msg.type === 'fileSummary') summaryRequests.delete(msg.path); // even while rewound: see summaryRequests
@@ -489,15 +488,13 @@ export const useStore = create<StoreState>()((set, get) => ({
     set({ panel });
   },
 
-  setLayout(layout, save = true) {
+  setLayout(layout) {
     set({ layout });
-    if (save) saveLayout(layout);
   },
 
   collapse(p, on) {
     const layout = { ...get().layout, collapsed: { ...get().layout.collapsed, [p]: on } };
     set(p === 'inspector' ? { layout, peek: false } : { layout });
-    saveLayout(layout);
   },
 
   setDock(patch) {
@@ -631,6 +628,6 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   reset() {
     summaryRequests.clear();
-    set({ ...initial, ...freshDomain(), tab: 'activity', follow: loadFollow(), layout: loadLayout(), historyStatus: NO_HISTORY, rewound: null, playing: false, summaries: emptySummaries(), helloFiles: new Set(), files: {}, changes: [], usedBy: [], recent: {}, expanded: {}, events: [], sessions: {}, control: { paused: false, flags: [] }, mapExpanded: {}, helloEdges: new Set(), history: [] });
+    set({ ...initial, ...freshDomain(), tab: 'activity', follow: loadFollow(), historyStatus: NO_HISTORY, rewound: null, playing: false, summaries: emptySummaries(), helloFiles: new Set(), files: {}, changes: [], usedBy: [], recent: {}, expanded: {}, events: [], sessions: {}, control: { paused: false, flags: [] }, mapExpanded: {}, helloEdges: new Set(), history: [] });
   },
 }));

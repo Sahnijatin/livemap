@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest';
-import { currentTarget } from './live';
+import { describe, it, expect, beforeAll } from 'vitest';
+import { classifierReady, currentTarget } from './live';
+
+beforeAll(() => classifierReady);
 import { event, session, change } from './fixtures';
 
 const NOW = 1_000_000;

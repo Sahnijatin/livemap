@@ -2,9 +2,19 @@ import { useEffect } from 'react';
 import { useStore, type StoreState } from './store';
 import { NARROW_QUERY, isNarrow, isPhone } from './media';
 import { typingElsewhere } from './keys';
-import { shownLayout } from './panelLayout';
+import type { Panel as Side, PanelLayout } from './panelLayout';
 
 type Panel = NonNullable<StoreState['panel']>;
+
+/** Each docked panel's name in labels, its shortcut key and its element id. */
+export const PANELS: Record<Side, { name: string; key: string; id: string }> = {
+  files: { name: 'project panel', key: '[', id: 'sidebar' },
+  inspector: { name: 'inspector', key: ']', id: 'inspector' },
+};
+
+/** The docked layout as drawn: while `peek` (a file was selected) a collapsed inspector shows; the stored layout is untouched. */
+export const shownLayout = (l: PanelLayout, peek: boolean): PanelLayout =>
+  peek && l.collapsed.inspector ? { ...l, collapsed: { ...l.collapsed, inspector: false } } : l;
 
 /** Spread on a closed slide-over below 1080 px: off screen, so out of the tab order and the accessibility tree (React 18 has no `inert` prop). */
 export const INERT = { inert: '' } as Record<string, unknown>;

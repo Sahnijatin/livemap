@@ -1,8 +1,14 @@
 import { useRef, type KeyboardEvent, type PointerEvent } from 'react';
 import { useStore } from '../store';
-import { setCollapsed } from '../panels';
-import { LIMITS, PANELS, fitLayout, widthFor, type Panel } from '../panelLayout';
-import { useDrawn } from './Dock';
+import { PANELS, setCollapsed, shownLayout } from '../panels';
+import { LIMITS, fitLayout, widthFor, type Panel } from '../panelLayout';
+
+/** The docked layout as drawn: the shown layout, the box it fits and each panel's drawn width. */
+function useDrawn() {
+  const l = shownLayout(useStore(s => s.layout), useStore(s => s.peek));
+  const { width, vw } = useStore(s => s.dock);
+  return { l, width, vw, fit: fitLayout(l, width, vw) };
+}
 
 /**
  * The drag handle on a docked panel's inner edge (1080 px and wider; App loads it after first paint): drag or arrow
@@ -17,17 +23,17 @@ export function PanelHandle({ panel }: { panel: Panel }) {
   const max = fitLayout({ ...l, w: { ...l.w, [panel]: LIMITS[panel][1] } }, width, vw)[panel];
   // The inspector's handle is on its left edge: moving it left widens the panel.
   const dir = panel === 'files' ? 1 : -1;
-  const drag = useRef<{ x: number; d: number; moved: boolean } | null>(null);
+  const drag = useRef<{ x: number; d: number } | null>(null);
 
-  const store = (w: number | null, save = true) => {
+  // dockFit.ts saves the layout when it changes outside a drag, so a drag saves once, when it ends.
+  const store = (w: number | null) => {
     const s = useStore.getState();
-    s.setLayout({ ...s.layout, w: { ...s.layout.w, [panel]: w } }, save);
+    s.setLayout({ ...s.layout, w: { ...s.layout.w, [panel]: w } });
   };
   /** Draws the panel at `d`, within reach; nothing happens when that is the width drawn now. */
-  const draw = (d: number, save = true): boolean => {
+  const draw = (d: number) => {
     const t = Math.max(min, Math.min(max, Math.round(d)));
-    if (t !== now) store(widthFor(l, panel, t, width, vw), save);
-    return t !== now;
+    if (t !== now) store(widthFor(l, panel, t, width, vw));
   };
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const step = e.shiftKey ? 64 : 16;
@@ -43,20 +49,17 @@ export function PanelHandle({ panel }: { panel: Panel }) {
     if (e.button !== 0) return;
     e.preventDefault();
     e.currentTarget.setPointerCapture?.(e.pointerId);
-    drag.current = { x: e.clientX, d: now, moved: false };
+    drag.current = { x: e.clientX, d: now };
     useStore.getState().setDock({ dragging: true });
   };
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
     const g = drag.current;
-    if (g && draw(g.d + dir * (e.clientX - g.x), false)) g.moved = true;
+    if (g) draw(g.d + dir * (e.clientX - g.x));
   };
   const onPointerUp = () => {
-    const g = drag.current;
-    if (!g) return;
+    if (!drag.current) return;
     drag.current = null;
-    const s = useStore.getState();
-    s.setDock({ dragging: false });
-    if (g.moved) s.setLayout(s.layout);
+    useStore.getState().setDock({ dragging: false });
   };
 
   return (

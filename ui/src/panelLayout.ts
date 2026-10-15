@@ -1,4 +1,7 @@
-/** Docked panel widths and collapsed state at 1080 px and wider (below that the panels are slide-overs; see panels.ts). */
+/**
+ * Docked panel widths and collapsed state at 1080 px and wider (below that the panels are slide-overs; see panels.ts).
+ * Only the lazy dockFit.ts and PanelHandle.tsx import this module, so it stays off the main chunk.
+ */
 export type Panel = 'files' | 'inspector';
 export interface PanelLayout {
   /** The width the user chose per panel; null follows the default for the viewport. Only the drawn width is clamped. */
@@ -6,11 +9,6 @@ export interface PanelLayout {
   collapsed: Record<Panel, boolean>;
 }
 
-/** Each panel's name in labels, its shortcut key and its element id. */
-export const PANELS: Record<Panel, { name: string; key: string; id: string }> = {
-  files: { name: 'project panel', key: '[', id: 'sidebar' },
-  inspector: { name: 'inspector', key: ']', id: 'inspector' },
-};
 export const LAYOUT_KEY = 'livemap:layout';
 export const LIMITS: Record<Panel, [number, number]> = { files: [200, 520], inspector: [300, 720] };
 /** The center column never gets narrower than this because of a panel. */
@@ -24,10 +22,6 @@ export const emptyLayout = (): PanelLayout => ({ w: { files: null, inspector: nu
 export const defaultWidth = (p: Panel, vw: number): number => (p === 'files' ? (vw < 1280 ? 248 : 272) : vw < 1280 ? 340 : 384);
 
 const limit = (p: Panel, w: number): number => Math.max(LIMITS[p][0], Math.min(LIMITS[p][1], Math.round(w)));
-
-/** The layout as drawn: while `peek` (a file was selected) a collapsed inspector shows; the stored layout is untouched. */
-export const shownLayout = (l: PanelLayout, peek: boolean): PanelLayout =>
-  peek && l.collapsed.inspector ? { ...l, collapsed: { ...l.collapsed, inspector: false } } : l;
 
 /**
  * The widths to draw in an `.app` box `width` px wide (`vw`, the viewport, picks the defaults): each chosen width,

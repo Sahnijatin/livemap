@@ -7,9 +7,9 @@ import { READ_ONLY_TIP } from '../history';
 import { AgentChips } from './AgentChips';
 import { useLiveState } from './Activity';
 import { preloadPalette } from '../palette/PaletteHost';
-import { togglePanel } from '../panels';
+import { PANELS, shownLayout, togglePanel } from '../panels';
 import { NARROW_QUERY, useMedia } from '../media';
-import { PANELS, shownLayout, type Panel } from '../panelLayout';
+import type { Panel } from '../panelLayout';
 import { MenuIcon, MoonIcon, PanelIcon, PauseIcon, PlayIcon, SearchIcon, SidebarIcon, SunIcon } from './icons';
 
 export function StatusChip() {

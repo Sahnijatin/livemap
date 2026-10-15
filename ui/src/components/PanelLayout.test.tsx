@@ -13,6 +13,7 @@ const { Inspector } = await import('./Inspector');
 const { Dock } = await import('./Dock');
 const { PanelHandle } = await import('./PanelHandle');
 const { useSlideOvers } = await import('../panels');
+await import('../dockFit');
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -63,6 +64,11 @@ function Shell() {
   );
 }
 
+/** Renders the shell and lets the lazily imported dockFit.ts attach (it loads the stored layout and writes the widths). */
+async function mount() {
+  await act(async () => { root.render(<Shell />); });
+}
+
 const app = () => host.querySelector<HTMLDivElement>('.app')!;
 const btn = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 const sep = (label: string) => host.querySelector<HTMLDivElement>(`[role=separator][aria-label="${label}"]`)!;
@@ -102,8 +108,8 @@ afterEach(() => {
 });
 
 describe('docked panels at 1080 px and wider', () => {
-  it('the sidebar collapse button and the toolbar button collapse and expand the project panel', () => {
-    act(() => root.render(<Shell />));
+  it('the sidebar collapse button and the toolbar button collapse and expand the project panel', async () => {
+    await mount();
     expect(app().classList.contains('left-collapsed')).toBe(false);
     expect(btn('Files').getAttribute('aria-expanded')).toBe('true');
     act(() => btn('Hide project panel').click());
@@ -116,8 +122,8 @@ describe('docked panels at 1080 px and wider', () => {
     expect(host.querySelector('aside.sidebar')!.hasAttribute('inert')).toBe(false);
   });
 
-  it('the inspector collapse button and the toolbar button collapse and expand the inspector, in both views', () => {
-    act(() => root.render(<Shell />));
+  it('the inspector collapse button and the toolbar button collapse and expand the inspector, in both views', async () => {
+    await mount();
     act(() => btn('Hide inspector').click());
     expect(app().classList.contains('right-collapsed')).toBe(true);
     expect(host.querySelector('aside.insp')!.hasAttribute('inert')).toBe(true);
@@ -130,8 +136,8 @@ describe('docked panels at 1080 px and wider', () => {
     expect(app().classList.contains('right-collapsed')).toBe(true);
   });
 
-  it('the toolbar buttons show state with a filled panel side at this width, not a pressed background', () => {
-    act(() => root.render(<Shell />));
+  it('the toolbar buttons show state with a filled panel side at this width, not a pressed background', async () => {
+    await mount();
     const filled = (label: string) => !!btn(label).querySelector('path[fill="currentColor"]');
     expect([filled('Files'), filled('Inspector')]).toEqual([true, true]);
     act(() => btn('Hide project panel').click());
@@ -140,15 +146,15 @@ describe('docked panels at 1080 px and wider', () => {
     expect([filled('Files'), filled('Inspector')]).toEqual([false, false]);
   });
 
-  it('collapsing a panel that holds focus hands focus to its toolbar button', () => {
-    act(() => root.render(<Shell />));
+  it('collapsing a panel that holds focus hands focus to its toolbar button', async () => {
+    await mount();
     btn('Hide project panel').focus();
     act(() => btn('Hide project panel').click());
     expect(document.activeElement).toBe(btn('Files'));
   });
 
-  it('arrow keys, Home, End, Enter and a double-click on the separator resize, collapse and reset', () => {
-    act(() => root.render(<Shell />));
+  it('arrow keys, Home, End, Enter and a double-click on the separator resize, collapse and reset', async () => {
+    await mount();
     const files = sep('Resize project panel');
     expect(files.getAttribute('aria-orientation')).toBe('vertical');
     expect(files.tabIndex).toBe(0);
@@ -184,8 +190,8 @@ describe('docked panels at 1080 px and wider', () => {
     expect(document.activeElement).toBe(btn('Inspector'));
   });
 
-  it('keeps the center at least 420 px wide, with the panels and the window', () => {
-    act(() => root.render(<Shell />));
+  it('keeps the center at least 420 px wide, with the panels and the window', async () => {
+    await mount();
     const center = (w: number) => w - (now('Resize project panel') + 12) - (now('Resize inspector') + 12);
     key(sep('Resize inspector'), 'End');
     expect(center(1416)).toBeGreaterThanOrEqual(420);
@@ -199,12 +205,12 @@ describe('docked panels at 1080 px and wider', () => {
     expect(center(1076)).toBeGreaterThanOrEqual(420);
   });
 
-  it('a drag follows the pointer, also in a squeezed window (stored inspector 720 at 1200 px)', () => {
+  it('a drag follows the pointer, also in a squeezed window (stored inspector 720 at 1200 px)', async () => {
     localStorage.setItem(LAYOUT_KEY, JSON.stringify({ w: { inspector: 720 } }));
     useStore.getState().reset();
     hello();
     resize(1200);
-    act(() => root.render(<Shell />));
+    await mount();
     const files = sep('Resize project panel');
     const start = now('Resize project panel');
     expect(start).toBeLessThan(248);
@@ -220,12 +226,12 @@ describe('docked panels at 1080 px and wider', () => {
     expect(fitLayout(l, 1176, 1200).files).toBe(start + 40);
   });
 
-  it('a click on the handle without moving saves nothing; keys save only when the drawn width changes', () => {
+  it('a click on the handle without moving saves nothing; keys save only when the drawn width changes', async () => {
     localStorage.setItem(LAYOUT_KEY, JSON.stringify({ w: { files: 520 } }));
     useStore.getState().reset();
     hello();
     resize(1100);
-    act(() => root.render(<Shell />));
+    await mount();
     const files = sep('Resize project panel');
     const before = localStorage.getItem(LAYOUT_KEY);
     pointer(files, 'pointerdown', 300);
@@ -242,8 +248,8 @@ describe('docked panels at 1080 px and wider', () => {
     expect(stored().w.files).toBe(504);
   });
 
-  it('the drag is a state the .app class follows: it survives re-renders and stops the collapse glide', () => {
-    act(() => root.render(<Shell />));
+  it('the drag is a state the .app class follows: it survives re-renders and stops the collapse glide', async () => {
+    await mount();
     act(() => btn('Hide inspector').click());
     expect(app().classList.contains('glide')).toBe(true);
     const files = sep('Resize project panel');
@@ -258,8 +264,8 @@ describe('docked panels at 1080 px and wider', () => {
     expect(app().classList.contains('resizing')).toBe(false);
   });
 
-  it('a drag and a window resize re-render the Dock and handles, not the panels and center', () => {
-    act(() => root.render(<Shell />));
+  it('a drag and a window resize re-render the Dock and handles, not the panels and center', async () => {
+    await mount();
     const base = renders;
     const files = sep('Resize project panel');
     pointer(files, 'pointerdown', 300);
@@ -270,11 +276,11 @@ describe('docked panels at 1080 px and wider', () => {
     expect(renders).toBe(base);
   });
 
-  it('fits the measured .app box, not the viewport', () => {
+  it('fits the measured .app box, not the viewport', async () => {
     const observers: ((entries: unknown[]) => void)[] = [];
     const notify = () => observers.forEach(fn => fn([]));
     vi.stubGlobal('ResizeObserver', class { constructor(fn: (entries: unknown[]) => void) { observers.push(fn); } observe() {} unobserve() {} disconnect() {} });
-    act(() => root.render(<Shell />));
+    await mount();
     expect(sep('Resize inspector').getAttribute('aria-valuemax')).toBe(String(fitLayout({ w: { files: null, inspector: LIMITS.inspector[1] }, collapsed: { files: false, inspector: false } }, 1416, 1440).inspector));
     // Safe-area insets or a larger gutter: the box is narrower than the viewport minus 24.
     Object.defineProperty(app(), 'clientWidth', { configurable: true, value: 1200 });
@@ -285,8 +291,8 @@ describe('docked panels at 1080 px and wider', () => {
     expect(1200 - (now('Resize project panel') + 12) - (now('Resize inspector') + 12)).toBeGreaterThanOrEqual(420);
   });
 
-  it('[ and ] toggle the panels, but not while typing in the filter or with the palette open', () => {
-    act(() => root.render(<Shell />));
+  it('[ and ] toggle the panels, but not while typing in the filter or with the palette open', async () => {
+    await mount();
     key(document.body, '[');
     expect(app().classList.contains('left-collapsed')).toBe(true);
     key(document.body, ']');
@@ -311,8 +317,8 @@ describe('docked panels at 1080 px and wider', () => {
     expect(app().classList.contains('left-collapsed')).toBe(false);
   });
 
-  it('selecting a file shows a collapsed inspector for the session, without saving it, in one update', () => {
-    act(() => root.render(<Shell />));
+  it('selecting a file shows a collapsed inspector for the session, without saving it, in one update', async () => {
+    await mount();
     act(() => btn('Hide inspector').click());
     expect(stored().collapsed.inspector).toBe(true);
     const setItem = vi.spyOn(Storage.prototype, 'setItem');
@@ -338,8 +344,8 @@ describe('docked panels at 1080 px and wider', () => {
 });
 
 describe('below 1080 px', () => {
-  it('the toolbar buttons and [ ] still drive the slide-overs, and collapsed state is ignored', () => {
-    act(() => root.render(<Shell />));
+  it('the toolbar buttons and [ ] still drive the slide-overs, and collapsed state is ignored', async () => {
+    await mount();
     act(() => btn('Hide project panel').click());
     act(() => resize(900));
     expect(host.querySelector('aside.sidebar')!.hasAttribute('inert')).toBe(true);
@@ -359,8 +365,8 @@ describe('below 1080 px', () => {
     expect(useStore.getState().layout.collapsed.inspector).toBe(false);
   });
 
-  it('selecting a file does not touch the stored docked state', () => {
-    act(() => root.render(<Shell />));
+  it('selecting a file does not touch the stored docked state', async () => {
+    await mount();
     act(() => btn('Hide inspector').click());
     act(() => resize(900));
     act(() => useStore.getState().select('src/a.ts'));

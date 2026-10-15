@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { CENTER_MIN, GAP, LAYOUT_KEY, LIMITS, PANELS, defaultWidth, fitLayout, loadLayout, parseLayout, saveLayout, shownLayout, widthFor, type PanelLayout } from './panelLayout';
+import { CENTER_MIN, GAP, LAYOUT_KEY, LIMITS, defaultWidth, fitLayout, loadLayout, parseLayout, saveLayout, widthFor, type PanelLayout } from './panelLayout';
+import { PANELS, shownLayout } from './panels';
 
 const layout = (p: Partial<PanelLayout> = {}): PanelLayout => ({ w: { files: null, inspector: null }, collapsed: { files: false, inspector: false }, ...p });
 
