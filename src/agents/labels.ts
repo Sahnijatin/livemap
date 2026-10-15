@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import fs from 'node:fs';
 import { isSecretEnvPath, SECRET_NAME_ALT } from '../engine/languages.js';
 
 const MAX_LABEL = 160;
@@ -59,6 +59,24 @@ function anchor(p: string, cwd?: string): string {
   return collapse(`${posix(cwd).replace(/\/+$/, '')}/${path}`);
 }
 
+const REAL_CACHE_MAX = 2000;
+/** realpath per path tried, null when it does not resolve; cleared when full. */
+const realCache = new Map<string, string | null>();
+
+/**
+ * The realpath of `p` in POSIX form, or null. Cached: labels are computed for every tool event on the
+ * server's event loop, and agents name the same files outside the root over and over.
+ */
+function realPrefix(p: string): string | null {
+  const hit = realCache.get(p);
+  if (hit !== undefined) return hit;
+  let real: string | null;
+  try { real = posix(fs.realpathSync(p)); } catch { real = null; }
+  if (realCache.size >= REAL_CACHE_MAX) realCache.clear();
+  realCache.set(p, real);
+  return real;
+}
+
 /**
  * An absolute path with its longest existing prefix resolved through symlinks (the rest, which
  * may not exist yet, is kept as is), or null when nothing resolves or nothing changes.
@@ -66,9 +84,8 @@ function anchor(p: string, cwd?: string): string {
 function realAbs(path: string): string | null {
   const parts = path.split('/');
   for (let n = parts.length; n > 1; n--) {
-    const head = parts.slice(0, n).join('/');
-    let real: string;
-    try { real = posix(realpathSync(head)); } catch { continue; }
+    const real = realPrefix(parts.slice(0, n).join('/'));
+    if (real === null) continue;
     const out = [real.replace(/\/+$/, ''), ...parts.slice(n)].join('/');
     return out === path ? null : out;
   }

@@ -111,4 +111,17 @@ describe('runtime file', () => {
     writeRuntime(root, 4321, 'tok');
     expect(runtimeFor(root)?.token).toBe('tok');
   });
+
+  it('#40: the project lock holder replaces an entry whose pid an unrelated live process reuses', async () => {
+    const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+    try {
+      const file = writeRuntime(root, 4321, 'tok');
+      fs.writeFileSync(file, JSON.stringify({ root, port: 9999, token: 'stale', pid: other.pid }));
+      expect(writeRuntime(root, 4321, 'tok', { takeover: true })).toBe(file);
+      expect(runtimeFor(root)).toEqual({ root, port: 4321, token: 'tok', pid: process.pid });
+    } finally {
+      other.kill('SIGKILL');
+      await new Promise(r => other.on('exit', r));
+    }
+  });
 });

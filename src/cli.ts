@@ -9,7 +9,7 @@ import { AgentHub } from './agents/hub.js';
 import { Attributor } from './agents/attribution.js';
 import { GitWatcher } from './agents/git.js';
 import { livemapHome, removeRuntime, runtimeFor, writeRuntime } from './agents/runtime.js';
-import { acquireLock, releaseLock } from './lock.js';
+import { acquireLock, releaseLock, setLockPort } from './lock.js';
 import { HistoryStore } from './history/store.js';
 import { buildExport, codeWarning } from './export/export.js';
 import { loadSummaryConfig } from './summarize/config.js';
@@ -187,9 +187,11 @@ async function main(): Promise<void> {
   const uiDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui');
 
   // One LiveMap per project: a second one would overwrite the first's history and runtime entry.
-  let lock: ReturnType<typeof acquireLock> = { ok: true };
+  let lock: Awaited<ReturnType<typeof acquireLock>> = { ok: true };
+  let locked = false;
   try {
-    lock = acquireLock(root);
+    lock = await acquireLock(root);
+    locked = lock.ok;
   } catch (e) {
     process.stderr.write(`livemap: warning: could not take the project lock: ${(e as Error).message}\n`);
   }
@@ -228,10 +230,19 @@ async function main(): Promise<void> {
   } catch (e) {
     fail(`could not start server: ${(e as Error).message}`);
   }
+  // The port lets a later start tell this run from an unrelated process that reuses its pid after a crash.
+  if (locked) {
+    try {
+      setLockPort(root, server.port);
+    } catch (e) {
+      process.stderr.write(`livemap: warning: could not record the port in the project lock: ${(e as Error).message}\n`);
+    }
+  }
   // Hooks find this server through the runtime file; it must not outlive the process.
   process.on('exit', () => removeRuntime(root));
   try {
-    writeRuntime(root, server.port, server.token);
+    // Holding the lock makes this the only LiveMap here; without it (lock unavailable) another may own the entry.
+    writeRuntime(root, server.port, server.token, { takeover: locked });
   } catch (e) {
     process.stderr.write(`livemap: could not write runtime file, agent hooks will not reach this run: ${(e as Error).message}\n`);
   }
