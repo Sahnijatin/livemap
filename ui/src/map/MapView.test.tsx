@@ -218,6 +218,29 @@ describe('MapView', () => {
     expect(wrapper().style.height).toBe(`${64 + 3 * 24}px`);
   });
 
+  it('new files during a slow first layout coalesce into one follow-up run, not one queued run each', async () => {
+    const waiting: (() => void)[] = [];
+    let calls = 0;
+    const slow: ElkRun = g => { calls++; return new Promise(r => waiting.push(() => r(rowRun(g)))); };
+    hello(baseFiles());
+    await act(async () => root.render(<MapView run={slow} tools={tools} />));
+    expect(calls).toBe(1);
+    for (let i = 0; i < 5; i++) {
+      const f = imp(`src/new${i}/f${i}.ts`, []);
+      act(() => useStore.getState().apply({ type: 'change', files: [f], removed: [], change: change(f.path, 'created') }));
+    }
+    await settle();
+    expect(calls).toBe(1);
+    await act(async () => { waiting.shift()!(); });
+    await settle();
+    // The follow-up starts from the first result, so every later layout is incremental and skips ELK.
+    while (waiting.length) await act(async () => { waiting.shift()!(); });
+    await settle();
+    expect(calls).toBeLessThanOrEqual(2);
+    expect(card('src/new4/f4.ts')).not.toBeNull();
+    expect(card(APP)).not.toBeNull();
+  });
+
   it('Reset layout clears the pins', async () => {
     const mem = new Map<string, string>([[pinsKey('/p/shop'), JSON.stringify({ files: { [APP]: { x: 5000, y: 5000 } }, folders: {} })]]);
     vi.stubGlobal('localStorage', { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v), removeItem: (k: string) => void mem.delete(k) });

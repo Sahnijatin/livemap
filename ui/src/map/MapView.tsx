@@ -134,19 +134,42 @@ function Canvas({ run, tools }: { run: ElkRun; tools: HTMLElement | null }) {
     const p = mem.levels[level];
     return p.folders.size ? { level, pos: p } : null;
   });
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
   const [resetSeq, setResetSeq] = useState(0);
+  const resetRef = useRef(resetSeq);
+  resetRef.current = resetSeq;
   const shape = useMemo(() => shapeOf(graph), [graph]);
+  // One layout at a time: shape changes during a run (an ELK first layout can take seconds) coalesce into one
+  // follow-up run for the latest graph, instead of queueing a stale run each on the single worker.
+  const placing = useRef({ busy: false, again: false, mounted: true });
   useEffect(() => {
-    let live = true;
+    const st = placing.current;
+    st.mounted = true;
+    return () => { st.mounted = false; };
+  }, []);
+  const place = useCallback(() => {
+    const st = placing.current;
+    if (st.busy) { st.again = true; return; }
+    st.busy = true;
+    st.again = false;
     const g = latest.current;
-    placeMap(g, mem.levels[g.level], pins.get(), run).then(p => {
-      if (!live) return;
-      const pos = withPins(g, p, pins.get());
-      mem.levels[g.level] = pos;
-      setLayout({ level: g.level, pos });
-    });
-    return () => { live = false; };
-  }, [shape, run, resetSeq, mem, pins]);
+    const seq = resetRef.current;
+    const done = (p: Positions | null) => {
+      st.busy = false;
+      if (!st.mounted) return;
+      // A run from before a reset is dropped; otherwise it is kept, so the follow-up run starts from it
+      // (the incremental path) rather than from nothing.
+      if (p && seq === resetRef.current) {
+        const pos = withPins(g, p, pins.get());
+        mem.levels[g.level] = pos;
+        if (!st.again && g.level === latest.current.level) setLayout({ level: g.level, pos });
+      }
+      if (st.again) place();
+    };
+    placeMap(g, mem.levels[g.level], pins.get(), run).then(done, () => done(null));
+  }, [run, mem, pins]);
+  useEffect(() => { place(); }, [shape, resetSeq, place]);
 
   const boxes = useMemo(() => (layout && layout.level === graph.level ? layoutBoxes(graph, layout.pos) : null), [graph, layout]);
   const boxesRef = useRef(boxes);
@@ -291,6 +314,9 @@ function Canvas({ run, tools }: { run: ElkRun; tools: HTMLElement | null }) {
   const onNodeDragStop = useCallback((_: unknown, n: Node) => {
     dragEnd(n.id);
     const g = latest.current;
+    // While a level switch or a reset waits for its layout, the cards on screen are not this level's: no pin.
+    const was0 = mem.levels[g.level];
+    if (layoutRef.current?.level !== g.level || !(n.type === 'file' ? was0.files.has(n.id) : was0.folders.has(n.id))) return;
     const p = { x: Math.round(n.position.x), y: Math.round(n.position.y) };
     if (n.type === 'file') pins.pin(fileKind(g.level), n.id, p);
     else if (g.level === 'folders') pins.pin('folders', n.id, p);
