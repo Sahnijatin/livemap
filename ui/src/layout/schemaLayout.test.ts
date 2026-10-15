@@ -3,6 +3,9 @@ import ELK from 'elkjs/lib/elk.bundled.js';
 import type { Table } from '@shared/domain.js';
 import { elkGraph, fitZoom, pickLayout, layoutDirection, layoutTables, nodeHeight, settle, tableKey, workerRun, LAYOUT_TIMEOUT, NARROW_PANE, NODE_W, type ElkRun, type Pos } from './schemaLayout';
 
+/** Slower CI runners scale wall-clock budgets (LIVEMAP_TIME_SCALE, set by CI on macOS and Windows). */
+const TIME_SCALE = Number(process.env.LIVEMAP_TIME_SCALE) || 1;
+
 const elk = new ELK();
 const run: ElkRun = g => elk.layout(g);
 
@@ -172,7 +175,7 @@ describe('layoutTables', () => {
       table(`T${i}`, 3 + (i % 10), i > 0 ? [{ field: 'parentId', to: `t${Math.floor(i / 3)}` }, { field: 'ownerId', to: `t${(i * 7) % i}` }] : []));
     const t0 = performance.now();
     const pos = await layoutTables(tables, new Map(), run);
-    expect(performance.now() - t0).toBeLessThan(3000);
+    expect(performance.now() - t0).toBeLessThan(3000 * TIME_SCALE);
     expect(pos.size).toBe(150);
     expectNoOverlap(tables, pos);
   });

@@ -16,6 +16,10 @@ const STICK_PX = 96;
 
 export interface LiveState { session: AgentSession | undefined; step: Step; counts: Counters; working: boolean; paused: boolean }
 
+/** Whether the active session is working, and whether it is paused (pause only reaches agents wired with hooks). */
+export const liveFlags = (session: AgentSession | undefined, pausedAll: boolean): Pick<LiveState, 'working' | 'paused'> =>
+  ({ working: session?.status === 'working', paused: pausedAll && (!session || !!session.hooks) });
+
 /** The active session, what it is doing now, and its counters. */
 export function useLiveState(): LiveState {
   const sessions = useStore(s => s.sessions);
@@ -23,11 +27,9 @@ export function useLiveState(): LiveState {
   const changes = useStore(s => s.changes);
   const pausedAll = useStore(s => s.control.paused);
   const session = useMemo(() => activeSession(sessions), [sessions]);
-  // Pause only reaches agents wired with hooks.
-  const paused = pausedAll && (!session || session.hooks);
   const step = useMemo(() => currentStep(session, events, changes), [session, events, changes]);
   const counts = useMemo(() => sessionCounters(session, changes), [session, changes]);
-  return { session, step, counts, working: session?.status === 'working', paused };
+  return { session, step, counts, ...liveFlags(session, pausedAll) };
 }
 
 /** A number that counts up to its new value (instantly with reduced motion or on first render). */

@@ -10,7 +10,9 @@ import { emptyDomain, file, sym } from '../fixtures';
 
 vi.mock('../highlight', () => ({ MAX_HIGHLIGHT_LINES: 5000, highlight: async () => null }));
 const { ApiView, CAP } = await import('./ApiView');
-const { Inspector } = await import('./Inspector');
+const { Inspector, loadDetail } = await import('./Inspector');
+// The file view loads after first paint in the app; load it up front so a selection renders at once.
+await loadDetail();
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

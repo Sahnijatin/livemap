@@ -75,7 +75,8 @@ Writes the recorded history as one HTML file. See [Exporting a replay](#exportin
 - **Pins and Reset layout.** Drag a card to move it. It stays there, across reloads, for this project in this browser. "Reset layout" in the map's options menu (the "⋯" button) clears every pin and lays the map out again.
 - **Search everything.** Press ⌘K (Ctrl+K on Windows and Linux) to search files, functions, routes and tables. Enter opens the result in the inspector and brings it into view in the current tab.
 - **Steering.** "Pause agent" in the toolbar and the Flag boxes send instructions to a connected agent. The inspector shows a Flag box for the open file, and, with no file open, a "Flag the project" box in its Live session panel. See [agents.md](agents.md#flag-and-pause).
-- **Narrow windows and phones.** Below 1080 px the file tree and the inspector become slide-over panels opened from the toolbar. On a phone the tabs show icons only, the toolbar condenses, and the map's level and Follow move into its options menu.
+- **Panels.** From 1080 px wide, drag the edge of the file tree or the inspector to resize it (double-click the edge to restore the default width), or hide either one with the button in its header or in the toolbar. `[` toggles the file tree and `]` the inspector. Selecting a file shows a hidden inspector. Widths and hidden panels are remembered in this browser.
+- **Narrow windows and phones.** Below 1080 px the file tree and the inspector become slide-over panels opened from the toolbar (or with `[` and `]`). On a phone the tabs show icons only, the toolbar condenses, and the map's level and Follow move into its options menu.
 
 ## History and the timeline
 

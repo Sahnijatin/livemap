@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import clsx from 'clsx';
 import { useStore } from '../store';
 import { NARROW_QUERY, isNarrow, useMedia } from '../media';
-import { INERT, afterSelect } from '../panels';
+import { INERT, afterSelect, shownLayout } from '../panels';
 import { prefersReducedMotion } from '../scroll';
 import { useCurrentTarget } from '../live';
 import { LAYERS } from '../layers';
@@ -10,6 +10,7 @@ import { latestChange, type SymbolTag } from '../changes';
 import { dirName, useLiveRecent } from '../recent';
 import { BIG_PROJECT, DIR_BATCH, buildGroups, cachedTags, dirKey, moreKey, visibleItems, type Item, type Row } from '../treeModel';
 import { FileRow } from './FileRow';
+import { CollapseButton } from './Dock';
 import { usePrefersReducedMotion } from '../motion';
 import { Chevron, SearchIcon } from './icons';
 
@@ -35,7 +36,8 @@ export function FileTree() {
   const changes = useStore(s => s.changes);
   const helloAt = useStore(s => s.helloAt);
   const panel = useStore(s => s.panel);
-  // Below 1080 px a closed slide-over is off screen: keep it out of the tab order.
+  const collapsed = useStore(s => shownLayout(s).collapsed.files);
+  // Below 1080 px a closed slide-over is off screen, and wider a collapsed panel is hidden: keep it out of the tab order.
   const narrow = useMedia(NARROW_QUERY);
   const live = useLiveRecent(recent);
   const target = useCurrentTarget();
@@ -226,9 +228,9 @@ export function FileTree() {
       aria-label="Project files"
       data-panel="files"
       tabIndex={-1}
-      {...(narrow && panel !== 'files' ? INERT : {})}
+      {...((narrow ? panel !== 'files' : collapsed) ? INERT : {})}
     >
-      <div className="sb-head"><h2>Project</h2><span>{fileCount.toLocaleString()} {fileCount === 1 ? 'file' : 'files'}</span></div>
+      <div className="sb-head"><h2>Project</h2><span>{fileCount.toLocaleString()} {fileCount === 1 ? 'file' : 'files'}</span><CollapseButton panel="files" /></div>
       <label className="filter">
         <SearchIcon />
         <input

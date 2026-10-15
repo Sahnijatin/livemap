@@ -10,7 +10,9 @@ const { Toolbar } = await import('./Toolbar');
 const { FileTree } = await import('./FileTree');
 const { useSlideOvers, closePanel, panelAfterSelect } = await import('../panels');
 const { MapTools } = await import('../map/MapTools');
-const { Inspector } = await import('./Inspector');
+const { Inspector, loadDetail } = await import('./Inspector');
+// The file view loads after first paint in the app; load it up front so a selection renders at once.
+await loadDetail();
 const { CenterTabs } = await import('./CenterTabs');
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -70,6 +72,7 @@ beforeEach(() => {
       removeListener: (fn: Listener) => l.listeners.delete(fn),
     };
   }) as unknown as typeof window.matchMedia;
+  localStorage.clear();
   useStore.getState().reset();
   host = document.createElement('div');
   document.body.appendChild(host);
@@ -97,8 +100,7 @@ describe('slide-over panels below 1080 px', () => {
     expect(document.activeElement).toBe(btn('Inspector'));
   });
 
-  // jsdom applies no CSS, so the toolbar buttons stay focusable at wide widths here. In a browser they are
-  // display:none there, and closePanel falls back to the docked panel (covered in tests/e2e/responsive.spec.ts).
+  // The toolbar buttons show at every width: at 1080 px and wider they collapse and expand the docked panels.
   it('resizing to wide with the sidebar open closes it and returns focus to the Files button', () => {
     resize(900);
     act(() => root.render(<Shell />));
@@ -111,13 +113,21 @@ describe('slide-over panels below 1080 px', () => {
     expect(document.activeElement).toBe(btn('Files'));
   });
 
-  it('resizing to wide with focus inside the inspector returns focus to the Inspector button', () => {
+  it('resizing to wide with focus inside the inspector keeps focus there, now docked; collapsed, it goes to the button', () => {
     resize(390);
     act(() => root.render(<Shell />));
     act(() => btn('Inspector').click());
     host.querySelector<HTMLButtonElement>('#in-insp')!.focus();
     act(() => resize(1440));
     expect(useStore.getState().panel).toBeNull();
+    expect(document.activeElement!.id).toBe('in-insp');
+
+    const { layout } = useStore.getState();
+    act(() => useStore.getState().setLayout({ ...layout, collapsed: { ...layout.collapsed, inspector: true } }));
+    act(() => resize(390));
+    act(() => btn('Inspector').click());
+    host.querySelector<HTMLButtonElement>('#in-insp')!.focus();
+    act(() => resize(1440));
     expect(document.activeElement).toBe(btn('Inspector'));
   });
 

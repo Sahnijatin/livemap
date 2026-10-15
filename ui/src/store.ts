@@ -6,6 +6,7 @@ import { emptySummaries, type SummariesState } from '@shared/summaries.js';
 import type { AgentEvent, AgentSession, ChangeSummary, ControlState, Dep, FileModel } from '@shared/types.js';
 import { LARGE_PROJECT, codeFileCount, edgeBaseline, type Level } from './map/mapModel';
 import { historySource, type HistoryRecord, type HistoryState, type LiveState } from './history';
+import { loadLayout, saveLayout, type Panel, type PanelLayout } from './panelLayout';
 
 export const MAX_CHANGES = 2000;
 export const MAX_EVENTS = 2000;
@@ -114,6 +115,18 @@ export interface StoreState {
   reveal: { path: string; line: number; seq: number } | null;
   /** Narrow layouts: which slide-over panel is open. */
   panel: 'files' | 'inspector' | null;
+  /** Wide layouts: docked panel widths and collapsed state as the user set them, remembered across reloads. */
+  layout: PanelLayout;
+  /**
+   * The file whose selection shows a collapsed docked inspector (not saved); see shownLayout. Set by every selection,
+   * cleared by a toggle of the inspector or a live deletion of the selected file. Scrubbing history leaves it, so back
+   * to live with the file present shows the inspector again. Below 1080 px the docked layout is not used.
+   */
+  peek: string | null;
+  /** Bumped by every file selection, even of the selected file (the Inspector retries a failed file view load on it). */
+  selects: number;
+  /** The `.app` box width and the viewport width the docked layout fits, and whether a panel edge is being dragged. */
+  dock: { width: number; vw: number; dragging: boolean };
   /** Agent activity: the last 2,000 events, sessions by id, and pause and flag state. */
   events: AgentEvent[];
   sessions: Record<string, AgentSession>;
@@ -172,6 +185,11 @@ export interface StoreState {
   revealLine(path: string, line: number): void;
   clearReveal(): void;
   setPanel(panel: StoreState['panel']): void;
+  /** Replaces the docked layout; `save` false skips storage (mid-drag). */
+  setLayout(layout: PanelLayout, save?: boolean): void;
+  /** Collapses or expands a docked panel, ending a peek at the inspector, and saves. */
+  collapse(p: Panel, on: boolean): void;
+  setDock(patch: Partial<StoreState['dock']>): void;
   showToast(text: string, tone?: 'info' | 'error'): void;
   setTab(t: CenterTab): void;
   setMapLevel(level: Level): void;
@@ -212,6 +230,8 @@ const initial = {
   filter: '',
   reveal: null,
   panel: null,
+  peek: null as string | null,
+  selects: 0,
   events: [],
   sessions: {},
   control: { paused: false, flags: [] } as ControlState,
@@ -242,12 +262,16 @@ function routesByFileOf(domain: DomainIndex): Record<string, ApiRoute[]> {
 
 const freshDomain = () => ({ domain: emptyDomainIndex(), domainBase: baseOf(emptyDomainIndex()), routesByFile: {} });
 
-/** Files after upserting and removing; clears the selection if its file is gone. */
-function upsertFiles(st: StoreState, upserts: FileModel[], removed: string[]): Pick<StoreState, 'files' | 'selected'> {
+/**
+ * Files after upserting and removing; clears the selection if its file is gone. A live deletion of the selected file
+ * also ends its peek, so the file coming back does not reopen the inspector; a played (historical) one does not.
+ */
+function upsertFiles(st: StoreState, upserts: FileModel[], removed: string[]): Pick<StoreState, 'files' | 'selected' | 'peek'> {
   const files = { ...st.files };
   for (const p of removed) delete files[p];
   for (const f of upserts) files[f.path] = f;
-  return { files, selected: st.selected && files[st.selected] ? st.selected : null };
+  const selected = st.selected && files[st.selected] ? st.selected : null;
+  return { files, selected, peek: !replaying && st.selected && !selected ? null : st.peek };
 }
 
 function recordRecent(recent: StoreState['recent'], c: ChangeSummary): void {
@@ -354,11 +378,22 @@ export const isAfter = (msg: WireMessage, stateSeq: number | undefined): boolean
   msg.seq === undefined ? stateSeq === undefined : stateSeq === undefined || msg.seq > stateSeq;
 
 
+/** The Gate covers the workspace (key needed, or no hello yet): nothing behind it is usable. */
+export const isGated = (s: StoreState): boolean => s.connection === 'unauthorized' || !s.loaded;
+
+/** The dock before Dock measures `.app` (before first paint): the window's width. */
+const windowDock = (): StoreState['dock'] => {
+  const vw = globalThis.innerWidth ?? 0;
+  return { width: vw, vw, dragging: false };
+};
+
 export const useStore = create<StoreState>()((set, get) => ({
   ...initial,
   ...freshDomain(),
   tab: loadTab(),
   follow: loadFollow(),
+  layout: loadLayout(),
+  dock: windowDock(),
 
   apply(msg) {
     if (msg.type === 'fileSummary') summaryRequests.delete(msg.path); // even while rewound: see summaryRequests
@@ -445,7 +480,7 @@ export const useStore = create<StoreState>()((set, get) => ({
   },
 
   select(path) {
-    set(path ? { selected: path, history: pushHistory(get().history, path) } : { selected: null });
+    set(path ? { selected: path, history: pushHistory(get().history, path), peek: path, selects: get().selects + 1 } : { selected: null });
   },
 
   toggle(path) {
@@ -463,7 +498,7 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   revealLine(path, line) {
     const seq = (get().reveal?.seq ?? 0) + 1;
-    set({ selected: path, reveal: { path, line, seq }, history: pushHistory(get().history, path) });
+    set({ selected: path, reveal: { path, line, seq }, history: pushHistory(get().history, path), peek: path, selects: get().selects + 1 });
   },
 
   clearReveal() {
@@ -472,6 +507,22 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   setPanel(panel) {
     set({ panel });
+  },
+
+  setLayout(layout, save = true) {
+    set({ layout });
+    if (save) saveLayout(layout);
+  },
+
+  collapse(p, on) {
+    const layout = { ...get().layout, collapsed: { ...get().layout.collapsed, [p]: on } };
+    set(p === 'inspector' ? { layout, peek: null } : { layout });
+    saveLayout(layout);
+  },
+
+  setDock(patch) {
+    const d = get().dock;
+    if (Object.entries(patch).some(([k, v]) => d[k as keyof typeof d] !== v)) set({ dock: { ...d, ...patch } });
   },
 
   showToast(text, tone = 'info') {
@@ -600,6 +651,6 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   reset() {
     summaryRequests.clear();
-    set({ ...initial, ...freshDomain(), tab: 'activity', follow: loadFollow(), historyStatus: NO_HISTORY, rewound: null, playing: false, summaries: emptySummaries(), helloFiles: new Set(), files: {}, changes: [], usedBy: [], recent: {}, expanded: {}, events: [], sessions: {}, control: { paused: false, flags: [] }, mapExpanded: {}, helloEdges: new Set(), history: [] });
+    set({ ...initial, ...freshDomain(), tab: 'activity', follow: loadFollow(), layout: loadLayout(), historyStatus: NO_HISTORY, rewound: null, playing: false, summaries: emptySummaries(), helloFiles: new Set(), files: {}, changes: [], usedBy: [], recent: {}, expanded: {}, events: [], sessions: {}, control: { paused: false, flags: [] }, mapExpanded: {}, helloEdges: new Set(), history: [] });
   },
 }));
