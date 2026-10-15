@@ -17,7 +17,6 @@ import { Summarizer } from './summarize/summarizer.js';
 import { USAGE, fail, parseArgs } from './cli-args.js';
 import { AGENT_NAMES, detectAgents, initAgents, installHookScript, removeAgents, type AgentName } from './init.js';
 
-
 interface InitArgs { dir: string; agents?: AgentName[]; remove: boolean }
 interface ExportArgs { dir: string; session?: string; code: boolean; out?: string }
 
