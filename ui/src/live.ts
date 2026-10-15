@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { AgentEvent, AgentSession, AgentTool, ChangeSummary } from '@shared/types.js';
-import type { classifyTool } from '@shared/tools.js';
+import { classifyTool } from '@shared/tools.js';
 import { useStore } from './store';
 import { useNow } from './recent';
 
@@ -10,15 +10,8 @@ export const TOOL_FRESH_MS = 60_000;
 export const CHANGE_FRESH_MS = 10_000;
 const SCAN = 400;
 
-/**
- * The shared tool classifier loads right after first paint, off the main chunk: tool calls only arrive after the
- * first hello, which the Gate waits for, and the current target is recomputed as time passes anyway.
- */
-let classify: typeof classifyTool | undefined;
-export const classifierReady = import('@shared/tools.js').then(m => { classify = m.classifyTool; });
-
 /** A tool call that writes: a write-family built-in, or an MCP tool the shared classifier marks as a write. */
-const isWriteTool = (tool: AgentTool): boolean => (tool.access ?? classify?.(tool.inner ?? tool.name).access) === 'write';
+const isWriteTool = (tool: AgentTool): boolean => (tool.access ?? classifyTool(tool.inner ?? tool.name).access) === 'write';
 
 export interface Target { path: string; since: number }
 

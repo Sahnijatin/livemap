@@ -5,7 +5,10 @@ import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../store';
 import type { SummaryStatus } from '@shared/summaries.js';
 import { change, emptyDomain, file } from '../fixtures';
-import { Inspector } from './Inspector';
+import { Inspector, loadDetail } from './Inspector';
+
+// The file view loads after first paint in the app; load it up front so a selection renders at once.
+await loadDetail();
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

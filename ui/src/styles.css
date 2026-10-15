@@ -925,25 +925,27 @@
      off at its outer edge at its full width, so its content never reflows. `.glide` is on while a panel collapses or expands. */
   .rz { display:none; }
   @media (min-width:1080px) {
-    .app { --lc:calc(var(--left-w,272px) + 12px); --rc:calc(var(--right-w,384px) + 12px); grid-template-columns:var(--lc) minmax(0,1fr) var(--rc); column-gap:0; }
+    .app { --dl:272px; --dr:384px; --lc:calc(var(--left-w,var(--dl)) + 12px); --rc:calc(var(--right-w,var(--dr)) + 12px); grid-template-columns:var(--lc) minmax(0,1fr) var(--rc); column-gap:0; }
     .app.glide { transition:grid-template-columns .45s var(--layout-glide); }
     .app.left-collapsed { --lc:0px; }
     .app.right-collapsed { --rc:0px; }
     .app.resizing { cursor:col-resize; user-select:none; }
-    .sidebar { width:var(--left-w,272px); justify-self:end; margin-right:12px; }
-    .insp { width:var(--right-w,384px); justify-self:start; margin-left:12px; }
+    .sidebar { width:var(--left-w,var(--dl)); justify-self:end; margin-right:12px; }
+    .insp { width:var(--right-w,var(--dr)); justify-self:start; margin-left:12px; }
     .sidebar, .insp { transition:opacity .3s var(--ease),visibility 0s; }
     .left-collapsed .sidebar, .right-collapsed .insp { opacity:0; visibility:hidden; transition:opacity .25s var(--ease),visibility 0s .45s; }
     /* The resize handle fills the gap on the panel's inner edge; its line shows on hover, drag and keyboard focus. */
     .rz { display:block; position:absolute; top:68px; bottom:0; width:12px; z-index:5; cursor:col-resize; touch-action:none; }
-    .rz-files { left:var(--left-w,272px); }
-    .rz-inspector { right:var(--right-w,384px); }
+    .rz-files { left:var(--left-w,var(--dl)); }
+    .rz-inspector { right:var(--right-w,var(--dr)); }
     .rz::after { content:""; position:absolute; left:5px; top:18px; bottom:18px; width:2px; border-radius:2px; background:var(--hair2); opacity:0; transition:opacity .2s,background .2s; }
     .rz:hover::after, .resizing .rz:active::after { opacity:1; }
     .rz:focus-visible { outline:0; }
     .rz:focus-visible::after { opacity:1; background:var(--blue); }
     .left-collapsed .rz-files, .right-collapsed .rz-inspector { display:none; }
   }
+  /* Fallback widths below 1280 px (Dock writes the real ones before first paint). */
+  @media (min-width:1080px) and (max-width:1279.98px) { .app { --dl:248px; --dr:340px; } }
   @media (max-width:1079.98px) {
     .app { grid-template-columns:minmax(0,1fr); }
     .sidebar { position:fixed; left:calc(var(--gutter) + var(--sal)); top:calc(var(--gutter) * 2 + 56px + var(--sat)); bottom:calc(var(--gutter) + var(--sab)); width:min(300px,calc(100vw - 24px)); z-index:25; transform:translateX(-110%); transition:transform .55s var(--ease); background:var(--glass-strong); }

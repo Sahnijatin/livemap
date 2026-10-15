@@ -10,7 +10,9 @@ const { Toolbar } = await import('./Toolbar');
 const { FileTree } = await import('./FileTree');
 const { useSlideOvers, closePanel, panelAfterSelect } = await import('../panels');
 const { MapTools } = await import('../map/MapTools');
-const { Inspector } = await import('./Inspector');
+const { Inspector, loadDetail } = await import('./Inspector');
+// The file view loads after first paint in the app; load it up front so a selection renders at once.
+await loadDetail();
 const { CenterTabs } = await import('./CenterTabs');
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

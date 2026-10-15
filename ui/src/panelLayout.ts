@@ -1,6 +1,5 @@
 /**
  * Docked panel widths and collapsed state at 1080 px and wider (below that the panels are slide-overs; see panels.ts).
- * Only the lazy dockFit.ts and PanelHandle.tsx import this module, so it stays off the main chunk.
  */
 export type Panel = 'files' | 'inspector';
 export interface PanelLayout {
@@ -26,7 +25,7 @@ const limit = (p: Panel, w: number): number => Math.max(LIMITS[p][0], Math.min(L
 /**
  * The widths to draw in an `.app` box `width` px wide (`vw`, the viewport, picks the defaults): each chosen width,
  * shrunk in proportion to its room above the minimum when the shown panels would squeeze the center below CENTER_MIN.
- * The drawn width only grows with a panel's chosen width, which `widthFor` relies on.
+ * The drawn width only grows with a panel's chosen width, which `widthFor` (panelDrag.ts) relies on.
  */
 export function fitLayout(l: PanelLayout, width: number, vw: number): Record<Panel, number> {
   const out = { files: limit('files', l.w.files ?? defaultWidth('files', vw)), inspector: limit('inspector', l.w.inspector ?? defaultWidth('inspector', vw)) };
@@ -35,17 +34,6 @@ export function fitLayout(l: PanelLayout, width: number, vw: number): Record<Pan
   const room = shown.reduce((n, p) => n + out[p] - LIMITS[p][0], 0);
   if (excess > 0 && room > 0) for (const p of shown) out[p] = Math.max(LIMITS[p][0], out[p] - Math.ceil((excess * (out[p] - LIMITS[p][0])) / room));
   return out;
-}
-
-/** The smallest width to store for `p` that fitLayout draws at `d` or wider (the limit when the box cannot hold `d`). */
-export function widthFor(l: PanelLayout, p: Panel, d: number, width: number, vw: number): number {
-  let [lo, hi] = LIMITS[p];
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (fitLayout({ ...l, w: { ...l.w, [p]: mid } }, width, vw)[p] >= d) hi = mid;
-    else lo = mid + 1;
-  }
-  return lo;
 }
 
 /** A stored layout; anything unreadable falls back to the defaults, widths are clamped to their limits. */

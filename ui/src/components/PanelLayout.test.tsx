@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { act } from 'react';
+import { Profiler, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../store';
 import { file, emptyDomain } from '../fixtures';
@@ -9,11 +9,14 @@ import { LAYOUT_KEY, LIMITS, fitLayout } from '../panelLayout';
 vi.mock('../api', () => ({ addFlag: vi.fn(), removeFlag: vi.fn(), setPaused: vi.fn(), fetchFile: vi.fn(() => new Promise(() => {})) }));
 const { Toolbar } = await import('./Toolbar');
 const { FileTree } = await import('./FileTree');
-const { Inspector } = await import('./Inspector');
+const { Inspector, loadDetail } = await import('./Inspector');
+// The file view loads after first paint in the app; load it up front so a selection renders at once.
+await loadDetail();
 const { Dock } = await import('./Dock');
-const { PanelHandle } = await import('./PanelHandle');
+const { PanelHandle, loadDrag } = await import('./PanelHandle');
 const { useSlideOvers } = await import('../panels');
-await import('../dockFit');
+// The handles' drag and key code loads on first focus or pointerdown; load it up front so key events apply at once.
+await loadDrag();
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -43,28 +46,35 @@ const realMatchMedia = window.matchMedia;
 let host: HTMLDivElement;
 let root: Root;
 let renders = 0;
+let dockRenders = 0;
 /** Counts its renders: stands in for the heavy children (FileTree, CenterTabs, Inspector). */
 function Spy() {
   renders++;
   return <main className="center" />;
 }
 
-/** App's shell: the toolbar, both panels, both handles, inside the Dock that owns `.app`. */
+/**
+ * App's shell: the toolbar and both panels inside the Dock that owns `.app`, under a Profiler that counts the Dock's
+ * commits. The handles sit outside it here (in App they are inside), so their own re-renders are not counted.
+ */
 function Shell() {
   useSlideOvers();
   return (
-    <Dock gated={false}>
-      <Toolbar />
-      <FileTree />
+    <>
+      <Profiler id="dock" onRender={() => { dockRenders++; }}>
+        <Dock gated={false}>
+          <Toolbar />
+          <FileTree />
+          <Spy />
+          <Inspector />
+        </Dock>
+      </Profiler>
       <PanelHandle panel="files" />
-      <Spy />
       <PanelHandle panel="inspector" />
-      <Inspector />
-    </Dock>
+    </>
   );
 }
 
-/** Renders the shell and lets the lazily imported dockFit.ts attach (it loads the stored layout and writes the widths). */
 async function mount() {
   await act(async () => { root.render(<Shell />); });
 }
@@ -96,6 +106,7 @@ beforeEach(() => {
   useStore.getState().reset();
   hello();
   renders = 0;
+  dockRenders = 0;
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
@@ -261,6 +272,57 @@ describe('docked panels at 1080 px and wider', () => {
     expect(app().classList.contains('resizing')).toBe(true);
     expect(app().classList.contains('glide')).toBe(false);
     pointer(files, 'pointerup', 310);
+    expect(app().classList.contains('resizing')).toBe(false);
+  });
+
+  it('the stored layout applies on first paint: no glide, the widths set, and a toggle right away sticks', () => {
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify({ w: { inspector: 500 }, collapsed: { files: true } }));
+    useStore.getState().reset();
+    hello();
+    act(() => root.render(<Shell />));
+    expect(app().classList.contains('left-collapsed')).toBe(true);
+    expect(app().classList.contains('glide')).toBe(false);
+    expect(app().style.getPropertyValue('--right-w')).toBe('500px');
+    key(document.body, ']');
+    expect(app().classList.contains('right-collapsed')).toBe(true);
+    expect(stored().collapsed).toEqual({ files: true, inspector: true });
+  });
+
+  it('a toggle made before anything else settles is never undone by a later load', async () => {
+    act(() => root.render(<Shell />));
+    key(document.body, '[');
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    expect(app().classList.contains('left-collapsed')).toBe(true);
+    expect(stored().collapsed.files).toBe(true);
+  });
+
+  it('the Dock itself does not re-render while a panel edge is dragged', async () => {
+    await mount();
+    const files = sep('Resize project panel');
+    pointer(files, 'pointerdown', 300);
+    const base = dockRenders;
+    for (let x = 301; x < 340; x += 3) pointer(files, 'pointermove', x);
+    expect(now('Resize project panel')).toBe(272 + 37);
+    expect(dockRenders).toBe(base);
+    pointer(files, 'pointerup', 340);
+  });
+
+  it('a lost pointer capture or a window blur ends the drag', async () => {
+    await mount();
+    const files = sep('Resize project panel');
+    pointer(files, 'pointerdown', 300);
+    pointer(files, 'pointermove', 320);
+    expect(app().classList.contains('resizing')).toBe(true);
+    act(() => { files.dispatchEvent(new Event('lostpointercapture', { bubbles: true })); });
+    expect(app().classList.contains('resizing')).toBe(false);
+    expect(stored().w.files).toBe(292);
+    pointer(files, 'pointermove', 360);
+    expect(now('Resize project panel')).toBe(292);
+
+    pointer(files, 'pointerdown', 300);
+    expect(useStore.getState().dock.dragging).toBe(true);
+    act(() => { window.dispatchEvent(new Event('blur')); });
+    expect(useStore.getState().dock.dragging).toBe(false);
     expect(app().classList.contains('resizing')).toBe(false);
   });
 

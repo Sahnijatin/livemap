@@ -262,6 +262,26 @@ test('at 1440 px dragging the sidebar handle resizes the column, and the width s
   await expect(page.locator('.app')).toHaveClass(/\bleft-collapsed\b/);
   await expect.poll(async () => Math.round((await page.locator('main.center').boundingBox())!.x)).toBe(12);
   await expect(page.getByRole('button', { name: 'Files', exact: true })).toBeFocused();
+
+  // Reload with the panel collapsed: from the first frame .app is collapsed and never glides (no open-then-close).
+  await page.addInitScript(() => {
+    const seen: string[] = [];
+    (window as unknown as { appClasses: string[] }).appClasses = seen;
+    new MutationObserver(() => {
+      const app = document.querySelector('.app');
+      if (app && seen[seen.length - 1] !== app.className) seen.push(app.className);
+    }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
+  });
+  await page.reload();
+  await expect(page.getByRole('status').filter({ hasText: 'Live' })).toBeAttached({ timeout: 15_000 });
+  await page.waitForTimeout(600);
+  const classes = await page.evaluate(() => (window as unknown as { appClasses: string[] }).appClasses);
+  expect(classes.length).toBeGreaterThan(0);
+  for (const c of classes) {
+    expect(c).toContain('left-collapsed');
+    expect(c).not.toContain('glide');
+  }
+  expect(Math.round((await page.locator('main.center').boundingBox())!.x)).toBe(12);
 });
 
 test('phone toolbar: condensed, and the Map tools live in the options menu', async ({ page }) => {
