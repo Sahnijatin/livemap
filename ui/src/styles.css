@@ -5,7 +5,7 @@
 /* Tokens, materials and motion ported from docs/design/prototype.html. */
 @layer base {
   :root {
-    --bg:#eef0f5; --ink:#1d1d1f; --ink2:#55595f; --ink3:#8a8f98;
+    --bg:#eef0f5; --ink:#1d1d1f; --ink2:#55595f; --ink3:#636873;
     --glass:rgba(255,255,255,.62); --glass-strong:rgba(255,255,255,.92); --pane:rgba(255,255,255,.55); --hair:rgba(0,0,0,.075); --hair2:rgba(0,0,0,.12);
     --card:#ffffff; --shadow:0 1px 1px rgba(0,0,0,.04),0 6px 20px rgba(17,24,39,.06),0 24px 60px rgba(17,24,39,.05);
     --shadow-lg:0 2px 4px rgba(0,0,0,.04),0 20px 50px rgba(17,24,39,.13);

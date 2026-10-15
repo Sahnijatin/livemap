@@ -190,7 +190,10 @@ export default function Palette() {
       contentClassName="palette"
     >
       <FocusReturn open={open} />
-      <Command.Input value={text} onValueChange={setText} placeholder="Search files, functions, routes, tables…" autoComplete="off" spellCheck={false} />
+      <Command.Input
+        value={text} onValueChange={setText} placeholder="Search files, functions, routes, tables…" autoComplete="off" spellCheck={false}
+        aria-label="Search files, functions, routes and tables"
+      />
       <Command.List className="pres" label="Results">
         {groups.map(g => (
           <Command.Group key={g.heading} heading={g.heading}>
