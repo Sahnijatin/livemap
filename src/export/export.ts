@@ -9,7 +9,8 @@ import { projectDir } from '../history/paths.js';
 import { EXPORT_DATA_ID, type ExportPayload } from '../shared/export.js';
 import type { ServerMessage } from '../shared/protocol.js';
 import { emptyState, type ProjectState } from '../shared/state.js';
-import type { AgentEvent, AgentSession, Attribution, ChangeSummary } from '../shared/types.js';
+import type { SummariesState } from '../shared/summaries.js';
+import type { AgentEvent, AgentSession, Attribution, ChangeSummary, ControlState } from '../shared/types.js';
 
 const gzip = promisify(zlib.gzip);
 
@@ -207,13 +208,18 @@ function shellLabel(label: string): string {
 /**
  * `--no-code`: the code map is not all of the source an export can carry. Diff hunks in change cards,
  * tool inputs and outputs in agent events (an Edit's old and new text), shell command lines in tool
- * labels, and code in prompts, messages, thinking, session titles and attribution intents are code
- * too. Symbol names and signatures stay: they are the structure the Map and the cards show.
+ * labels, and code in prompts, messages, thinking, commit messages, session titles, attribution intents,
+ * flag notes and AI summaries are code too. Symbol names and signatures stay: they are the structure the
+ * Map and the cards show.
  */
 function withoutCode(initial: ProjectState, messages: Rec[]): { initial: ProjectState; messages: Rec[] } {
   const attribution = (a: Attribution): Attribution => (a.intent === undefined ? a : { ...a, intent: stripCode(a.intent) });
-  const change = (c: ChangeSummary): ChangeSummary => ({ ...c, hunks: [], ...(c.attribution ? { attribution: attribution(c.attribution) } : {}) });
-  const prose = new Set<AgentEvent['type']>(['prompt', 'message', 'thinking']);
+  const change = (c: ChangeSummary): ChangeSummary => ({
+    ...c, hunks: [],
+    ...(c.attribution ? { attribution: attribution(c.attribution) } : {}),
+    ...(c.summary !== undefined ? { summary: stripCode(c.summary) } : {}),
+  });
+  const prose = new Set<AgentEvent['type']>(['prompt', 'message', 'thinking', 'commit']);
   const event = (e: AgentEvent): AgentEvent => {
     const out = e.text !== undefined && prose.has(e.type) ? { ...e, text: stripCode(e.text) } : e;
     if (!out.tool) return out;
@@ -221,8 +227,15 @@ function withoutCode(initial: ProjectState, messages: Rec[]): { initial: Project
     return { ...out, tool: { ...tool, label: toolFamily(tool.name) === 'shell' ? shellLabel(tool.label) : stripCode(tool.label) } };
   };
   const session = (s: AgentSession): AgentSession => ({ ...s, title: stripCode(s.title) });
-  const state = <T extends Pick<ProjectState, 'changes' | 'events' | 'sessions'>>(s: T): T =>
-    ({ ...s, changes: s.changes.map(change), events: s.events.map(event), sessions: s.sessions.map(session) });
+  const control = (c: ControlState): ControlState => ({ ...c, flags: c.flags.map(f => ({ ...f, note: stripCode(f.note) })) });
+  const summaries = (x: SummariesState): SummariesState => ({
+    ...x, files: Object.fromEntries(Object.entries(x.files).map(([p, f]) => [p, { ...f, summary: stripCode(f.summary) }])),
+  });
+  const state = <T extends Pick<ProjectState, 'changes' | 'events' | 'sessions'> & { control?: ControlState; summaries?: SummariesState }>(s: T): T => ({
+    ...s, changes: s.changes.map(change), events: s.events.map(event), sessions: s.sessions.map(session),
+    ...(s.control ? { control: control(s.control) } : {}),
+    ...(s.summaries ? { summaries: summaries(s.summaries) } : {}),
+  });
   const msg = (m: ServerMessage): ServerMessage => {
     switch (m.type) {
       case 'hello': return state(m);
@@ -230,6 +243,8 @@ function withoutCode(initial: ProjectState, messages: Rec[]): { initial: Project
       case 'agentEvent': return { ...m, event: event(m.event) };
       case 'attribution': return { ...m, attribution: attribution(m.attribution) };
       case 'session': return { ...m, session: session(m.session) };
+      case 'control': return { ...m, control: control(m.control) };
+      case 'summary': case 'fileSummary': return { ...m, summary: stripCode(m.summary) };
       default: return m;
     }
   };
