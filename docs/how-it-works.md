@@ -12,7 +12,7 @@ Dashed boxes are inputs. Everything runs on your machine; only the summarizer, w
 
 ## Parsers
 
-`src/engine/parser.ts` and `src/engine/symbols/` parse code with tree-sitter (WebAssembly grammars from `tree-sitter-wasms`) for TypeScript, JavaScript, Python, Go, Rust, Java, Kotlin, C#, PHP, Ruby, Swift, C, C++ and Dart. They extract functions, classes, methods and other symbols with their signatures and lines, and `src/engine/imports.ts` resolves imports into links between files. If a file stops parsing cleanly mid-edit, the model keeps its last clean symbols.
+`src/engine/parser.ts` and `src/engine/symbols/` parse code with tree-sitter (WebAssembly grammars from `tree-sitter-wasms`, of which the build copies the 15 it loads to `dist/grammars/`) for TypeScript, JavaScript, Python, Go, Rust, Java, Kotlin, C#, PHP, Ruby, Swift, C, C++ and Dart. They extract functions, classes, methods and other symbols with their signatures and lines, and `src/engine/imports.ts` resolves imports into links between files. If a file stops parsing cleanly mid-edit, the model keeps its last clean symbols.
 
 ## Project model
 

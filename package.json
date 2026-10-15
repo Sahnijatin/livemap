@@ -5,22 +5,22 @@
   "type": "module",
   "bin": { "livemap": "dist/cli.js" },
   "engines": { "node": ">=18" },
-  "files": ["dist"],
+  "files": ["dist", "!dist/**/*.map"],
   "scripts": {
     "prebuild": "node scripts/ui-deps.mjs",
-    "build": "tsup && npm --prefix ui run build && npm --prefix ui run build:export",
+    "build": "tsup && node scripts/copy-grammars.mjs && npm --prefix ui run build && npm --prefix ui run build:export",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "test:perf": "vitest run --config vitest.perf.config.ts",
     "test:e2e": "playwright test",
     "docs:check": "node scripts/check-docs.mjs",
-    "demo": "node scripts/demo.mjs"
+    "demo": "node scripts/demo.mjs",
+    "smoke": "node scripts/smoke-pack.mjs"
   },
   "dependencies": {
     "chokidar": "^4.0.3",
     "diff": "^7.0.0",
     "ignore": "^6.0.2",
-    "tree-sitter-wasms": "0.1.13",
     "web-tree-sitter": "0.25.10",
     "ws": "^8.18.0"
   },
@@ -29,6 +29,7 @@
     "@types/diff": "^6.0.0",
     "@types/node": "^20",
     "@types/ws": "^8.5.13",
+    "tree-sitter-wasms": "0.1.13",
     "tsup": "^8.3.5",
     "typescript": "~5.6.3",
     "vitest": "^2.1.9"
