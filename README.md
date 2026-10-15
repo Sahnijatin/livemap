@@ -10,14 +10,14 @@ LiveMap watches your project while Claude Code, Codex, Cursor or a cloud builder
 
 ## Quickstart
 
+LiveMap is not on npm yet; until it is, install from source (see [CONTRIBUTING](CONTRIBUTING.md#install-from-source)).
+
 Requires Node 18 or later. In the project your agent works on:
 
 ```sh
 npx livemap init      # adds hooks for the agents it finds
 npx livemap           # indexes the project and opens the UI in your browser
 ```
-
-LiveMap is not on npm yet; until it is, install from source (see [CONTRIBUTING](CONTRIBUTING.md#install-from-source)).
 
 `livemap init` sets up the agents whose config folder it finds; name them with `--agents claude,codex,cursor` if it finds none. All commands and flags are in [the guide](docs/guide.md#command-line).
 
