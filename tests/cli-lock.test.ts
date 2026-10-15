@@ -124,6 +124,23 @@ describe('one LiveMap per project (#21)', () => {
     }
   }, 30_000);
 
+  it('registers for hooks over a stale runtime entry whose pid an unrelated process reuses (#40)', async () => {
+    const first = await started();
+    first.child.kill('SIGKILL');
+    await ended(first);
+    const runtime = path.join(lmHome, 'run', dirFiles('run')[0]);
+    const squatter = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+    try {
+      fs.writeFileSync(runtime, JSON.stringify({ ...JSON.parse(fs.readFileSync(runtime, 'utf8')), pid: squatter.pid }));
+      const next = await started();
+      expect(next.err).not.toContain('could not write runtime file');
+      expect(JSON.parse(fs.readFileSync(runtime, 'utf8'))).toMatchObject({ pid: next.child.pid, port: next.port });
+    } finally {
+      squatter.kill('SIGKILL');
+      await new Promise(r => squatter.on('exit', r));
+    }
+  }, 30_000);
+
   it('allows LiveMap on another project at the same time', async () => {
     await started();
     const other = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-clilock-b-')));

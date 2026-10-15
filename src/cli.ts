@@ -241,7 +241,8 @@ async function main(): Promise<void> {
   // Hooks find this server through the runtime file; it must not outlive the process.
   process.on('exit', () => removeRuntime(root));
   try {
-    writeRuntime(root, server.port, server.token);
+    // Holding the lock makes this the only LiveMap here; without it (lock unavailable) another may own the entry.
+    writeRuntime(root, server.port, server.token, { takeover: locked });
   } catch (e) {
     process.stderr.write(`livemap: could not write runtime file, agent hooks will not reach this run: ${(e as Error).message}\n`);
   }

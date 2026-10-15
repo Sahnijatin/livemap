@@ -33,10 +33,12 @@ const fileFor = (realRoot: string): string =>
 /**
  * Writes the entry atomically (0600 temp file in the same 0700 dir, then rename) and returns its path.
  * Throws instead of replacing an entry another live LiveMap owns: its hooks would silently go here.
+ * `takeover` is for the holder of the project lock, which is the only LiveMap on the root: an entry with
+ * another live pid is then stale, its pid reused by an unrelated process, and is replaced.
  */
-export function writeRuntime(root: string, port: number, token: string): string {
+export function writeRuntime(root: string, port: number, token: string, opts: { takeover?: boolean } = {}): string {
   const realRoot = real(root);
-  const owner = runtimeFor(realRoot);
+  const owner = opts.takeover ? null : runtimeFor(realRoot);
   if (owner && owner.pid !== process.pid) throw new Error(`another LiveMap (pid ${owner.pid}) owns the runtime entry for ${realRoot}`);
   const dir = runtimeDir();
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
