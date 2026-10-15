@@ -20,7 +20,7 @@ Run `livemap init` in the project folder. It detects agents by their config fold
 | Codex CLI | `.codex/hooks.json` | `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop` |
 | Cursor | `.cursor/hooks.json` | `beforeSubmitPrompt`, `afterAgentResponse`, `afterAgentThought`, `preToolUse`, `postToolUse`, `beforeShellExecution`, `afterShellExecution`, `afterFileEdit`, `stop` |
 
-- **The hook script.** Init copies `livemap-hook.mjs` to the `bin/` folder of the LiveMap home (`~/.livemap/bin/`, or `$LIVEMAP_HOME/bin/`). Each hook entry runs `node "<home>/bin/livemap-hook.mjs" <agent> <event>`, where `<agent>` is `claude-code`, `codex` or `cursor`. Claude Code and Codex entries have a 5 second timeout.
+- **The hook script.** Init copies `livemap-hook.mjs` to the `bin/` folder of the LiveMap home (`~/.livemap/bin/`, or `$LIVEMAP_HOME/bin/`). Each hook entry runs `node '<home>/bin/livemap-hook.mjs' <agent> <event>` (double quotes on Windows, where init refuses a LiveMap home whose path contains `"`, `%`, `!`, `^`, `&`, `|`, `<` or `>`), where `<agent>` is `claude-code`, `codex` or `cursor`. Claude Code and Codex entries have a 5 second timeout.
 - **Your settings are kept.** Init adds its entries next to yours and leaves your own hooks in place. Running it again updates LiveMap's entries in place and prints `unchanged` when nothing differs. A file that is not valid JSON, or whose `hooks` has an unexpected shape, is skipped with the reason and left alone.
 - **Git excludes.** When the project has a `.git` folder, init adds `.claude/settings.local.json`, `.codex/hooks.json` and `.cursor/hooks.json` to `.git/info/exclude`, so the hook files (which hold a path on your machine) are not committed by accident.
 - **Codex.** Codex asks you to trust new hooks. Init reminds you: run `/hooks` inside Codex once.
@@ -36,7 +36,7 @@ Each line init prints is the action and the file, for example `created .claude/s
 
 A running LiveMap writes its port and access token to `<home>/run/` (readable only by you) and removes the file when it stops. The hook script finds the LiveMap running for the project folder (or the nearest parent folder), sends the event to `http://127.0.0.1:<port>/hook` with the token, and exits.
 
-When LiveMap is not running, the hook exits at once and does nothing. The hook gives up after about 2 seconds, so a slow or stuck LiveMap never holds up the agent for long. Hooks never change what the agent does, except to deliver a flag or a pause.
+When LiveMap is not running, the hook exits at once and does nothing. The hook gives up after about 1.6 seconds, so a slow or stuck LiveMap never holds up the agent for long. Hooks never change what the agent does, except to deliver a flag or a pause.
 
 Claude Code sessions show up even without hooks: LiveMap reads the transcripts of Claude Code sessions in this project that were active in the last 10 minutes (under `~/.claude/projects/`, or `$CLAUDE_CONFIG_DIR`). Flag and Pause need the hooks.
 
