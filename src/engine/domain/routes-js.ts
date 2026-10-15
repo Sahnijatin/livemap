@@ -327,9 +327,8 @@ function routeLike(rest: string[], used: boolean): boolean {
   const seg = callee.slice(callee.lastIndexOf('.') + 1);
   if (callee !== last.replace(/\s+/g, '')) return !CLIENT_CALLS.has(seg);
   if (REQUEST_PARTS.has(seg.toLowerCase())) return false;
-  // A bare noun or this one's field is a payload; another object's (`ctl.user`, `stripe.event`) is a handler.
-  const owner = callee.includes('.') ? callee.slice(0, callee.lastIndexOf('.')) : '';
-  return (owner !== '' && owner !== 'this') || !PAYLOAD_NOUNS.has(seg.toLowerCase());
+  // A bare noun is a payload; as a member (`ctl.user`, `this.user`, `stripe.event`) it is a handler.
+  return callee.includes('.') || !PAYLOAD_NOUNS.has(seg.toLowerCase());
 }
 
 /** Fastify `route({ method, url, handler })`; a method array gives one route per method. */

@@ -303,27 +303,57 @@ function pyModule(base: string, ctx: ImportCtx): string | null {
 
 
 /**
- * Modules built into the interpreter or imported while it starts (CPython 3.x on Linux, macOS and Windows):
- * Python finds them before it searches any directory, so a project file of the same name never replaces them.
+ * Modules built into the interpreter (CPython 3.11+ `Modules/Setup.bootstrap`, plus `sys`, `builtins`,
+ * `marshal`) or imported while it starts (`site` and what it loads): Python has them before it searches any
+ * directory, so a project file of the same name never replaces them.
  */
 const PY_PRELOADED = new Set([
-  'abc', 'builtins', 'codecs', 'encodings', 'errno', 'gc', 'genericpath', 'io', 'itertools', 'marshal', 'math', 'nt',
-  'ntpath', 'os', 'posix', 'posixpath', 'site', 'stat', 'sys', 'time', 'zipimport',
+  'abc', 'atexit', 'builtins', 'codecs', 'encodings', 'errno', 'faulthandler', 'genericpath', 'io', 'itertools',
+  'linecache', 'marshal', 'nt', 'ntpath', 'os', 'posix', 'posixpath', 'pwd', 'site', 'stat', 'sys', 'time',
+  'zipimport',
+]);
+
+/** Top-level standard library modules (Python 3.13 `sys.stdlib_module_names`, plus ones removed since 3.12). */
+const PY_STDLIB = new Set([
+  'abc', 'antigravity', 'argparse', 'array', 'ast', 'asynchat', 'asyncio', 'asyncore', 'atexit', 'audioop',
+  'base64', 'bdb', 'binascii', 'bisect', 'builtins', 'bz2', 'cProfile', 'calendar', 'cgi', 'cgitb', 'chunk',
+  'cmath', 'cmd', 'code', 'codecs', 'codeop', 'collections', 'colorsys', 'compileall', 'concurrent',
+  'configparser', 'contextlib', 'contextvars', 'copy', 'copyreg', 'crypt', 'csv', 'ctypes', 'curses',
+  'dataclasses', 'datetime', 'dbm', 'decimal', 'difflib', 'dis', 'distutils', 'doctest', 'email', 'encodings',
+  'ensurepip', 'enum', 'errno', 'faulthandler', 'fcntl', 'filecmp', 'fileinput', 'fnmatch', 'fractions',
+  'ftplib', 'functools', 'gc', 'genericpath', 'getopt', 'getpass', 'gettext', 'glob', 'graphlib', 'grp', 'gzip',
+  'hashlib', 'heapq', 'hmac', 'html', 'http', 'idlelib', 'imaplib', 'imghdr', 'imp', 'importlib', 'inspect',
+  'io', 'ipaddress', 'itertools', 'json', 'keyword', 'lib2to3', 'linecache', 'locale', 'logging', 'lzma',
+  'mailbox', 'mailcap', 'marshal', 'math', 'mimetypes', 'mmap', 'modulefinder', 'msilib', 'msvcrt',
+  'multiprocessing', 'netrc', 'nis', 'nntplib', 'nt', 'ntpath', 'nturl2path', 'numbers', 'opcode', 'operator',
+  'optparse', 'os', 'ossaudiodev', 'pathlib', 'pdb', 'pickle', 'pickletools', 'pipes', 'pkgutil', 'platform',
+  'plistlib', 'poplib', 'posix', 'posixpath', 'pprint', 'profile', 'pstats', 'pty', 'pwd', 'py_compile',
+  'pyclbr', 'pydoc', 'pydoc_data', 'pyexpat', 'queue', 'quopri', 'random', 're', 'readline', 'reprlib',
+  'resource', 'rlcompleter', 'runpy', 'sched', 'secrets', 'select', 'selectors', 'shelve', 'shlex', 'shutil',
+  'signal', 'site', 'smtpd', 'smtplib', 'sndhdr', 'socket', 'socketserver', 'spwd', 'sqlite3', 'sre_compile',
+  'sre_constants', 'sre_parse', 'ssl', 'stat', 'statistics', 'string', 'stringprep', 'struct', 'subprocess',
+  'sunau', 'symtable', 'sys', 'sysconfig', 'syslog', 'tabnanny', 'tarfile', 'telnetlib', 'tempfile', 'termios',
+  'textwrap', 'this', 'threading', 'time', 'timeit', 'tkinter', 'token', 'tokenize', 'tomllib', 'trace',
+  'traceback', 'tracemalloc', 'tty', 'turtle', 'turtledemo', 'types', 'typing', 'unicodedata', 'unittest',
+  'urllib', 'uu', 'uuid', 'venv', 'warnings', 'wave', 'weakref', 'webbrowser', 'winreg', 'winsound', 'wsgiref',
+  'xdrlib', 'xml', 'xmlrpc', 'zipapp', 'zipfile', 'zipimport', 'zlib', 'zoneinfo', '__future__',
 ]);
 
 /**
  * Candidate directories for a dotted module, in order: relative to `dir` (rel leading dots), or, for an
  * absolute module, each ancestor of the importing file nearest first that is not itself a package (a
  * project nested under `backend/` or `services/ml/` runs with its own directory on the import path, while
- * inside a package Python 3 has no implicit relative imports), then the root and `src`. As in Python, a
- * project file on that path named like a standard library module (`logging.py`) shadows it, except for the
- * modules Python has loaded before it searches any path (`PY_PRELOADED`).
+ * inside a package Python 3 has no implicit relative imports), then the root and `src`. A standard library
+ * module is found in the standard library unless the importing script's own directory (`sys.path[0]`)
+ * holds a file of that name, as Python does; one Python loads before any search (`PY_PRELOADED`) always is.
  */
 function pyBases(dir: string, mod: string, rel: number, ctx: ImportCtx): string[] {
   const p = mod.replace(/\./g, '/');
   if (rel > 0) return [join(dir, ...Array(rel - 1).fill('..'), p)];
+  const top = mod.split('.')[0];
+  if (PY_PRELOADED.has(top)) return [];
+  if (PY_STDLIB.has(top)) return ctx.has(join(dir, '__init__.py')) ? [] : [join(dir, p)];
   const out: string[] = [];
-  if (PY_PRELOADED.has(mod.split('.')[0])) return out;
   if (mod) for (let d = dir; d; d = parentDir(d)) if (!ctx.has(join(d, '__init__.py'))) out.push(join(d, p));
   for (const r of ['', 'src']) out.push(join(r, p));
   return out;
