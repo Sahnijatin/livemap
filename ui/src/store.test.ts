@@ -535,6 +535,40 @@ describe('history and rewind', () => {
     }
   });
 
+  it('a replay whose end cannot be loaded says so instead of rejecting', async () => {
+    const s = useStore.getState();
+    s.apply({ ...hello(), history: status, seq: 9 });
+    const { type: _t, ...state } = past();
+    s.rewind(state);
+    useStore.setState({ replay: true });
+    setHistorySource({ ...restHistorySource, stateAt: () => Promise.reject(new Error('gone')) } as unknown as HistorySource);
+    await expect(useStore.getState().backToLive()).resolves.toBeUndefined();
+    expect(useStore.getState().toast).toMatchObject({ tone: 'error' });
+    expect(useStore.getState().rewound?.seq).toBe(4);
+  });
+
+  it('Play that cannot load its first state shows an error toast', async () => {
+    const s = useStore.getState();
+    s.apply({ ...hello(), history: status, seq: 9 });
+    const info = vi.fn(async () => ({ ...status, runs: [{ id: 'r1', firstSeq: 1, lastSeq: 9, startAt: 1 }], bytes: 0 }));
+    setHistorySource({ ...restHistorySource, info, stateAt: () => Promise.reject(new Error('gone')) } as unknown as HistorySource);
+    expect(await startPlayback(() => true, () => {})).toBeNull();
+    expect(useStore.getState().toast).toMatchObject({ tone: 'error', text: expect.stringMatching(/play/i) });
+    expect(useStore.getState().playing).toBe(false);
+  });
+
+  it('Play that loses a page mid-way shows an error toast and stops', async () => {
+    const s = useStore.getState();
+    s.apply({ ...hello(), history: status, seq: 9 });
+    const { type: _t, ...state } = past();
+    s.rewind(state);
+    const failed = vi.fn();
+    setHistorySource({ ...restHistorySource, messages: () => Promise.reject(new Error('gone')) } as unknown as HistorySource);
+    await startPlayback(() => true, failed);
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+    expect(useStore.getState().toast).toMatchObject({ tone: 'error' });
+  });
+
   it('Play from live starts at the current run, not the first recorded event', async () => {
     const s = useStore.getState();
     s.apply({ ...hello(), history: { ...status, first: 1, last: 90 }, seq: 90 });

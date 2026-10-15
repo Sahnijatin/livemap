@@ -271,6 +271,13 @@ describe('MapView', () => {
     expect(reset.disabled).toBe(true);
     expect(reset.title).toBe('Back to live to make changes');
     expect(card(APP)!.title).toBe('Back to live to make changes');
+    // Focus skips the disabled item, and the arrow keys never land on it, so Fit to screen stays reachable.
+    const fit = [...document.querySelectorAll<HTMLButtonElement>('[role=menuitem]')].find(b => b.textContent === 'Fit to screen')!;
+    expect(document.activeElement).toBe(fit);
+    for (const key of ['ArrowDown', 'ArrowUp']) {
+      act(() => { (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })); });
+      expect(document.activeElement).toBe(fit);
+    }
   });
 
   it('clicking a card selects its file; Enter on a focused card does too', async () => {

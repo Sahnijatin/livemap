@@ -122,6 +122,13 @@ export function Activity({ active = true }: { active?: boolean }) {
   const hidden = Math.max(0, items.length - limit);
   // Group the whole feed so group keys stay anchored to each run's own first item, then trim.
   const keyMemo = useRef(new Map<string, string>());
+  // Item keys are event ids, which restart at 1 with every LiveMap run: a hello starts the memo over.
+  const hellos = useStore(s => s.hellos);
+  const memoHellos = useRef(hellos);
+  if (memoHellos.current !== hellos) {
+    memoHellos.current = hellos;
+    keyMemo.current.clear();
+  }
   const allGroups = useMemo(() => stabilizeKeys(groupFeed(items), keyMemo.current), [items]);
   const groups = useMemo(() => (hidden ? lastItems(allGroups, limit) : allGroups), [allGroups, hidden, limit]);
 

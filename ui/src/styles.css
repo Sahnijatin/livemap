@@ -5,7 +5,7 @@
 /* Tokens, materials and motion ported from docs/design/prototype.html. */
 @layer base {
   :root {
-    --bg:#eef0f5; --ink:#1d1d1f; --ink2:#55595f; --ink3:#8a8f98;
+    --bg:#eef0f5; --ink:#1d1d1f; --ink2:#55595f; --ink3:#636873;
     --glass:rgba(255,255,255,.62); --glass-strong:rgba(255,255,255,.92); --pane:rgba(255,255,255,.55); --hair:rgba(0,0,0,.075); --hair2:rgba(0,0,0,.12);
     --card:#ffffff; --shadow:0 1px 1px rgba(0,0,0,.04),0 6px 20px rgba(17,24,39,.06),0 24px 60px rgba(17,24,39,.05);
     --shadow-lg:0 2px 4px rgba(0,0,0,.04),0 20px 50px rgba(17,24,39,.13);
@@ -472,6 +472,7 @@
   .f-chg { margin-left:38px; background:var(--card); border-radius:18px; border:1px solid var(--hair); box-shadow:var(--shadow); overflow:hidden; transition:box-shadow .3s,transform .3s var(--ease); }
   .f-chg:hover { box-shadow:var(--shadow-lg); transform:translateY(-1px); }
   .f-chg .ch { display:flex; width:100%; align-items:center; gap:10px; padding:12px 14px; border:0; background:none; text-align:left; cursor:pointer; min-width:0; }
+  .f-chg .ch:disabled { cursor:default; color:inherit; }
   .f-chg .ch .ic { width:30px; height:30px; border-radius:9px; }
   .f-chg .ch .ic svg { width:15px; height:15px; }
   .f-chg .p { font:600 13px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
@@ -630,7 +631,8 @@
   .flagrow .fl-tx small { font-size:11px; color:var(--orange); }
   .flagrow.done .fl-tx small { color:var(--green); }
   .fl-x { border:0; background:none; width:24px; height:24px; border-radius:50%; cursor:pointer; color:var(--ink3); font-size:17px; line-height:1; flex-shrink:0; }
-  .fl-x:hover { background:var(--hair); color:var(--red); }
+  .fl-x:hover:not(:disabled) { background:var(--hair); color:var(--red); }
+  .fl-x:disabled { opacity:.4; cursor:not-allowed; }
 
   @keyframes drift1 { to { transform:translate(6vw,5vw) scale(1.08); } }
   @keyframes drift2 { to { transform:translate(-5vw,-4vw) scale(1.1); } }

@@ -107,9 +107,10 @@ export function Timeline() {
   }, [status.enabled, status.last, buckets, idle, none]);
 
   const rewind = useStore(s => s.rewind);
-  // A past state asked for before a return to live (from any Back to live button) never rewinds again.
+  // A past state asked for before a return to live (from any Back to live button) never rewinds again:
+  // the live generation is taken when the seek is asked for, not when the throttle gets to it.
   const throttle = useMemo(() => latestThrottle(
-    seq => { const gen = liveGeneration(); return historySource().stateAt(seq).then(st => ({ st, gen })); },
+    ({ seq, gen }: { seq: number; gen: number }) => historySource().stateAt(seq).then(st => ({ st, gen })),
     ({ st, gen }) => { if (gen === liveGeneration()) rewind(st); },
     undefined,
     // A failed request leaves the view where it was: drop the aim so the thumb shows it again.
@@ -149,10 +150,12 @@ export function Timeline() {
     void useStore.getState().backToLive();
   };
 
+  const request = (seq: number) => throttle.request({ seq, gen: liveGeneration() });
+
   const seek = (seq: number) => {
     stop();
     setAim(seq);
-    throttle.request(seq);
+    request(seq);
   };
 
   const disabled = !status.enabled || !status.last;
@@ -165,7 +168,7 @@ export function Timeline() {
   };
   const move = (frac: number) => {
     setDrag(frac);
-    if (!atEnd(frac)) throttle.request(seqAt(frac));
+    if (!atEnd(frac)) request(seqAt(frac));
   };
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
     if (disabled || e.button !== 0) return;

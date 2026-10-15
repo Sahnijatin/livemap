@@ -7,7 +7,8 @@ import { useMapActions } from './MapContext';
 import { PHONE_QUERY, useMedia } from '../media';
 
 /** Every item in the options menu, for arrow-key movement. */
-const ITEM = '[role=menuitem],[role=menuitemradio],[role=menuitemcheckbox]';
+/** Menu items focus and arrow keys can reach: a disabled one (Reset layout while rewound) is skipped. */
+const ITEM = '[role=menuitem]:not(:disabled),[role=menuitemradio]:not(:disabled),[role=menuitemcheckbox]:not(:disabled)';
 
 const LEVELS: { level: Level; label: string }[] = [
   { level: 'folders', label: 'Folders' },

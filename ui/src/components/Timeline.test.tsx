@@ -175,6 +175,25 @@ describe('Timeline', () => {
     expect(useStore.getState().rewound?.seq).toBe(31);
   });
 
+  it('a seek queued in the throttle before Back to live (banner) never rewinds again', async () => {
+    useStore.getState().rewind({ ...projectState(), seq: 1, at: T0 });
+    render(<Timeline />);
+    await flush();
+    vi.useFakeTimers();
+    const press = (key: string) => act(() => { thumb().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })); });
+    press('ArrowRight');
+    expect(source.stateAt).toHaveBeenLastCalledWith(34);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    // Within 120 ms: the next seek waits in the throttle.
+    press('ArrowRight');
+    expect(source.stateAt).toHaveBeenCalledTimes(1);
+    // Back to live from the banner or the inline button, which do not cancel the timeline's throttle.
+    await act(async () => { await useStore.getState().backToLive(); });
+    expect(useStore.getState().rewound).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(STATE_THROTTLE_MS); });
+    expect(useStore.getState().rewound).toBeNull();
+  });
+
   it('releasing at the live end goes back to live', async () => {
     const backToLive = vi.fn(async () => {});
     useStore.setState({ backToLive });

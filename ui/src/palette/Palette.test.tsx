@@ -99,6 +99,8 @@ describe('Palette', () => {
     expect(dialog()!.getAttribute('role')).toBe('dialog');
     expect(input().placeholder).toBe('Search files, functions, routes, tables…');
     expect(document.activeElement).toBe(input());
+    // An accessible name of its own, not only the placeholder (which is not a label).
+    expect(input().getAttribute('aria-label')).toBe('Search files, functions, routes and tables');
 
     key('Escape', {}, input());
     await frames();
