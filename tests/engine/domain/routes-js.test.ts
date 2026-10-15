@@ -88,6 +88,10 @@ describe('routes-js analyzer', () => {
     expect(run('src/client.ts', client).routes).toEqual([]);
   });
 
+  it('keeps a class route whose handler is a field named like a payload', () => {
+    expect(run('routes/user.js', "class UserRoutes { constructor() { this.router.get('/me', this.user); } }\n").routes.map(r => `${r.method} ${r.path}`)).toEqual(['GET /me']);
+  });
+
   it('ignores member receivers except this.app/router/server and this.X assigned from a router factory', () => {
     expect(run('src/users.service.ts', "export class UsersService {\n  list() { return this.api.get('/users'); }\n}\nctx.router.get('/x', h);\n").routes).toEqual([]);
     const src = "import express from 'express';\nclass S {\n  web = express();\n  start() {\n    this.app.get('/a', a);\n    this.web.get('/w', w);\n  }\n}\n";

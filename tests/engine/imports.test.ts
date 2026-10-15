@@ -49,6 +49,15 @@ describe('extractImports', () => {
     expect(extractImports('svc/app/views.py', 'python', 'import helpers', ctx).local).toEqual(['svc/helpers.py']);
     expect(resolveSpecifier('svc/app/views.py', 'python', 'helpers', ctx)).toBe('svc/helpers.py');
   });
+  it('python lets only the importing script\'s own directory shadow a standard library module', () => {
+    const files = ['app/logging.py', 'app/sub/x.py', 'tools/build.py', 'src/types.py', 'app/math.py', 'app/atexit.py', 'app/v.py'];
+    const has = new Set(files);
+    const ctx: ImportCtx = { has: p => has.has(p), files, aliases: [], goModule: null };
+    expect(extractImports('app/sub/x.py', 'python', 'import logging', ctx)).toEqual({ local: [], external: ['logging'] });
+    expect(extractImports('tools/build.py', 'python', 'import types', ctx)).toEqual({ local: [], external: ['types'] });
+    // math is an extension module on most builds, so a sibling math.py wins; atexit is built in.
+    expect(extractImports('app/v.py', 'python', 'import math\nimport atexit', ctx)).toEqual({ local: ['app/math.py'], external: ['atexit'] });
+  });
   it('python resolves a nested local package named like a stdlib module', () => {
     const files = ['backend/main.py', 'backend/email/__init__.py', 'backend/email/services.py', 'backend/queue/tasks.py'];
     const has = new Set(files);
