@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { Suspense, lazy, useEffect } from 'react';
 import clsx from 'clsx';
 import { useStore } from './store';
 import { Toolbar } from './components/Toolbar';
@@ -10,7 +10,10 @@ import { Toast } from './components/Toast';
 import { PaletteHost } from './palette/PaletteHost';
 import { MotionRoot } from './motion';
 import { closePanel, useSlideOvers } from './panels';
-import { PanelHandle, useDockLayout } from './components/PanelHandle';
+import { Dock } from './components/Dock';
+
+// The resize handles load after first paint (they are invisible until hovered or focused), off the main chunk.
+const PanelHandle = lazy(() => import('./components/PanelHandle').then(m => ({ default: m.PanelHandle })));
 
 export function App() {
   const panel = useStore(s => s.panel);
@@ -24,21 +27,20 @@ export function App() {
 
   // [ and ] toggle the panels; Esc and a resize to wide close the slide-overs (while the palette is open, Esc closes only the palette).
   useSlideOvers();
-  const dock = useDockLayout();
 
   return (
     <MotionRoot>
       <div className="ambient" aria-hidden="true"><div className="blob b1" /><div className="blob b2" /><div className="blob b3" /></div>
-      <div className={dock.className} style={dock.style} {...(gated ? { inert: '', 'aria-hidden': true } : {})}>
+      <Dock gated={gated}>
         <Toolbar />
         <FileTree />
-        <PanelHandle panel="files" />
+        <Suspense fallback={null}><PanelHandle panel="files" /></Suspense>
         <CenterTabs />
-        <PanelHandle panel="inspector" />
+        <Suspense fallback={null}><PanelHandle panel="inspector" /></Suspense>
         <Inspector />
         {/* Inside .app: a fixed .app is its own stacking context, so the slide-over panels sit above this. */}
         <div className={clsx('scrim only-narrow-scrim', panel && 'open')} onClick={closePanel} aria-hidden="true" />
-      </div>
+      </Dock>
       <Toast />
       <PaletteHost />
       <Gate />

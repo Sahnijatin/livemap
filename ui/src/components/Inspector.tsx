@@ -16,7 +16,7 @@ import { LEAVING, useGlide, useLeaving } from '../motion';
 import { NARROW_QUERY, useMedia } from '../media';
 import { INERT } from '../panels';
 import { authHeaders } from '../connection';
-import { CollapseButton } from './PanelHandle';
+import { CollapseButton } from './Dock';
 
 function FileChip({ path, note }: { path: string; note?: string }) {
   const file = useStore(s => s.files[path]);
@@ -325,7 +325,7 @@ function Pane({ id, entering, leaving }: { id: string; entering: boolean; leavin
 export function Inspector() {
   const id = useStore(s => s.selected ?? OVERVIEW);
   const panel = useStore(s => s.panel);
-  const collapsed = useStore(s => s.layout.collapsed.inspector);
+  const collapsed = useStore(s => s.layout.collapsed.inspector && !s.peek);
   // Below 1080 px a closed slide-over is off screen, and wider a collapsed panel is hidden: keep it out of the tab order.
   const narrow = useMedia(NARROW_QUERY);
   // The old page stays mounted (keyed by id, so never rebuilt) while it fades out over the new one.

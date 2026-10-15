@@ -10,7 +10,7 @@ import { latestChange, type SymbolTag } from '../changes';
 import { dirName, useLiveRecent } from '../recent';
 import { BIG_PROJECT, DIR_BATCH, buildGroups, cachedTags, dirKey, moreKey, visibleItems, type Item, type Row } from '../treeModel';
 import { FileRow } from './FileRow';
-import { CollapseButton } from './PanelHandle';
+import { CollapseButton } from './Dock';
 import { usePrefersReducedMotion } from '../motion';
 import { Chevron, SearchIcon } from './icons';
 

@@ -93,6 +93,8 @@
   .grow { flex:1; min-width:0; }
   .iconbtn { width:34px; height:34px; border-radius:50%; border:0; background:transparent; cursor:pointer; display:grid; place-items:center; color:var(--ink2); flex-shrink:0; transition:background .2s; }
   .iconbtn:hover, .iconbtn[aria-expanded=true] { background:var(--hair); }
+  /* At 1080 px and wider the Files and Inspector buttons show state with their icon's filled side, not a pressed background. */
+  @media (min-width:1080px) { .iconbtn[data-panel-opener][aria-expanded=true]:not(:hover) { background:transparent; } }
   .iconbtn svg { width:17px; height:17px; }
   .iconbtn.hidebtn { width:26px; height:26px; border-radius:8px; color:var(--ink3); }
   .iconbtn.hidebtn svg { width:15px; height:15px; }

@@ -1,7 +1,8 @@
 import { useEffect } from 'react';
 import { useStore, type StoreState } from './store';
 import { NARROW_QUERY, isNarrow, isPhone } from './media';
-import { typingElsewhere } from './palette/PaletteHost';
+import { typingElsewhere } from './keys';
+import { shownLayout } from './panelLayout';
 
 type Panel = NonNullable<StoreState['panel']>;
 
@@ -13,8 +14,8 @@ const host = (p: Panel) => document.querySelector<HTMLElement>(`[data-panel="${p
 
 /**
  * Closes the open slide-over. Focus that was inside it (or on its toolbar button, or lost to the body) goes back to the
- * toolbar button that opens it. When the layout just became wide and the panel is a shown docked column again, focus
- * that was inside it stays there; when that button is hidden, focus lands on the docked panel itself.
+ * toolbar button that opens it, except when the layout just became wide and the panel is a shown docked column again:
+ * focus that was inside it stays there.
  */
 export function closePanel(): void {
   const panel = useStore.getState().panel;
@@ -25,10 +26,8 @@ export function closePanel(): void {
   const inside = !!active && !!box?.contains(active);
   const owned = inside || !active || active === document.body || active === btn;
   useStore.getState().setPanel(null);
-  if (!owned || (inside && !isNarrow() && !useStore.getState().layout.collapsed[panel])) return;
-  btn?.focus();
-  if (btn && document.activeElement === btn) return;
-  if (!inside) box?.focus();
+  const s = useStore.getState();
+  if (owned && !(inside && !isNarrow() && !shownLayout(s.layout, s.peek).collapsed[panel])) btn?.focus();
 }
 
 /** Where the slide-overs go after a file is picked in the sidebar: closed below 1080 px, the inspector on a phone. Undefined: leave as is. */
@@ -51,10 +50,9 @@ export function afterSelect(): void {
  * handle, moves to the panel's toolbar button.
  */
 export function setCollapsed(p: Panel, on: boolean): void {
-  const { layout, setLayout } = useStore.getState();
   const active = document.activeElement;
   const lost = on && !!active && (!!host(p)?.contains(active) || active.closest('[data-handle]')?.getAttribute('data-handle') === p);
-  setLayout({ ...layout, collapsed: { ...layout.collapsed, [p]: on } });
+  useStore.getState().collapse(p, on);
   if (lost) opener(p)?.focus();
 }
 
@@ -64,7 +62,7 @@ export function setCollapsed(p: Panel, on: boolean): void {
  */
 export function togglePanel(p: Panel): void {
   const s = useStore.getState();
-  if (!isNarrow()) setCollapsed(p, !s.layout.collapsed[p]);
+  if (!isNarrow()) setCollapsed(p, !shownLayout(s.layout, s.peek).collapsed[p]);
   else if (s.panel === p) closePanel();
   else s.setPanel(p);
 }

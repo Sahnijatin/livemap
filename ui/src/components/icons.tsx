@@ -72,12 +72,14 @@ export const MenuIcon = () => (
   <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" /></svg>
 );
 
-export const PanelIcon = () => (
-  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M15 4v16" /></svg>
+/** A window with its right panel; `on` fills the panel (the toolbar's "shown" state at 1080 px and wider). */
+export const PanelIcon = ({ on }: { on?: boolean }) => (
+  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" />{on && <path d="M15 4h3a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3h-3z" fill="currentColor" />}<path d="M15 4v16" /></svg>
 );
 
-export const SidebarIcon = () => (
-  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /></svg>
+/** A window with its left sidebar; `on` fills the sidebar. */
+export const SidebarIcon = ({ on }: { on?: boolean }) => (
+  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" />{on && <path d="M9 4H6a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h3z" fill="currentColor" />}<path d="M9 4v16" /></svg>
 );
 
 export const LockIcon = () => (

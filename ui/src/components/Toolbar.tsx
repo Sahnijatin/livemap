@@ -9,6 +9,7 @@ import { useLiveState } from './Activity';
 import { preloadPalette } from '../palette/PaletteHost';
 import { togglePanel } from '../panels';
 import { NARROW_QUERY, useMedia } from '../media';
+import { PANELS, shownLayout, type Panel } from '../panelLayout';
 import { MenuIcon, MoonIcon, PanelIcon, PauseIcon, PlayIcon, SearchIcon, SidebarIcon, SunIcon } from './icons';
 
 export function StatusChip() {
@@ -170,25 +171,28 @@ export function ProjectChip() {
   );
 }
 
-/** Files and Inspector: below 1080 px they open the slide-overs; wider they collapse and expand the docked panels. */
-function PanelButton({ p }: { p: 'files' | 'inspector' }) {
+/**
+ * Files and Inspector: below 1080 px they open the slide-overs; wider they collapse and expand the docked panels,
+ * and the icon's filled side shows the panel is shown (no pressed background there).
+ */
+function PanelButton({ p }: { p: Panel }) {
   const narrow = useMedia(NARROW_QUERY);
-  const open = useStore(s => (narrow ? s.panel === p : !s.layout.collapsed[p]));
-  const files = p === 'files';
-  const name = files ? 'project panel' : 'inspector';
+  const open = useStore(s => (narrow ? s.panel === p : !shownLayout(s.layout, s.peek).collapsed[p]));
+  const { name, key, id } = PANELS[p];
+  const on = open && !narrow;
   return (
     <button
       type="button"
       className="iconbtn"
-      aria-label={files ? 'Files' : 'Inspector'}
-      aria-controls={files ? 'sidebar' : 'inspector'}
-      aria-keyshortcuts={files ? '[' : ']'}
-      title={narrow ? undefined : `${open ? 'Hide' : 'Show'} ${name} (${files ? '[' : ']'})`}
+      aria-label={p === 'files' ? 'Files' : 'Inspector'}
+      aria-controls={id}
+      aria-keyshortcuts={key}
+      title={narrow ? undefined : `${open ? 'Hide' : 'Show'} ${name} (${key})`}
       data-panel-opener={p}
       aria-expanded={open}
       onClick={() => togglePanel(p)}
     >
-      {!files ? <PanelIcon /> : narrow ? <MenuIcon /> : <SidebarIcon />}
+      {p === 'inspector' ? <PanelIcon on={on} /> : narrow ? <MenuIcon /> : <SidebarIcon on={on} />}
     </button>
   );
 }

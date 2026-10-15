@@ -6,8 +6,7 @@ import { emptySummaries, type SummariesState } from '@shared/summaries.js';
 import type { AgentEvent, AgentSession, ChangeSummary, ControlState, Dep, FileModel } from '@shared/types.js';
 import { LARGE_PROJECT, codeFileCount, edgeBaseline, type Level } from './map/mapModel';
 import { historySource, type HistoryRecord, type HistoryState, type LiveState } from './history';
-import { loadLayout, saveLayout, type PanelLayout } from './panelLayout';
-import { isNarrow } from './media';
+import { loadLayout, saveLayout, type Panel, type PanelLayout } from './panelLayout';
 
 export const MAX_CHANGES = 2000;
 export const MAX_EVENTS = 2000;
@@ -84,14 +83,6 @@ export type RecentKind = 'created' | 'modified';
 /** How many recently selected files the palette's "Recent" lists. */
 export const HISTORY_MAX = 8;
 
-/** A docked, collapsed inspector opens when a file is selected, so the selection is visible. */
-function showInspector(layout: PanelLayout): { layout?: PanelLayout } {
-  if (!layout.collapsed.inspector || isNarrow()) return {};
-  const next = { ...layout, collapsed: { ...layout.collapsed, inspector: false } };
-  saveLayout(next);
-  return { layout: next };
-}
-
 /** `path` first, then the rest without it, at most HISTORY_MAX. */
 function pushHistory(history: string[], path: string): string[] {
   if (history[0] === path) return history;
@@ -124,8 +115,12 @@ export interface StoreState {
   reveal: { path: string; line: number; seq: number } | null;
   /** Narrow layouts: which slide-over panel is open. */
   panel: 'files' | 'inspector' | null;
-  /** Wide layouts: docked panel widths and collapsed state, remembered across reloads. */
+  /** Wide layouts: docked panel widths and collapsed state as the user set them, remembered across reloads. */
   layout: PanelLayout;
+  /** A selected file shows a collapsed inspector for the session (not saved); toggling the inspector ends it. */
+  peek: boolean;
+  /** The `.app` box width and the viewport width the docked layout fits, and whether a panel edge is being dragged. */
+  dock: { width: number; vw: number; dragging: boolean };
   /** Agent activity: the last 2,000 events, sessions by id, and pause and flag state. */
   events: AgentEvent[];
   sessions: Record<string, AgentSession>;
@@ -186,6 +181,9 @@ export interface StoreState {
   setPanel(panel: StoreState['panel']): void;
   /** Replaces the docked layout; `save` false skips storage (mid-drag). */
   setLayout(layout: PanelLayout, save?: boolean): void;
+  /** Collapses or expands a docked panel, ending a peek at the inspector, and saves. */
+  collapse(p: Panel, on: boolean): void;
+  setDock(patch: Partial<StoreState['dock']>): void;
   showToast(text: string, tone?: 'info' | 'error'): void;
   setTab(t: CenterTab): void;
   setMapLevel(level: Level): void;
@@ -226,6 +224,8 @@ const initial = {
   filter: '',
   reveal: null,
   panel: null,
+  peek: false,
+  dock: { width: 1416, vw: 1440, dragging: false },
   events: [],
   sessions: {},
   control: { paused: false, flags: [] } as ControlState,
@@ -460,7 +460,7 @@ export const useStore = create<StoreState>()((set, get) => ({
   },
 
   select(path) {
-    set(path ? { selected: path, history: pushHistory(get().history, path), ...showInspector(get().layout) } : { selected: null });
+    set(path ? { selected: path, history: pushHistory(get().history, path), peek: true } : { selected: null });
   },
 
   toggle(path) {
@@ -478,7 +478,7 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   revealLine(path, line) {
     const seq = (get().reveal?.seq ?? 0) + 1;
-    set({ selected: path, reveal: { path, line, seq }, history: pushHistory(get().history, path), ...showInspector(get().layout) });
+    set({ selected: path, reveal: { path, line, seq }, history: pushHistory(get().history, path), peek: true });
   },
 
   clearReveal() {
@@ -492,6 +492,17 @@ export const useStore = create<StoreState>()((set, get) => ({
   setLayout(layout, save = true) {
     set({ layout });
     if (save) saveLayout(layout);
+  },
+
+  collapse(p, on) {
+    const layout = { ...get().layout, collapsed: { ...get().layout.collapsed, [p]: on } };
+    set(p === 'inspector' ? { layout, peek: false } : { layout });
+    saveLayout(layout);
+  },
+
+  setDock(patch) {
+    const d = get().dock;
+    if (Object.entries(patch).some(([k, v]) => d[k as keyof typeof d] !== v)) set({ dock: { ...d, ...patch } });
   },
 
   showToast(text, tone = 'info') {

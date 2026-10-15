@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { useStore } from '../store';
+import { typingElsewhere } from '../keys';
 
 // The palette (cmdk, Radix Dialog, the search index) loads on first open, so Activity's first paint does not pay for it.
 const load = () => import('./Palette');
@@ -8,14 +9,6 @@ const Palette = lazy(load);
 /** Start loading the palette early (toolbar button hover or focus). */
 export function preloadPalette(): void {
   void load();
-}
-
-/** A text field other than the palette's own input: ⌘K there belongs to the field. */
-export function typingElsewhere(el: Element | null): boolean {
-  if (!el || el.closest('[cmdk-dialog]')) return false;
-  if (el instanceof HTMLTextAreaElement || (el as HTMLElement).isContentEditable) return true;
-  if (!(el instanceof HTMLInputElement)) return false;
-  return !['button', 'checkbox', 'radio', 'range', 'color', 'file', 'submit', 'reset', 'image'].includes(el.type);
 }
 
 /** ⌘K or Ctrl+K anywhere opens (or closes) the palette; the palette itself mounts on first open and stays. */
