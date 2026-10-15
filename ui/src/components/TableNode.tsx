@@ -4,7 +4,7 @@ import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import type { Table } from '@shared/domain.js';
 import { useStore } from '../store';
 import { isNarrow } from '../media';
-import { MAX_ROWS } from '../layout/schemaLayout';
+import { MAX_ROWS, MAX_RULES } from '../layout/schemaLayout';
 
 export type TableNodeData = {
   table: Table;
@@ -20,8 +20,21 @@ export type TableFlowNode = Node<TableNodeData, 'table'>;
 
 const ORM: Record<string, string> = {
   prisma: 'Prisma', drizzle: 'Drizzle', typeorm: 'TypeORM', mongoose: 'Mongoose', sqlalchemy: 'SQLAlchemy',
-  sqlmodel: 'SQLModel', django: 'Django', room: 'Room', swiftdata: 'SwiftData', sql: 'SQL',
+  sqlmodel: 'SQLModel', django: 'Django', room: 'Room', swiftdata: 'SwiftData', sql: 'SQL', servicenow: 'ServiceNow',
 };
+
+/** Short tags for rule kinds on a table card. */
+const RULE_TAG: Record<string, { tag: string; title: string }> = {
+  business_rule: { tag: 'BR', title: 'Business rule' },
+  client_script: { tag: 'CS', title: 'Client script' },
+  ui_policy: { tag: 'UP', title: 'UI policy' },
+  acl: { tag: 'ACL', title: 'Access control' },
+  data_policy: { tag: 'DP', title: 'Data policy' },
+  ui_action: { tag: 'UA', title: 'UI action' },
+};
+type TableRule = NonNullable<Table['rules']>[number];
+/** When a rule fires: `before #100`, `read`, `onChange`. */
+const ruleWhen = (r: TableRule): string => [r.when, r.order !== undefined ? `#${r.order}` : ''].filter(Boolean).join(' ');
 export const ormLabel = (orm: string): string => ORM[orm] ?? orm;
 
 /** Source handle id for a field row; the "+N more" row stands in for hidden fields. */
@@ -111,6 +124,30 @@ function TableNodeView({ data }: NodeProps<TableFlowNode>) {
           </button>
         )}
       </div>
+      {!!t.rules?.length && (
+        <div className="rules" aria-label={`Rules on ${t.name}`}>
+          <div className="col rh"><span className="mk" /><span className="cn">Rules</span></div>
+          {t.rules.slice(0, MAX_RULES).map(r => {
+            const k = RULE_TAG[r.kind] ?? { tag: '?', title: r.kind };
+            return (
+              <button
+                type="button"
+                key={`${r.file}:${r.kind}:${r.name}`}
+                className={clsx('col rule', r.active === false && 'off')}
+                onClick={e => { e.stopPropagation(); open(r.file, r.line); }}
+                title={`${k.title}: ${r.name}${r.condition ? ` (${r.condition})` : ''}${r.active === false ? ', inactive' : ''}`}
+              >
+                <span className={`mk rk ${r.kind}`}>{k.tag}</span>
+                <span className="cn">{r.name}</span>
+                <span className="ty">{ruleWhen(r)}</span>
+              </button>
+            );
+          })}
+          {t.rules.length > MAX_RULES && (
+            <div className="col more"><span className="mk" /><span className="cn">+{t.rules.length - MAX_RULES} more rules</span></div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

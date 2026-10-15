@@ -24,10 +24,22 @@ export interface Entity {
   dropped?: string[]; renamed?: [string, string][];
 }
 export interface Dep { name: string; version: string; eco: string; dev?: boolean; line?: number }
+/**
+ * Logic that runs on a table (and field), outside the table's own definition: a ServiceNow business rule,
+ * client script, UI policy, ACL or data policy. `when` is the trigger (`before`, `onChange`, `read`), and
+ * `order` the position among rules that fire together.
+ */
+export interface Rule {
+  kind: 'business_rule' | 'client_script' | 'ui_policy' | 'acl' | 'data_policy' | 'ui_action';
+  name: string; table: string; field?: string; when?: string; order?: number; condition?: string;
+  actions?: string[]; active?: boolean; line: number;
+}
 export interface FileModel {
   path: string; lang: Lang; size: number; lines: number;
   symbols: CodeSymbol[]; imports: { local: string[]; external: string[] };
   routes: Route[]; entities: Entity[]; env: string[]; mounts?: Mount[]; deps?: { deps: Dep[]; scripts?: Record<string, string> };
+  /** Rules on tables this file defines (see Rule); only set when there are some. */
+  rules?: Rule[];
   flags: { binary?: true; tooLarge?: true; secret?: true; parseError?: true };
 }
 export interface SymRef { name: string; qname: string; kind: SymbolKind; signature: string; line: number }

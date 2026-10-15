@@ -20,8 +20,15 @@ export { tableKey };
 export const shownRows = (fields: number, expanded = false): number =>
   expanded || fields <= MAX_ROWS ? fields : MAX_ROWS + 1;
 
-export const nodeHeight = (t: Pick<Table, 'fields'>, expanded = false): number =>
-  HEADER_H + ROW_H * shownRows(t.fields.length, expanded);
+/** Rule rows a card shows (ServiceNow business rules, ACLs, ...) before a "+N more rules" row. */
+export const MAX_RULES = 6;
+
+/** Rule rows: a "Rules" heading, up to MAX_RULES rules, and a "+N more rules" row; none without rules. */
+export const shownRuleRows = (rules: number): number =>
+  rules ? 1 + Math.min(rules, MAX_RULES) + (rules > MAX_RULES ? 1 : 0) : 0;
+
+export const nodeHeight = (t: Pick<Table, 'fields' | 'rules'>, expanded = false): number =>
+  HEADER_H + ROW_H * (shownRows(t.fields.length, expanded) + shownRuleRows(t.rules?.length ?? 0));
 
 /** Which way parent tables lead to their children: across a wide pane, down a tall or narrow one. */
 export type Direction = 'RIGHT' | 'DOWN';

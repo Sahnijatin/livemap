@@ -176,7 +176,25 @@ function buildTables(files: FileModel[]): Table[] {
     const sources = g.map(({ e, file }) => ({ file, line: e.line })).sort((a, b) => cmp(a.file, b.file) || a.line - b.line);
     tables.push({ name: head.name, table: head.table, orm: head.orm, sources, fields, relations });
   }
+  attachRules(files, tables);
   return tables.sort((a, b) => cmp(a.table.toLowerCase(), b.table.toLowerCase()));
+}
+
+const RULE_KIND_ORDER: Record<string, number> = { acl: 0, business_rule: 1, data_policy: 2, client_script: 3, ui_policy: 4, ui_action: 5 };
+
+/** Rules on each table, by kind, then trigger and order (the order they fire in), then name. */
+function attachRules(files: FileModel[], tables: Table[]): void {
+  const byTable = new Map(tables.map(t => [t.table.toLowerCase(), t]));
+  for (const f of files) {
+    for (const r of f.rules ?? []) {
+      const t = byTable.get(r.table.toLowerCase());
+      if (t) (t.rules ??= []).push({ ...r, file: f.path });
+    }
+  }
+  for (const t of tables) {
+    t.rules?.sort((a, b) => (RULE_KIND_ORDER[a.kind] ?? 9) - (RULE_KIND_ORDER[b.kind] ?? 9) || cmp(a.when ?? '', b.when ?? '')
+      || (a.order ?? 0) - (b.order ?? 0) || cmp(a.name, b.name) || cmp(a.file, b.file));
+  }
 }
 
 /** Receivers whose `.model` member is read as a database model accessor (`prisma.order`, `ctx.db.order`). */

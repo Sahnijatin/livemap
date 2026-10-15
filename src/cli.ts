@@ -14,7 +14,10 @@ import { HistoryStore } from './history/store.js';
 import { buildExport, codeWarning } from './export/export.js';
 import { loadSummaryConfig } from './summarize/config.js';
 import { Summarizer } from './summarize/summarizer.js';
-import { USAGE, fail, parseArgs } from './cli-args.js';
+import { USAGE, fail, parseArgs, type Args, type ServeOptions } from './cli-args.js';
+import { ANALYZERS } from './engine/domain/index.js';
+// The ServiceNow source registers here until the plugin loader (#53) can load it.
+import { runServiceNow } from '../plugins/servicenow/cli.js';
 import { AGENT_NAMES, detectAgents, initAgents, installHookScript, removeAgents, type AgentName } from './init.js';
 
 interface InitArgs { dir: string; agents?: AgentName[]; remove: boolean }
@@ -145,8 +148,17 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (argv[0] === 'init') return runInit(argv.slice(1));
   if (argv[0] === 'export') return runExport(argv.slice(1));
+  if (argv[0] === 'sn') return runServiceNow(argv.slice(1), { serve, resolveRoot });
   const args = parseArgs(argv);
-  const root = resolveRoot(args.dir);
+  return serve(resolveRoot(args.dir), args);
+}
+
+/**
+ * Indexes `root`, serves the UI and watches for changes until SIGINT or SIGTERM. Sources other than a
+ * plain folder (the ServiceNow mirror) add analyzers, map changed paths to records for attribution, and
+ * name what is watched.
+ */
+async function serve(root: string, args: Args, opts: ServeOptions = {}): Promise<void> {
   const uiDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui');
 
   // One LiveMap per project: a second one would overwrite the first's history and runtime entry.
@@ -171,11 +183,11 @@ async function main(): Promise<void> {
   }
   process.on('exit', () => releaseLock(root));
 
-  const model = new ProjectModel(root);
+  const model = new ProjectModel(root, opts.analyzers ? { analyzers: [...ANALYZERS, ...opts.analyzers] } : {});
   const watcher = new Watcher(model);
   watcher.on('error', (e: Error) => process.stderr.write(`livemap: watcher error: ${e.message}\n`));
   const hub = new AgentHub(root);
-  const attributor = new Attributor(hub);
+  const attributor = new Attributor(hub, opts.recordOf ? { recordOf: opts.recordOf } : {});
   // A store that cannot open comes back disabled with the reason, which the UI then shows.
   const history = args.history ? await HistoryStore.open(root) : undefined;
   const historyError = history?.info().error;
@@ -194,7 +206,7 @@ async function main(): Promise<void> {
 
   let server: Awaited<ReturnType<typeof startServer>>;
   try {
-    server = await startServer({ model, watcher, port: args.port, uiDir, hub, attributor, history, summarizer, lockId: () => lockId(root), warn: m => process.stderr.write(`livemap: warning: ${m}\n`) });
+    server = await startServer({ model, watcher, port: args.port, uiDir, hub, attributor, history, summarizer, ...(opts.title ? { name: opts.title } : {}), lockId: () => lockId(root), warn: m => process.stderr.write(`livemap: warning: ${m}\n`) });
   } catch (e) {
     fail(`could not start server: ${(e as Error).message}`);
   }
@@ -223,10 +235,10 @@ async function main(): Promise<void> {
     process.stderr.write(`livemap: could not write runtime file, agent hooks will not reach this run: ${(e as Error).message}\n`);
   }
   hub.startDiscovery();
-  const git = new GitWatcher(root, { pullSec: args.pullSec });
-  git.on('events', evs => hub.ingestRaw(evs, { agent: 'git', cwd: root, hooks: false }));
-  git.on('error', (e: Error) => process.stderr.write(`livemap: git: ${e.message}\n`));
-  void git.start(); // not awaited: git must never delay indexing
+  const git = opts.git === false ? null : new GitWatcher(root, { pullSec: args.pullSec });
+  git?.on('events', evs => hub.ingestRaw(evs, { agent: 'git', cwd: root, hooks: false }));
+  git?.on('error', (e: Error) => process.stderr.write(`livemap: git: ${e.message}\n`));
+  void git?.start(); // not awaited: git must never delay indexing
 
   let stopping = false;
   const shutdown = async (): Promise<void> => {
@@ -235,7 +247,7 @@ async function main(): Promise<void> {
     removeRuntime(root);
     setTimeout(() => process.exit(0), 3000).unref(); // failsafe if cleanup hangs
     try {
-      git.stop();
+      git?.stop();
       summarizer?.stop();
       attributor.stop();
       hub.stop();
@@ -249,7 +261,7 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown());
   process.on('SIGTERM', () => void shutdown());
 
-  process.stdout.write(`LiveMap is watching ${path.basename(root)}\n  ${server.url}\n`);
+  process.stdout.write(`LiveMap is watching ${opts.title ?? path.basename(root)}\n  ${server.url}\n`);
   // Open now so the browser shows indexing progress instead of waiting for the scan (spec §13).
   if (args.open) openBrowser(server.launchUrl());
 

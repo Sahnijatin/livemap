@@ -1,6 +1,6 @@
 import type { FileModel } from '@shared/types.js';
 
-export type Layer = 'ui' | 'api' | 'core' | 'logic' | 'val' | 'data' | 'test' | 'docs' | 'config';
+export type Layer = 'ui' | 'api' | 'core' | 'logic' | 'val' | 'data' | 'security' | 'ai' | 'test' | 'docs' | 'config';
 
 export interface LayerMeta {
   name: string;
@@ -18,13 +18,32 @@ export const LAYERS: Record<Layer, LayerMeta> = {
   logic: { name: 'Logic', color: 'var(--teal)', tint: 'var(--teal-t)' },
   val: { name: 'Validation', color: 'var(--pink)', tint: 'var(--red-t)' },
   data: { name: 'Data', color: 'var(--orange)', tint: 'var(--orange-t)' },
+  security: { name: 'Security', color: 'var(--red)', tint: 'var(--red-t)' },
+  ai: { name: 'AI', color: 'var(--indigo)', tint: 'var(--indigo-t)' },
   test: { name: 'Tests', color: 'var(--green)', tint: 'var(--green-t)' },
   docs: { name: 'Docs', color: 'var(--ink2)', tint: 'var(--hair)' },
   config: { name: 'Config', color: 'var(--ink2)', tint: 'var(--hair)' },
 };
 
 /** Order of folder groups and of the legend. */
-export const LAYER_ORDER: Layer[] = ['ui', 'api', 'core', 'logic', 'val', 'data', 'test', 'docs', 'config'];
+export const LAYER_ORDER: Layer[] = ['ui', 'api', 'core', 'logic', 'val', 'data', 'security', 'ai', 'test', 'docs', 'config'];
+
+/**
+ * ServiceNow mirror folders (plugins/servicenow/mirror.ts): `<scope>/<kind>/...`, where a scope is
+ * `x_vendor_app`, `sn_app` or `global`. Experience (portals, pages, widgets, workspaces) is the UI layer.
+ */
+const SN_KIND_LAYER: Record<string, Layer> = {
+  portal: 'ui', page: 'ui', widget: 'ui', workspace: 'ui',
+  business_rule: 'logic', client_script: 'logic', script_include: 'logic', ui_action: 'logic', ui_policy: 'logic', flow: 'logic',
+  rest: 'api', schema: 'data', acl: 'security', ai_agent: 'ai', other: 'config',
+};
+const SN_SCOPE = /^(x_[a-z0-9_]+|sn_[a-z0-9_]+|global)$/i;
+
+/** The layer of a ServiceNow mirror path, or null for any other path. */
+export function serviceNowLayer(path: string): Layer | null {
+  const [scope, kind] = path.split('/', 3);
+  return scope && kind && SN_SCOPE.test(scope) && kind in SN_KIND_LAYER && path.split('/').length > 2 ? SN_KIND_LAYER[kind] : null;
+}
 
 const SEGMENT_LAYER: [RegExp, Layer][] = [
   [/^(components|pages|app|views|screens|hooks|web|ui|client)$/, 'ui'],
@@ -48,6 +67,8 @@ export function layerOf(path: string, file: FileModel): Layer {
   const base = segs[segs.length - 1];
   const dirs = segs.slice(0, -1);
   const stem = base.replace(/\.[^.]+$/, '').replace(/\.[^.]+$/, '');
+  const sn = serviceNowLayer(path);
+  if (sn) return sn;
 
   if (dirs.some(s => TEST_SEG.test(s)) || /\.(test|spec)\./.test(base)) return 'test';
   if (file.lang === 'markdown' || /\.mdx?$/.test(base)) return 'docs';

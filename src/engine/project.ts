@@ -395,14 +395,15 @@ export class ProjectModel {
       return { ...base, flags: r.kind === 'binary' ? { binary: true } : { tooLarge: true } };
     }
     const { symbols, parseError } = await this.symbolsFor(rel, base.lang, r.text);
-    const { mounts, deps, ...facts } = analyzeFile(rel, base.lang, r.text, this.analyzers);
+    const { mounts, deps, symbols: own, rules, ...facts } = analyzeFile(rel, base.lang, r.text, this.analyzers);
     return {
       ...base,
       ...facts,
+      ...(rules?.length ? { rules } : {}),
       ...(mounts.length ? { mounts: mounts.map(m => ({ ...m, target: this.mountTarget(rel, base.lang, m.spec) })) } : {}),
       ...(deps ? { deps } : {}),
       lines: countLines(r.text),
-      symbols,
+      symbols: own ?? symbols,
       imports: this.importsFor(rel, base.lang, r.text),
       flags: parseError ? { parseError: true } : {},
     };
@@ -428,7 +429,23 @@ export class ProjectModel {
   private importsFor(rel: string, lang: FileModel['lang'], text: string): FileModel['imports'] {
     // Every script block counts (Vue `<script>` + `<script setup>`, Svelte module + instance).
     const code = lang === 'vue' || lang === 'svelte' ? scriptBlocks(text).map(b => b.code).join('\n;\n') : text;
-    return extractImports(rel, lang, code, this.ctx);
+    const out = extractImports(rel, lang, code, this.ctx);
+    const links = this.linksFor(rel, lang, text);
+    if (!links.length) return out;
+    return { ...out, local: [...new Set([...out.local, ...links])].sort(cmp) };
+  }
+
+  /** Analyzer links (see Analyzer.links) that exist; an analyzer that throws adds none. */
+  private linksFor(rel: string, lang: FileModel['lang'], text: string): string[] {
+    const out: string[] = [];
+    for (const a of this.analyzers) {
+      if (!a.links) continue;
+      try {
+        if (!a.applies(rel, lang)) continue;
+        for (const p of a.links(rel, lang, text, p => this.ctx.has(p))) if (p !== rel && this.ctx.has(p)) out.push(p);
+      } catch { /* a faulty analyzer loses only its own links */ }
+    }
+    return out;
   }
 
   /**
