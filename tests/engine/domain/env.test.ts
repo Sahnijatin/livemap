@@ -46,6 +46,16 @@ describe('env analyzer', () => {
     expect(env.applies('src/a.ts', 'typescript')).toBe(true);
   });
 
+  it('reads keys destructured from process.env and import.meta.env (#29)', () => {
+    const src = [
+      "const { DATABASE_URL, PORT: port, API_KEY = 'x', ...rest } = process.env;",
+      'let {\n  VITE_A,\n  VITE_B = fallback(1, 2),\n} = import.meta.env',
+      'const { NOT_ENV } = process.env.NESTED;',
+      'const { NOR_THIS } = other;',
+    ].join('\n');
+    expect(run('a.ts', src)).toEqual(['API_KEY', 'DATABASE_URL', 'NESTED', 'PORT', 'VITE_A', 'VITE_B']);
+  });
+
   it('dedupes and sorts names', () => {
     expect(run('a.js', 'process.env.B; process.env.A; process.env.B;\n')).toEqual(['A', 'B']);
   });

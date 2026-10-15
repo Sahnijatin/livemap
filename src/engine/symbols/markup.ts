@@ -55,14 +55,21 @@ export function markdownOutline(src: string): CodeSymbol[] {
   return roots;
 }
 
-/** First `<script>` block of a Vue/Svelte file; lineOffset is the number of lines before the code starts. */
-export function scriptBlock(src: string): { code: string; lineOffset: number } | null {
-  const m = /<script\b[^>]*>([\s\S]*?)<\/script\s*>/i.exec(src);
-  if (!m) return null;
-  const codeStart = m.index + m[0].indexOf('>') + 1;
+/**
+ * Every `<script>` block of a Vue/Svelte file, in order (Vue's `<script>` + `<script setup>`,
+ * Svelte's module + instance scripts); lineOffset is the number of lines before each block's code.
+ */
+export function scriptBlocks(src: string): { code: string; lineOffset: number }[] {
+  const out: { code: string; lineOffset: number }[] = [];
+  const re = /<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi;
   let lineOffset = 0;
-  for (let i = 0; i < codeStart; i++) if (src.charCodeAt(i) === 10) lineOffset++;
-  return { code: m[1], lineOffset };
+  let counted = 0;
+  for (let m = re.exec(src); m; m = re.exec(src)) {
+    const codeStart = m.index + m[0].indexOf('>') + 1;
+    for (; counted < codeStart; counted++) if (src.charCodeAt(counted) === 10) lineOffset++;
+    out.push({ code: m[1], lineOffset });
+  }
+  return out;
 }
 
 export function shiftLines(symbols: CodeSymbol[], by: number): CodeSymbol[] {

@@ -78,7 +78,9 @@ export function connect(): void {
   let delay = BACKOFF_START_MS;
 
   const open = (): void => {
-    store.setConnection('connecting');
+    // Only the first attempt says Connecting; a retry keeps Reconnecting (closed) until a socket opens,
+    // so the live status chip does not flip between the two on every backoff.
+    if (useStore.getState().connection !== 'closed') store.setConnection('connecting');
     let ws: WebSocket;
     try {
       ws = new WebSocket(wsUrl());

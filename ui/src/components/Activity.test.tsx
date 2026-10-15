@@ -4,7 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { AgentEvent } from '@shared/types.js';
 import { useStore } from '../store';
-import { change, event, session, emptyDomain } from '../fixtures';
+import { change, event, file, session, emptyDomain } from '../fixtures';
 import { Activity } from './Activity';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -29,9 +29,9 @@ const created = change('src/orders.ts', 'created', {
   attribution: { agent: 'claude-code', sessionId: 's1', confidence: 'exact', eventId: 3, intent: 'Add an order service' },
 });
 
-function mount() {
+function mount(changes = [created]) {
   useStore.getState().apply({
-    type: 'hello', root: '/p/shop', name: 'shop', files: [], changes: [created], usedBy: [], domain: emptyDomain(), indexing: false,
+    type: 'hello', root: '/p/shop', name: 'shop', files: [file('src/orders.ts')], changes, usedBy: [], domain: emptyDomain(), indexing: false,
     events, sessions: [s1], control: { paused: false, flags: [] },
   });
   act(() => root.render(<Activity />));
@@ -79,6 +79,36 @@ describe('Activity', () => {
     expect(useStore.getState().selected).toBe('src/orders.ts');
   });
 
+  it('opens the inspector slide-over from a change card below 1080 px', () => {
+    const real = window.matchMedia;
+    window.matchMedia = ((q: string) => ({ matches: q.includes('max-width:1079'), media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
+    try {
+      mount();
+      act(() => (host.querySelector('.f-chg .ch') as HTMLElement).click());
+      expect(useStore.getState().selected).toBe('src/orders.ts');
+      expect(useStore.getState().panel).toBe('inspector');
+    } finally {
+      window.matchMedia = real;
+    }
+  });
+
+  it('makes a deleted file\'s change card non-interactive, so it never selects or joins Recent', () => {
+    const gone = change('src/old.ts', 'deleted', { at: T + 6000 });
+    const stale = change('src/moved.ts', 'modified', { at: T + 7000 });
+    mount([created, gone, stale]);
+    const cards = [...host.querySelectorAll('.f-chg')];
+    const header = (p: string) => cards.find(c => c.textContent?.includes(p))!.querySelector('.ch') as HTMLButtonElement;
+    expect(header('src/old.ts').disabled).toBe(true);
+    expect(header('src/old.ts').title).toMatch(/deleted/);
+    expect(header('src/moved.ts').disabled).toBe(true);
+    expect(header('src/moved.ts').title).toMatch(/no longer/);
+    act(() => header('src/old.ts').click());
+    act(() => header('src/moved.ts').click());
+    expect(useStore.getState().selected).toBeNull();
+    expect(useStore.getState().history).toEqual([]);
+    expect(header('src/orders.ts').disabled).toBe(false);
+  });
+
   it('shows the change summary as a one-line lead above the facts, as plain text', () => {
     mount();
     expect(host.querySelector('.f-chg .lead')).toBeNull();
@@ -118,6 +148,27 @@ describe('Activity', () => {
     expect(host.querySelector('.typing')).toBeNull();
     act(() => useStore.getState().apply({ type: 'agentEvent', event: event({ id: 6, at: Date.now(), type: 'message', text: 'Done. The orders page is live.' }) }));
     expect(host.querySelectorAll('.f-msg')).toHaveLength(2);
+    expect(host.querySelectorAll('.typing')).toHaveLength(1);
+  });
+
+  it('a new LiveMap run (ids restart at 1) types its messages and keeps none of the old run\'s row state', () => {
+    const run = (sid: string, events: AgentEvent[]) => useStore.getState().apply({
+      type: 'hello', root: '/p/shop', name: 'shop', files: [], changes: [], usedBy: [], domain: emptyDomain(), indexing: false,
+      events, sessions: [session({ id: sid, status: 'working', startedAt: T })], control: { paused: false, flags: [] },
+    });
+    run('r1', [event({ id: 1, at: T, sessionId: 'r1', type: 'prompt', text: 'First run' }), event({ id: 2, at: T + 1, sessionId: 'r1', type: 'thinking', text: 'Old thought' })]);
+    act(() => root.render(<Activity />));
+    // Run 1: message 3 arrives live and types out; the reader opens the thinking row.
+    act(() => useStore.getState().apply({ type: 'agentEvent', event: event({ id: 3, at: T + 2, sessionId: 'r1', type: 'message', text: 'Run one says hi' }) }));
+    expect(host.querySelectorAll('.typing')).toHaveLength(1);
+    act(() => (host.querySelector('.f-think button') as HTMLElement).click());
+    expect(host.querySelector('.f-think.open')).not.toBeNull();
+
+    // LiveMap restarts: the same ids now name other events.
+    act(() => run('r2', [event({ id: 1, at: T + 10, sessionId: 'r2', type: 'prompt', text: 'Second run' }), event({ id: 2, at: T + 11, sessionId: 'r2', type: 'thinking', text: 'New thought' })]));
+    expect(host.querySelector('.f-prompt')?.textContent).toContain('Second run');
+    expect(host.querySelector('.f-think.open')).toBeNull();
+    act(() => useStore.getState().apply({ type: 'agentEvent', event: event({ id: 3, at: T + 12, sessionId: 'r2', type: 'message', text: 'Run two says hi' }) }));
     expect(host.querySelectorAll('.typing')).toHaveLength(1);
   });
 

@@ -38,6 +38,56 @@ describe('routes-js analyzer', () => {
     expect(run('src/b.tsx', "import api from './lib/api';\napi.get('/users');\n").routes).toEqual([]);
   });
 
+  it('treats conventional receiver names as routers only when the file imports a server framework', () => {
+    expect(run('src/hooks/useUsers.ts', "export function useUsers(api) { return api.get('/users'); }\nexport const save = (router, app, server, fastify) => { router.post('/a'); app.put('/b'); server.delete('/c'); fastify.get('/d'); };\n").routes).toEqual([]);
+    expect(run('src/hooks/client.ts', "import { useQuery } from '@tanstack/react-query';\nexport const f = (api) => api.get('/users');\n").routes).toEqual([]);
+    // Without a server import, names assigned from a router factory still count.
+    const src = "const r = express.Router();\nconst app = express();\nconst h = new Hono();\nconst k = new Router();\nr.get('/r', a);\napp.post('/app', b);\nh.put('/h', c);\nk.delete('/k', d);\nfunction f(api) { api.get('/no'); }\n";
+    expect(run('src/legacy.js', src).routes.map(r => `${r.method} ${r.path} ${r.framework}`)).toEqual(['GET /r express', 'POST /app express', 'PUT /h hono', 'DELETE /k express']);
+    // With a server import, the conventional names stay routers (a router passed into a function).
+    expect(run('src/routes.ts', "import type { Router } from 'express';\nexport function mount(router: Router) { router.get('/x', h); }\n").routes.map(r => r.path)).toEqual(['/x']);
+  });
+
+  it('keeps conventional receivers without a server import when the call passes a handler', () => {
+    const src = "module.exports = (app) => {\n  app.get('/a', (req, res) => res.send('ok'));\n  app.post('/b', auth, create);\n  app.put('/c', async function (req, res) {});\n};\n";
+    expect(run('routes/index.js', src).routes.map(r => `${r.method} ${r.path}`)).toEqual(['GET /a', 'POST /b', 'PUT /c']);
+    const client = "export const f = (api, body) => { api.post('/u', body); api.get('/v', { params: { q: 1 } }); api.put('/w', body, { headers: {} }); };\n";
+    expect(run('src/client.ts', client).routes).toEqual([]);
+  });
+
+  it('keeps a guessed receiver passing named handlers, chained or not, and drops client-shaped calls', () => {
+    const src = "module.exports = (app) => {\n  app.get('/users', listUsers);\n  app.get('/users/:id', usersCtl.show);\n  app.post('/b', auth, create);\n  app.route('/x').get(list).post(req.body);\n};\n";
+    expect(run('routes/users.js', src).routes.map(r => `${r.method} ${r.path} ${r.handler}`))
+      .toEqual(['GET /users listUsers', 'GET /users/:id usersCtl.show', 'POST /b create', 'GET /x list']);
+    const client = "export const f = (api, body, cfg) => { api.put('/w', body, cfg); };\n"
+      + "export async function g(api, id, payload) {\n  if (id) return api.get('/u', id);\n  await api.post('/u', payload);\n  api.get('/u').then(done);\n  api.get('/u', id).catch(fail);\n  const r = api.get('/u', id);\n  use(api.get('/u', id));\n}\n"
+      + "export const h = (api, id) => api.get('/u', id);\nexport const k = (app) => { app.route('/y').get(load).then(done); };\n";
+    expect(run('src/client.ts', client).routes).toEqual([]);
+  });
+
+  it('keeps guessed routes with middleware factory calls, and drops client calls in any value position', () => {
+    const src = "module.exports = (app) => {\n  app.get('/users', requireAuth(), list);\n  app.post('/u', validate(schema), create);\n  app.get('/x', ctrl.list.bind(ctrl))\n  if (admin) app.delete('/z', remove);\n};\n";
+    expect(run('routes/users.js', src).routes.map(r => `${r.method} ${r.path}`)).toEqual(['GET /users', 'POST /u', 'GET /x', 'DELETE /z']);
+    const client = "export async function g(api, id, event, ok) {\n  const [a, b] = await Promise.all([api.get('/a', id), api.get('/b', id)]);\n  void api.post('/track', event);\n  const c = ok ? api.get('/x', id) : null;\n  const d =\n          api.get('/u', id);\n  return ok && api.get('/v', id);\n}\n";
+    expect(run('src/client.ts', client).routes).toEqual([]);
+  });
+
+  it('reads guessed routes in code without semicolons, and drops one-argument client calls', () => {
+    const src = "import { list } from './ctl'\nconst mw = [a, b]\napp.get('/users', auth, list)\nconst x = 'y'\napp.get('/x', list)\nconst n = 1\napp.post('/n', create)\nconst d =\n  app.get('/no', id)\n";
+    expect(run('routes/users.js', src).routes.map(r => `${r.method} ${r.path}`)).toEqual(['GET /users', 'GET /x', 'POST /n']);
+    const client = "export function track(api, event, user, a, b) {\n  api.post('/events', event);\n  api.post('/users', JSON.stringify(user));\n  api.post('/z', a(user) || b(user));\n}\n";
+    expect(run('src/client.ts', client).routes).toEqual([]);
+  });
+
+  it('keeps guessed routes after regex, generic and x++ lines, with member handlers and parens in strings', () => {
+    const src = "const SLUG = /^[a-z]+$/\napp.get('/a', list)\ntype H = Map<string, number>\napp.get('/b', list)\nn++\napp.get('/c', list)\n"
+      + "app.get('/me', auth, ctl.user)\napp.post('/track', a.record);\nrouter.post('/webhook', stripe.event)\napp.get('/x', match(')'), list)\napp.get('/r', requireRole('admin (ro)'), list)\n";
+    expect(run('routes/all.js', src).routes.map(r => `${r.method} ${r.path}`))
+      .toEqual(['GET /a', 'GET /b', 'GET /c', 'GET /me', 'POST /track', 'POST /webhook', 'GET /x', 'GET /r']);
+    const client = "export function f(api, data, x) {\n  api.post('/a', new FormData(x));\n  api.put('/b', encodeURIComponent(x));\n  api.patch('/c', data)\n}\n";
+    expect(run('src/client.ts', client).routes).toEqual([]);
+  });
+
   it('ignores member receivers except this.app/router/server and this.X assigned from a router factory', () => {
     expect(run('src/users.service.ts', "export class UsersService {\n  list() { return this.api.get('/users'); }\n}\nctx.router.get('/x', h);\n").routes).toEqual([]);
     const src = "import express from 'express';\nclass S {\n  web = express();\n  start() {\n    this.app.get('/a', a);\n    this.web.get('/w', w);\n  }\n}\n";

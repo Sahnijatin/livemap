@@ -4,7 +4,8 @@ import { blankStrings, defaultExport, filePath, handlerOf, lineAt, maskCommentsA
 
 type MountFact = Omit<Mount, 'target'>;
 /** `assigned` marks a name set from a router factory in this file, which is also accepted as `this.<name>`. */
-interface Receiver { fw: string; prefix: string; assigned?: true }
+/** `guessed`: a conventional name in a file without a server import, a route only when it looks like one (see `routeLike`). */
+interface Receiver { fw: string; prefix: string; assigned?: true; guessed?: true }
 
 const LANGS = new Set<Lang>(['typescript', 'tsx', 'javascript', 'svelte']);
 const FILE_VERBS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
@@ -80,12 +81,17 @@ function ctorFramework(name: string, imports: Map<string, string>, fileFw: strin
 const ASSIGN = new RegExp(`(?:\\b(?:const|let|var)\\s+|(?<![\\w$.])this\\s*\\.\\s*|^[ \\t]*(?:(?:private|public|protected|readonly|static)\\s+)*)(${ID})\\s*(?::[^=\\n]{0,200})?=(?![=>])\\s*`, 'gm');
 const THIS_RECEIVERS = new Set(['app', 'router', 'server']);
 
-/** Router receivers of this file: the conventional names plus identifiers assigned from a router factory. */
+/**
+ * Router receivers of this file: identifiers assigned from a router factory, plus the conventional names.
+ * Without a server import those names are only guessed (`api.get('/users')` is usually an HTTP client),
+ * so their calls count as routes only when they look like route registrations (see `routeLike`).
+ */
 function receiversOf(code: string, scan: string, imports: Map<string, string>, fileFw: string): Map<string, Receiver> {
   const recv = new Map<string, Receiver>();
   const importsServer = [...imports.values()].some(s => SERVER_MODULES.has(s) || s.startsWith('hono/'));
-  for (const n of DEFAULT_RECEIVERS) if (importsServer || !imports.has(n)) recv.set(n, { fw: fileFw, prefix: '' });
-  if (importsServer || !imports.has('fastify')) recv.set('fastify', { fw: 'fastify', prefix: '' });
+  const guessed = importsServer ? {} : { guessed: true as const };
+  for (const n of DEFAULT_RECEIVERS) if (importsServer || !imports.has(n)) recv.set(n, { fw: fileFw, prefix: '', ...guessed });
+  if (importsServer || !imports.has('fastify')) recv.set('fastify', { fw: 'fastify', prefix: '', ...guessed });
   const basePathFrom = new RegExp(`(${ID})\\s*\\.\\s*basePath\\s*\\(\\s*(['"\`])([^'"\`\\n]*)\\2\\s*\\)`, 'y');
   const init = new RegExp(`(?:await\\s+)?(?:new\\s+)?(${ID})(\\s*\\.\\s*Router)?\\s*(?:<[^>\\n]{0,200}>)?\\s*\\(`, 'y');
   const basePath = /\s*\.\s*basePath\s*\(\s*(['"`])([^'"`\n]*)\1\s*\)/y;
@@ -166,13 +172,20 @@ function codeRoutes(code: string, scan: string): { routes: Route[]; mounts: Moun
 
   const call = new RegExp(`(?<![\\w$.])(this\\s*\\.\\s*)?(${ID})\\s*\\.\\s*(get|post|put|patch|delete|options|head|all|on|use|route|register)\\b`, 'g');
   const chained = /\s*\.\s*(get|post|put|patch|delete|options|head|all)\b/y;
+  const then = /\s*\.\s*(?:then|catch)\s*\(/y;
+  /** A guessed receiver's call at `end` registers a route; `used` when the chain's value is consumed. */
+  const ok = (r: Receiver, rest: string[], used: boolean, end: number): boolean => {
+    if (!r.guessed) return true;
+    then.lastIndex = end;
+    return routeLike(rest, used || then.test(scan));
+  };
   /** `verb(path, ...handlers)` and any `.verb(path, ...)` calls chained after it. */
-  const verbCalls = (verb: string, args: string[], index: number, end: number, r: Receiver): void => {
+  const verbCalls = (verb: string, args: string[], index: number, end: number, r: Receiver, used: boolean): void => {
     for (;;) {
       let rest = args.slice(1);
       let path = literal(args[0]);
       if (!isPath(path) && r.fw === 'koa' && isPath(literal(args[1]))) { path = literal(args[1]); rest = args.slice(2); }
-      if (isPath(path)) add(verb === 'all' ? 'ANY' : verb.toUpperCase(), path, handlerOf(rest), index, r);
+      if (isPath(path) && ok(r, rest, used, end)) add(verb === 'all' ? 'ANY' : verb.toUpperCase(), path, handlerOf(rest), index, r);
       chained.lastIndex = end;
       const c = chained.exec(scan);
       const open = c ? callOpen(scan, chained.lastIndex) : -1;
@@ -190,6 +203,7 @@ function codeRoutes(code: string, scan: string): { routes: Route[]; mounts: Moun
     const open = callOpen(scan, m.index + m[0].length);
     if (open < 0) continue;
     const { args, end } = splitArgs(code, open);
+    const used = !!r.guessed && valueUsed(scan, m.index);
     if (verb === 'use') {
       const prefix = literal(args[0]);
       if (isPath(prefix) && args.length > 1) mount(prefix, specOf(args[args.length - 1], imports), m.index, r);
@@ -200,6 +214,7 @@ function codeRoutes(code: string, scan: string): { routes: Route[]; mounts: Moun
       const path = literal(args[1]);
       if (!isPath(path) || !args[0]) continue;
       const methods = args[0].startsWith('[') ? [...args[0].matchAll(/['"`]([A-Za-z]+)['"`]/g)].map(x => x[1]) : [literal(args[0])].filter((x): x is string => !!x);
+      if (!ok(r, args.slice(2), used, end)) continue;
       for (const method of methods) add(method.toUpperCase(), path, handlerOf(args.slice(2)), m.index, r);
     } else if (verb === 'route') {
       if (args.length > 1) {
@@ -215,15 +230,105 @@ function codeRoutes(code: string, scan: string): { routes: Route[]; mounts: Moun
           const open = callOpen(scan, chained.lastIndex);
           if (open < 0) break;
           const cargs = splitArgs(code, open);
-          add(c[1] === 'all' ? 'ANY' : c[1].toUpperCase(), path, handlerOf(cargs.args), c.index + c[0].indexOf(c[1]), r);
+          if (ok(r, cargs.args, used, cargs.end)) add(c[1] === 'all' ? 'ANY' : c[1].toUpperCase(), path, handlerOf(cargs.args), c.index + c[0].indexOf(c[1]), r);
           chained.lastIndex = cargs.end;
         }
       }
     } else {
-      verbCalls(verb, args, m.index, end, r);
+      verbCalls(verb, args, m.index, end, r, used);
     }
   }
   return { routes, mounts };
+}
+
+const FN_ARG = /^(?:async\s+)?(?:function\b|(?:\([^()]*\)|[\w$]+)\s*(?::[^=]{0,200})?=>)/;
+/**
+ * Whether `arg` is a handler reference or a middleware factory call: `list`, `ctl.show`, `requireAuth()`,
+ * `validate(schema)`, `h.bind(ctl)`. Names, dots and balanced call parentheses only, so an expression such as
+ * `a(x) || b(y)` or a literal is not one.
+ */
+function refArg(arg: string): boolean {
+  const a = arg.trim();
+  const id = /[A-Za-z_$][\w$]*/y;
+  id.lastIndex = 0;
+  if (!id.test(a)) return false;
+  let i = id.lastIndex;
+  while (i < a.length) {
+    while (/\s/.test(a[i] ?? '')) i++;
+    if (a[i] === '.') {
+      i++;
+      while (/\s/.test(a[i] ?? '')) i++;
+      id.lastIndex = i;
+      if (!id.test(a)) return false;
+      i = id.lastIndex;
+    } else if (a[i] === '(') {
+      let depth = 0;
+      for (; i < a.length; i++) {
+        const q = a[i];
+        if (q === "'" || q === '"' || q === '`') {
+          // Parentheses inside a string argument (`match(')')`) do not count.
+          for (i++; i < a.length && a[i] !== q; i++) if (a[i] === '\\') i++;
+        } else if (q === '(') depth++;
+        else if (q === ')' && --depth === 0) break;
+      }
+      if (depth !== 0) return false;
+      i++;
+    } else if (i < a.length) {
+      return false;
+    }
+  }
+  return true;
+}
+/** Request parts and config, passed to an HTTP client bare or as members (`body`, `req.body`, `opts`). */
+const REQUEST_PARTS = new Set(['body', 'data', 'payload', 'params', 'query', 'config', 'cfg', 'conf', 'options', 'opts', 'init', 'headers', 'form', 'formdata', 'values', 'input', 'signal']);
+/** Nouns that are payloads as bare variables (`api.post('/u', user)`) but handlers as members (`ctl.user`). */
+const PAYLOAD_NOUNS = new Set(['event', 'evt', 'user', 'item', 'record', 'entity', 'file', 'blob']);
+/** Calls that build a request body, not a handler (`api.post('/u', JSON.stringify(user))`). */
+const CLIENT_CALLS = new Set(['JSON.stringify', 'String', 'Number', 'Boolean', 'encodeURIComponent', 'encodeURI', 'URLSearchParams', 'FormData', 'Blob']);
+/** Words after which an expression's value is used. */
+const USING_WORDS = new Set(['await', 'return', 'void', 'yield', 'typeof', 'new', 'throw', 'in', 'of', 'case', 'delete', 'instanceof']);
+/**
+ * Line ends that continue an expression onto the next line: `=`, `,`, `(`, `[`, `?`, `:`, `&&`, `||`, `!`, `.`,
+ * `=>`. `+`, `-`, `*`, `/`, `<` and `>` are left out: lines ending in `x++`, a regex literal or a generic
+ * type end statements far more often than they break an expression across lines.
+ */
+const CONTINUES = /(?:[=,(\[?:&|!.]|=>)$/;
+/**
+ * Whether the call starting at `index` is part of a larger expression rather than a statement of its own:
+ * route registrations are statements, while a client call's value is awaited, returned, assigned, passed
+ * on, put in an array or used in a condition. On its own line, a call is a statement unless the line before
+ * ends in something that continues an expression (code without semicolons); after code on the same line it
+ * is one only after `;`, `{`, `}` or `)` (`if (x) app.get(...)`).
+ */
+function valueUsed(scan: string, index: number): boolean {
+  let i = index - 1;
+  let newline = false;
+  while (i >= 0 && /\s/.test(scan[i])) { if (scan[i] === '\n') newline = true; i--; }
+  if (i < 0) return false;
+  const c = scan[i];
+  if (/[\w$]/.test(c)) {
+    let j = i;
+    while (j > 0 && /[\w$]/.test(scan[j - 1])) j--;
+    return USING_WORDS.has(scan.slice(j, i + 1));
+  }
+  if (newline) return CONTINUES.test(scan.slice(Math.max(0, i - 1), i + 1));
+  return !(c === ';' || c === '{' || c === '}' || c === ')');
+}
+/**
+ * Route registrations, as opposed to HTTP client calls: an inline function, or only handler references
+ * (the last not named like a payload or config) in a call whose value is not used.
+ */
+function routeLike(rest: string[], used: boolean): boolean {
+  if (rest.some(a => FN_ARG.test(a.trim()))) return true;
+  if (used || !rest.length || !rest.every(refArg)) return false;
+  const last = rest[rest.length - 1].trim();
+  // A factory call names its handler before the parentheses: `validate(schema)` is `validate`.
+  const callee = last.replace(/\s*\([^]*$/, '').replace(/\s+/g, '');
+  if (callee !== last.replace(/\s+/g, '')) return !CLIENT_CALLS.has(callee.replace(/^new/, ''));
+  const seg = callee.slice(callee.lastIndexOf('.') + 1).toLowerCase();
+  if (REQUEST_PARTS.has(seg)) return false;
+  // A bare noun is a payload; as a member (`ctl.user`, `stripe.event`) it is a controller's handler.
+  return callee.includes('.') || !PAYLOAD_NOUNS.has(seg);
 }
 
 /** Fastify `route({ method, url, handler })`; a method array gives one route per method. */

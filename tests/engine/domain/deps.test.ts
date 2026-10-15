@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyzeFile } from '../../../src/engine/domain/index.js';
-import { deps } from '../../../src/engine/domain/deps.js';
+import { deps, parseVersionCatalog, resolveCatalogDeps } from '../../../src/engine/domain/deps.js';
 import { langOf } from '../../../src/engine/languages.js';
 
 const DIR = fileURLToPath(new URL('../../fixtures/domain/deps/', import.meta.url));
@@ -21,6 +21,11 @@ const GOLDEN: Record<string, { name: string; version: string; eco: string; dev?:
     { name: 'uvicorn', version: '>=0.29', eco: 'pypi', line: 3 },
     { name: 'requests', version: '', eco: 'pypi', line: 4 },
     { name: 'SQLAlchemy', version: '>=2.0,<3', eco: 'pypi', line: 7 },
+    { name: 'urllib3', version: '2.2.1', eco: 'pypi', line: 8 },
+    { name: 'idna', version: '3.7', eco: 'pypi', line: 11 },
+    { name: 'certifi', version: '>=2', eco: 'pypi', line: 12 },
+    { name: 'numpy', version: '1.26', eco: 'pypi', line: 13 },
+    { name: 'six', version: '1.16', eco: 'pypi', line: 14 },
   ],
   'pyproject.toml': [
     { name: 'fastapi', version: '>=0.110', eco: 'pypi', line: 7 },
@@ -29,6 +34,9 @@ const GOLDEN: Record<string, { name: string; version: string; eco: string; dev?:
     { name: 'httpx', version: '', eco: 'pypi', line: 10 },
     { name: 'sqlalchemy', version: '^2.0', eco: 'pypi', line: 15 },
     { name: 'celery', version: '^5.3', eco: 'pypi', line: 16 },
+    { name: 'pytest', version: '^8.0', eco: 'pypi', dev: true, line: 19 },
+    { name: 'coverage', version: '>=7', eco: 'pypi', dev: true, line: 22 },
+    { name: 'psycopg', version: '>=3.1', eco: 'pypi', line: 24 },
   ],
   'go.mod': [
     { name: 'github.com/gin-gonic/gin', version: 'v1.10.0', eco: 'go', line: 5 },
@@ -40,6 +48,10 @@ const GOLDEN: Record<string, { name: string; version: string; eco: string; dev?:
     { name: 'tokio', version: '1.38', eco: 'cargo', line: 7 },
     { name: 'local', version: '', eco: 'cargo', line: 8 },
     { name: 'proptest', version: '1.4', eco: 'cargo', dev: true, line: 11 },
+    { name: 'cc', version: '1.0', eco: 'cargo', line: 14 },
+    { name: 'reqwest', version: '0.12', eco: 'cargo', line: 16 },
+    { name: 'nix', version: '0.29', eco: 'cargo', line: 21 },
+    { name: 'winapi', version: '0.3', eco: 'cargo', dev: true, line: 23 },
   ],
   Gemfile: [
     { name: 'rails', version: '~> 7.1', eco: 'gem', line: 3 },
@@ -55,6 +67,19 @@ const GOLDEN: Record<string, { name: string; version: string; eco: string; dev?:
     { name: 'com.google.guava:guava', version: '33.2.0-jre', eco: 'maven', line: 7 },
     { name: 'org.postgresql:postgresql', version: '42.7.3', eco: 'maven', line: 8 },
     { name: 'org.junit.jupiter:junit-jupiter', version: '', eco: 'maven', dev: true, line: 9 },
+    { name: 'org.projectlombok:lombok', version: '1.18.32', eco: 'maven', line: 10 },
+    { name: 'org.projectlombok:lombok', version: '1.18.32', eco: 'maven', line: 11 },
+    { name: 'androidx.test:runner', version: '1.5.2', eco: 'maven', dev: true, line: 15 },
+  ],
+  // Catalog accessors are kept as written; the domain index resolves them against gradle/libs.versions.toml.
+  'build.gradle.kts': [
+    { name: 'libs.androidx.core.ktx', version: '', eco: 'maven', line: 7 },
+    { name: 'libs.androidx.room.runtime', version: '', eco: 'maven', line: 8 },
+    { name: 'libs.androidx.room.compiler', version: '', eco: 'maven', line: 9 },
+    { name: 'com.google.dagger:hilt-compiler', version: '2.51', eco: 'maven', line: 10 },
+    { name: 'libs.junit', version: '', eco: 'maven', dev: true, line: 13 },
+    { name: 'androidx.test.ext:junit', version: '1.1.5', eco: 'maven', dev: true, line: 14 },
+    { name: 'libs.bundles.ktor', version: '', eco: 'maven', line: 15 },
   ],
   'pubspec.yaml': [
     { name: 'flutter', version: 'sdk', eco: 'pub', line: 6 },
@@ -99,6 +124,26 @@ describe('deps analyzer', () => {
       { name: 'rich', version: '13.7.1', eco: 'pypi', line: 2 },
       { name: 'typer', version: '', eco: 'pypi', line: 3 },
     ]);
+  });
+
+  it('resolves Gradle catalog accessors against libs.versions.toml, bundles included', () => {
+    const catalog = parseVersionCatalog(read('gradle/libs.versions.toml'));
+    expect(catalog.get('androidx.room.runtime')).toEqual([{ name: 'androidx.room:room-runtime', version: '2.6.1' }]);
+    expect(catalog.has('android.application')).toBe(false);
+    expect(resolveCatalogDeps(run('build.gradle.kts', read('build.gradle.kts'))!.deps, catalog)).toEqual([
+      { name: 'androidx.core:core-ktx', version: '1.13.1', eco: 'maven', line: 7 },
+      { name: 'androidx.room:room-runtime', version: '2.6.1', eco: 'maven', line: 8 },
+      { name: 'androidx.room:room-compiler', version: '2.6.1', eco: 'maven', line: 9 },
+      { name: 'com.google.dagger:hilt-compiler', version: '2.51', eco: 'maven', line: 10 },
+      { name: 'junit:junit', version: '4.13.2', eco: 'maven', dev: true, line: 13 },
+      { name: 'androidx.test.ext:junit', version: '1.1.5', eco: 'maven', dev: true, line: 14 },
+      { name: 'io.ktor:ktor-client-core', version: '2.3.12', eco: 'maven', line: 15 },
+      { name: 'io.ktor:ktor-client-cio', version: '2.3.12', eco: 'maven', line: 15 },
+    ]);
+    const groovy = "dependencies {\n  implementation libs.androidx.core.ktx\n  kaptTest libs.junit\n  implementation libs.missing\n}\n";
+    expect(resolveCatalogDeps(run('build.gradle', groovy)!.deps, catalog).map(d => `${d.name}${d.dev ? ' dev' : ''}`))
+      .toEqual(['androidx.core:core-ktx', 'junit:junit dev', 'libs.missing']);
+    expect(resolveCatalogDeps(run('build.gradle', groovy)!.deps, null).map(d => d.name)).toEqual(['libs.androidx.core.ktx', 'libs.junit', 'libs.missing']);
   });
 
   it('reads package.json scripts', () => {

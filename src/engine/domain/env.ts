@@ -16,6 +16,27 @@ const JS = [
   new RegExp(`\\bimport\\.meta\\.env\\.${N}`, 'g'),
   new RegExp(`\\bDeno\\.env\\.get\\(\\s*${Q}`, 'g'),
 ];
+/** `const { A, B: b, C = 1, ...rest } = process.env` (or `import.meta.env`); group 1 is the pattern body. */
+const JS_DESTRUCTURE = /\b(?:const|let|var)\s*\{([^{}]*)\}\s*(?::[^=;]+)?=\s*(?:process\.env|import\.meta\.env)(?![\w$.[?])/g;
+
+/** Keys of a destructuring pattern body; renames and defaults are skipped, the rest element ignored. */
+function destructuredKeys(body: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i <= body.length; i++) {
+    const c = body[i];
+    if (c === '(' || c === '[') depth++;
+    else if (c === ')' || c === ']') depth--;
+    else if ((c === ',' && depth === 0) || i === body.length) {
+      const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:[:=]|$)/.exec(body.slice(start, i));
+      if (m) out.push(m[1]);
+      start = i + 1;
+    }
+  }
+  return out;
+}
+
 const PATTERNS: Partial<Record<Lang, RegExp[]>> = {
   typescript: JS, tsx: JS, javascript: JS, vue: JS, svelte: JS,
   python: [
@@ -52,6 +73,7 @@ export const env: Analyzer = {
     for (const re of PATTERNS[lang] ?? []) {
       for (const m of code.matchAll(re)) out.push(m[m.length - 1]);
     }
+    if (PATTERNS[lang] === JS) for (const m of code.matchAll(JS_DESTRUCTURE)) out.push(...destructuredKeys(m[1]));
     return { env: out };
   },
 };

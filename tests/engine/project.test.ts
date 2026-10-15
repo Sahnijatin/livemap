@@ -182,6 +182,47 @@ describe('ProjectModel', () => {
     expect(m.get('src/f.ts')!.imports.local).toEqual(['src/lib/util.ts']);
   });
 
+  it('reads BOM-prefixed package.json and tsconfig.json (#25)', async () => {
+    put('package.json', '\uFEFF{ "dependencies": { "react": "^18.0.0" } }\n');
+    put('tsconfig.json', '\uFEFF{ "compilerOptions": { "paths": { "@lib/*": ["src/lib/*"] } } }');
+    put('src/lib/util.ts', 'export const u = 1;\n');
+    put('src/f.ts', "import { u } from '@lib/util';\n");
+    const m = await scanned();
+    expect(m.get('package.json')!.deps?.deps.map(d => d.name)).toEqual(['react']);
+    expect(m.get('src/f.ts')!.imports.local).toEqual(['src/lib/util.ts']);
+    expect(m.content('package.json')!.startsWith('{')).toBe(true);
+  });
+
+  it('collects imports from every script block of a vue file (#26)', async () => {
+    put('src/types.ts', 'export interface T {}\n');
+    put('src/use.ts', 'export const use = 1;\n');
+    put('src/W.vue', "<script lang=\"ts\">\nimport type { T } from './types';\n</script>\n<script setup lang=\"ts\">\nimport { use } from './use';\n</script>\n");
+    const m = await scanned();
+    expect(m.get('src/W.vue')!.imports.local).toEqual(['src/types.ts', 'src/use.ts']);
+  });
+
+  it('drops the old name after a case-only rename on a case-insensitive filesystem (#23)', async () => {
+    put('src/Foo.ts', 'export const foo = 1;\n');
+    const m = await scanned();
+    fs.renameSync(path.join(root, 'src/Foo.ts'), path.join(root, 'src/foo.ts'));
+    // Simulate a case-insensitive filesystem: reading the old name still finds the renamed file.
+    const read = (m as unknown as { read(rel: string): Promise<unknown> }).read.bind(m);
+    const spy = vi.spyOn(m as unknown as { read(rel: string): Promise<unknown> }, 'read')
+      .mockImplementation(rel => read(rel === 'src/Foo.ts' ? 'src/foo.ts' : rel));
+    try {
+      const gone = await m.update('src/Foo.ts', 'unlink');
+      expect(gone!.kind).toBe('deleted');
+      expect(m.get('src/Foo.ts')).toBeUndefined();
+      expect((await m.update('src/foo.ts', 'add'))!.kind).toBe('created');
+      expect(m.all().map(f => f.path).filter(p => /foo/i.test(p))).toEqual(['src/foo.ts']);
+      // A spurious unlink for a file that is still listed under its exact name changes nothing.
+      expect(await m.update('src/foo.ts', 'unlink')).toBeNull();
+      expect(m.get('src/foo.ts')).toBeDefined();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('uses the go module path from go.mod', async () => {
     put('go.mod', 'module example.com/app\n\ngo 1.22\n');
     put('pkg/util/util.go', 'package util\n\nfunc U() {}\n');

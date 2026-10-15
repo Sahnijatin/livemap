@@ -120,6 +120,8 @@ export interface StoreState {
   control: ControlState;
   /** The newest event id replayed by the last hello; later ids arrived live. */
   liveAfterId: number;
+  /** Bumped by every live hello. A new LiveMap run restarts event ids at 1, so per-id memos reset on it. */
+  hellos: number;
   /** A short message shown at the top of the window (seq makes repeats fire). */
   toast: { text: string; tone: 'info' | 'error'; seq: number } | null;
   /** Routes, tables, stack, deps, scripts and env for the whole project. */
@@ -211,6 +213,7 @@ const initial = {
   sessions: {},
   control: { paused: false, flags: [] } as ControlState,
   liveAfterId: 0,
+  hellos: 0,
   toast: null,
   mapLevel: 'files' as Level,
   mapExpanded: {} as Record<string, true>,
@@ -354,6 +357,7 @@ export const useStore = create<StoreState>()((set, get) => ({
         const data = replaceData(msg, get());
         set({
           ...data,
+          hellos: get().hellos + 1,
           historyStatus: msg.history ?? NO_HISTORY,
           selected: selected && data.files[selected] ? selected : null,
         });
@@ -519,7 +523,17 @@ export const useStore = create<StoreState>()((set, get) => ({
     if (get().replay) {
       // No live in a replay: its end.
       set({ playing: false });
-      return get().rewind(await historySource().stateAt(get().historyStatus.last));
+      const gen = viewGen;
+      let end: HistoryState;
+      try {
+        end = await historySource().stateAt(get().historyStatus.last);
+      } catch {
+        if (gen === viewGen) get().showToast('Could not load the end of this replay.', 'error');
+        return;
+      }
+      // A seek made while the end was loading wins.
+      if (gen !== viewGen) return;
+      return get().rewind(end);
     }
     const gen = ++viewGen;
     liveGen++;

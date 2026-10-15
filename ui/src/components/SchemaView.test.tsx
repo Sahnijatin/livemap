@@ -6,7 +6,7 @@ import type { DomainIndex, Table } from '@shared/domain.js';
 import { useStore } from '../store';
 import { emptyDomain } from '../fixtures';
 import { LAYOUT_TIMEOUT, NODE_W, relationLinks, type ElkRun } from '../layout/schemaLayout';
-import { CAP, SchemaView, pickTables } from './SchemaView';
+import { CAP, SchemaView, TURN_DEBOUNCE, pickTables } from './SchemaView';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -301,5 +301,77 @@ describe('SchemaView palette focus (tableFocus)', () => {
     expect(wrap(`cap${CAP + 4}`)).not.toBeNull();
     expect(wrap(`cap${CAP + 4}`)!.classList.contains('pulse')).toBe(true);
     expect(Math.abs(centerX(`cap${CAP + 4}`))).toBeLessThan(1);
+  });
+});
+
+describe('SchemaView layout direction (pane aspect)', () => {
+  let pane = { width: 0, height: 0 };
+  const observed: { cb: ResizeObserverCallback; el?: Element }[] = [];
+  const realRect = Element.prototype.getBoundingClientRect;
+  beforeEach(() => {
+    observed.length = 0;
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      return this.classList.contains('sv-canvas') ? ({ x: 0, y: 0, top: 0, left: 0, right: pane.width, bottom: pane.height, ...pane } as DOMRect) : realRect.call(this);
+    };
+    vi.stubGlobal('ResizeObserver', class {
+      private entry: { cb: ResizeObserverCallback; el?: Element };
+      constructor(cb: ResizeObserverCallback) { this.entry = { cb }; observed.push(this.entry); }
+      observe(el: Element) { this.entry.el = el; }
+      unobserve() {}
+      disconnect() {}
+    });
+  });
+  afterEach(() => {
+    Element.prototype.getBoundingClientRect = realRect;
+    vi.unstubAllGlobals();
+  });
+
+  /** Resizes the pane, as a browser would report it, and waits out the debounce. */
+  async function resize(width: number, height: number) {
+    pane = { width, height };
+    act(() => { for (const o of observed) if (o.el?.classList.contains('sv-canvas')) o.cb([], {} as ResizeObserver); });
+    await act(async () => { await new Promise(r => setTimeout(r, TURN_DEBOUNCE + 30)); });
+    await settleLayout();
+  }
+
+  it('lays out top to bottom in a tall pane and turns left to right (once) when it widens', async () => {
+    const dirs: string[] = [];
+    const run: ElkRun = async g => {
+      dirs.push(String(g.layoutOptions?.['elk.direction']));
+      return rowRun(g);
+    };
+    // The desktop center pane: narrower than it is tall. A fresh layout tries the pane's direction first, then the other.
+    pane = { width: 490, height: 1000 };
+    await mount([bare('DirA'), bare('DirB')], run);
+    expect(dirs).toEqual(['DOWN', 'RIGHT']);
+    expect(host.querySelector('.sv-canvas')?.getAttribute('data-direction')).toBe('DOWN');
+
+    // Still tall: no new layout.
+    await resize(520, 980);
+    expect(dirs).toEqual(['DOWN', 'RIGHT']);
+
+    // Wide: every card is laid out again, left to right first.
+    await resize(1200, 700);
+    expect(dirs).toEqual(['DOWN', 'RIGHT', 'RIGHT', 'DOWN']);
+    expect(host.querySelector('.sv-canvas')?.getAttribute('data-direction')).toBe('RIGHT');
+    expect(posOf('dira')).not.toBeNull();
+
+    // Wider still: same direction, no thrash.
+    await resize(1400, 700);
+    expect(dirs).toEqual(['DOWN', 'RIGHT', 'RIGHT', 'DOWN']);
+  });
+
+  it('keeps the direction that fits the schema larger, even against the pane aspect', async () => {
+    // RIGHT puts the cards in a row, DOWN in a column, as ELK would for a chain of tables.
+    const byDir: ElkRun = async g => ({
+      ...g,
+      children: g.children!.map((c, i) => (g.layoutOptions?.['elk.direction'] === 'DOWN' ? { ...c, x: 0, y: i * 180 } : { ...c, x: i * 400, y: 0 })),
+    });
+    // Slightly wider than tall: the pane alone says RIGHT, but three stacked cards fit far larger.
+    pane = { width: 900, height: 700 };
+    await mount([bare('ChainA'), bare('ChainB'), bare('ChainC')], byDir);
+    const [a, b] = [posOf('chaina')!, posOf('chainb')!];
+    expect(a.x).toBe(b.x);
+    expect(b.y).toBeGreaterThan(a.y);
   });
 });

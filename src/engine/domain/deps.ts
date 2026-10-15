@@ -88,12 +88,18 @@ function pep508(req: string): { name: string; version: string } | null {
 
 const requirements: Parser = text => {
   const deps: Dep[] = [];
-  lines(text).forEach((raw, i) => {
-    const line = noHash(raw).trim();
-    if (!line || line.startsWith('-') || /^[\w+.-]*:\/\//.test(line)) return;
-    const r = pep508(line);
-    if (r) deps.push(dep(r.name, r.version, 'pypi', i + 1));
-  });
+  const ls = lines(text);
+  for (let i = 0; i < ls.length; i++) {
+    // A trailing `\` continues the requirement on the next line; it is reported at its first line.
+    const first = i;
+    let line = noHash(ls[i]).trim();
+    while (line.endsWith('\\') && i + 1 < ls.length) line = line.slice(0, -1) + ' ' + noHash(ls[++i]).trim();
+    if (!line || line.startsWith('-') || /^[\w+.-]*:\/\//.test(line)) continue;
+    // Per-requirement options (`--hash=sha256:...`, `--hash sha256:...`) follow the requirement.
+    const opts = line.search(/\s--/);
+    const r = pep508((opts < 0 ? line : line.slice(0, opts)).replace(/\\$/, ''));
+    if (r) deps.push(dep(r.name, r.version, 'pypi', first + 1));
+  }
   return { deps };
 };
 
@@ -117,18 +123,25 @@ function tomlStrings(line: string): string[] {
   return [...line.matchAll(TOML_STR)].map(m => m[1] ?? m[2]);
 }
 
+/** Extras and dependency groups named for development rather than an optional runtime feature. */
+const DEV_GROUP = /^(?:dev|develop|development|test|tests|testing|lint|linting|docs?|typing|types|check|qa|ci)$/i;
+
 const pyproject: Parser = text => {
   const deps: Dep[] = [];
   const ls = lines(text);
   let table = '';
   let inArray = false;
+  let arrayDev = false;
+  const pep = (strs: string[], line: number, dev: boolean): void => {
+    for (const str of strs) {
+      const r = pep508(str);
+      if (r) deps.push(dep(r.name, r.version, 'pypi', line, dev));
+    }
+  };
   ls.forEach((raw, i) => {
     const line = noHash(raw);
     if (inArray) {
-      for (const str of tomlStrings(line)) {
-        const r = pep508(str);
-        if (r) deps.push(dep(r.name, r.version, 'pypi', i + 1));
-      }
+      pep(tomlStrings(line), i + 1, arrayDev);
       if (closesArray(line)) inArray = false;
       return;
     }
@@ -136,33 +149,57 @@ const pyproject: Parser = text => {
     if (h !== null) { table = h; return; }
     const kv = TOML_KEY.exec(line);
     if (!kv) return;
-    if (table === 'project' && kv[1] === 'dependencies' && kv[2].trimStart().startsWith('[')) {
+    // PEP 621 arrays: `[project] dependencies` and each `[project.optional-dependencies]` extra.
+    const extra = table === 'project.optional-dependencies';
+    if (((table === 'project' && kv[1] === 'dependencies') || extra) && kv[2].trimStart().startsWith('[')) {
       const rest = kv[2].trimStart().slice(1);
-      for (const str of tomlStrings(rest)) {
-        const r = pep508(str);
-        if (r) deps.push(dep(r.name, r.version, 'pypi', i + 1));
-      }
+      arrayDev = extra && DEV_GROUP.test(unquote(kv[1]));
+      pep(tomlStrings(rest), i + 1, arrayDev);
       inArray = !closesArray(rest);
-    } else if (table === 'tool.poetry.dependencies') {
+      return;
+    }
+    // Poetry: main dependencies, legacy `dev-dependencies`, and `group.<name>.dependencies` (any group but main is dev).
+    const group = /^tool\.poetry\.group\.("[^"]+"|[\w-]+)\.dependencies$/.exec(table);
+    if (table === 'tool.poetry.dependencies' || table === 'tool.poetry.dev-dependencies' || group) {
       const name = unquote(kv[1]);
-      if (name !== 'python') deps.push(dep(name, tomlVersion(kv[2]), 'pypi', i + 1));
+      const dev = table === 'tool.poetry.dev-dependencies' || (!!group && unquote(group[1]) !== 'main');
+      if (name !== 'python') deps.push(dep(name, tomlVersion(kv[2]), 'pypi', i + 1, dev));
     }
   });
   return { deps };
 };
 
+/**
+ * A Cargo dependency table: `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`, each optionally under
+ * `target.<triple or 'cfg(...)'>.`, and the one-crate form `[dependencies.tokio]` (group 2).
+ */
+const CARGO_TABLE = /^(?:target\.(?:'[^']*'|"[^"]*"|[^.'"]+)\.)?(dev-|build-)?dependencies(?:\.(.+))?$/;
+
 const cargo: Parser = text => {
   const deps: Dep[] = [];
-  let table = '';
+  let table: { dev: boolean } | null = null;
+  let crate: Dep | null = null;
   lines(text).forEach((raw, i) => {
     const line = noHash(raw);
-    const h = tomlHeader(line);
-    if (h !== null) { table = h; return; }
-    if (table !== 'dependencies' && table !== 'dev-dependencies') return;
+    // Not tomlHeader: a `cfg(target_os = "linux")` target holds `=`.
+    const h = /^\s*\[\[?(.*?)\]\]?\s*$/.exec(line);
+    if (h) {
+      const t = CARGO_TABLE.exec(h[1].trim());
+      table = t && !t[2] ? { dev: t[1] === 'dev-' } : null;
+      crate = t?.[2] ? dep(unquote(t[2]), '', 'cargo', i + 1, t[1] === 'dev-') : null;
+      if (crate) deps.push(crate);
+      return;
+    }
     const kv = TOML_KEY.exec(line);
+    if (!kv) return;
+    if (crate) {
+      if (kv[1] === 'version') crate.version = tomlVersion(kv[2]);
+      return;
+    }
+    if (!table) return;
     // `serde.workspace = true` inherits the workspace's version: the crate is `serde`, with no version here.
-    const inherited = kv ? /^(.+)\.workspace$/.exec(kv[1]) : null;
-    if (kv) deps.push(dep(unquote(inherited ? inherited[1] : kv[1]), inherited ? '' : tomlVersion(kv[2]), 'cargo', i + 1, table === 'dev-dependencies'));
+    const inherited = /^(.+)\.workspace$/.exec(kv[1]);
+    deps.push(dep(unquote(inherited ? inherited[1] : kv[1]), inherited ? '' : tomlVersion(kv[2]), 'cargo', i + 1, table.dev));
   });
   return { deps };
 };
@@ -205,20 +242,106 @@ const rubyDsl = (word: string, eco: string): Parser => text => {
   return { deps };
 };
 
-const GRADLE_CONF = '(implementation|api|testImplementation)';
+/** Any configuration (`implementation`, `api`, `ksp`, `kapt`, `testImplementation`, ...); `platform(...)`, `project(...)` and `files(...)` never match. */
+const GRADLE_CONF = '(\\w+)';
+/** Words that start a dependency-shaped line without being a configuration. */
+const NOT_CONF = new Set(['id', 'platform', 'enforcedPlatform', 'project', 'files', 'fileTree', 'kotlin', 'alias']);
+/** Test and debug-only configurations (`testImplementation`, `androidTestImplementation`, `kaptTest`, `debugImplementation`). */
+const devConf = (conf: string): boolean => /^(?:test|androidTest|debug)|Test/.test(conf);
 const gradle: Parser = text => {
   const deps: Dep[] = [];
-  const coord = new RegExp(`^\\s*${GRADLE_CONF}\\s*(?:\\(\\s*)?(['"])([^'"\\s:]+):([^'"\\s:]+)(?::([^'"\\s]+))?\\2`);
+  // No `/` in group or artifact, so `url "https://..."` is not a coordinate.
+  const coord = new RegExp(`^\\s*${GRADLE_CONF}\\s*(?:\\(\\s*)?(['"])([^'"\\s:/]+):([^'"\\s:/]+)(?::([^'"\\s]+))?\\2`);
   const named = new RegExp(`^\\s*${GRADLE_CONF}\\s*(?:\\(\\s*)?group\\s*[:=]\\s*(['"])([^'"]+)\\2\\s*,\\s*name\\s*[:=]\\s*(['"])([^'"]+)\\4(?:\\s*,\\s*version\\s*[:=]\\s*(['"])([^'"]+)\\6)?`);
+  // A version catalog accessor: `implementation(libs.androidx.core.ktx)`, resolved against the catalog by the domain index.
+  const catalog = new RegExp(`^\\s*${GRADLE_CONF}\\s*(?:\\(\\s*|\\s)(libs\\.[\\w.]+?)(?:\\.get\\(\\))?\\s*(?:\\)|$|\\{)`);
   lines(text).forEach((raw, i) => {
     const line = raw.replace(/\/\/.*$/, '');
     const c = coord.exec(line);
-    if (c) { deps.push(dep(`${c[3]}:${c[4]}`, c[5] ?? '', 'maven', i + 1, c[1] === 'testImplementation')); return; }
+    if (c && !NOT_CONF.has(c[1])) { deps.push(dep(`${c[3]}:${c[4]}`, c[5] ?? '', 'maven', i + 1, devConf(c[1]))); return; }
     const n = named.exec(line);
-    if (n) deps.push(dep(`${n[3]}:${n[5]}`, n[7] ?? '', 'maven', i + 1, n[1] === 'testImplementation'));
+    if (n && !NOT_CONF.has(n[1])) { deps.push(dep(`${n[3]}:${n[5]}`, n[7] ?? '', 'maven', i + 1, devConf(n[1]))); return; }
+    const v = catalog.exec(line);
+    if (v && !NOT_CONF.has(v[1]) && !/^libs\.(?:plugins|versions)\./.test(v[2])) deps.push(dep(v[2], '', 'maven', i + 1, devConf(v[1])));
   });
   return { deps };
 };
+
+/** A catalog alias or accessor path in one form: `-`, `_` and `.` all separate the same segments. */
+const catalogKey = (alias: string): string => alias.replace(/[-_.]+/g, '.');
+
+/**
+ * `gradle/libs.versions.toml`: library accessor (`androidx.core.ktx`, normalized by catalogKey) to its
+ * modules, one per library or several for a `bundles.<name>` accessor, with versions where given.
+ */
+export function parseVersionCatalog(text: string): Map<string, { name: string; version: string }[]> {
+  const versions = new Map<string, string>();
+  const libs = new Map<string, { name: string; version: string; ref?: string }>();
+  const bundles: [string, string[]][] = [];
+  let table = '';
+  let open: { key: string; items: string[] } | null = null;
+  for (const raw of lines(text)) {
+    const line = noHash(raw);
+    if (open) {
+      open.items.push(...tomlStrings(line));
+      if (closesArray(line)) open = null;
+      continue;
+    }
+    const h = tomlHeader(line);
+    if (h !== null) { table = h; continue; }
+    const kv = TOML_KEY.exec(line);
+    if (!kv) continue;
+    const key = unquote(kv[1]);
+    const value = kv[2].trim();
+    if (table === 'versions') {
+      versions.set(key, tomlVersion(value));
+    } else if (table === 'libraries') {
+      const str = /^(?:"([^"]*)"|'([^']*)')/.exec(value);
+      const field = (f: string): string | undefined => {
+        const m = new RegExp(`\\b${f.replace('.', '\\.')}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(value);
+        return m ? m[1] ?? m[2] : undefined;
+      };
+      let name: string | undefined, version = '', ref: string | undefined;
+      if (str) {
+        const parts = (str[1] ?? str[2]).split(':');
+        name = parts.slice(0, 2).join(':');
+        version = parts[2] ?? '';
+      } else {
+        const group = field('group');
+        name = field('module') ?? (group && field('name') ? `${group}:${field('name')}` : undefined);
+        ref = field('version.ref');
+        version = field('version') ?? '';
+      }
+      if (name?.includes(':')) libs.set(catalogKey(key), ref === undefined ? { name, version } : { name, version, ref });
+    } else if (table === 'bundles' && value.startsWith('[')) {
+      const rest = value.slice(1);
+      const b = { key, items: tomlStrings(rest) };
+      bundles.push([b.key, b.items]);
+      if (!closesArray(rest)) open = b;
+    }
+  }
+  // `version.ref` resolves after the whole file is read: `[versions]` may come after `[libraries]`.
+  const out = new Map<string, { name: string; version: string }[]>();
+  const resolved = new Map<string, { name: string; version: string }>();
+  for (const [k, { name, version, ref }] of libs) resolved.set(k, { name, version: ref === undefined ? version : versions.get(ref) ?? '' });
+  for (const [k, lib] of resolved) out.set(k, [lib]);
+  for (const [k, items] of bundles) {
+    out.set(catalogKey(`bundles.${k}`), items.map(a => resolved.get(catalogKey(a))).filter((l): l is { name: string; version: string } => !!l));
+  }
+  return out;
+}
+
+/**
+ * Gradle deps with catalog accessors (`libs.x.y`) replaced by the modules the catalog names; an accessor
+ * the catalog lacks, or any accessor without a catalog, stays as recorded.
+ */
+export function resolveCatalogDeps(deps: Dep[], catalog: ReturnType<typeof parseVersionCatalog> | null): Dep[] {
+  if (!catalog) return deps;
+  return deps.flatMap(d => {
+    const libs = d.eco === 'maven' && d.name.startsWith('libs.') ? catalog.get(catalogKey(d.name.slice(5))) : undefined;
+    return libs?.length ? libs.map(l => ({ ...d, name: l.name, version: l.version })) : [d];
+  });
+}
 
 const pubspec: Parser = text => {
   const deps: Dep[] = [];

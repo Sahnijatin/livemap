@@ -138,7 +138,12 @@ function readGitignore(dir: string): string {
   ignoreStats.reads++;
   const file = path.join(dir, '.gitignore');
   if (lstatSync(file).isSymbolicLink()) throw new Error('symlinked .gitignore');
-  return readFileSync(file, 'utf8');
+  return stripBom(readFileSync(file, 'utf8'));
+}
+
+/** Drops a leading UTF-8 byte order mark, which JSON.parse and line-anchored patterns trip over. */
+export function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
 /**
@@ -193,25 +198,35 @@ export async function walk(
   return { files, dirs, truncated };
 }
 
-/** Variable names only; values (including multi-line quoted ones) are never returned. */
+/**
+ * Variable names only; values (including multi-line quoted ones) are never returned. A multi-line
+ * value ends at the first line with its closing quote, which must be followed by nothing but a
+ * comment; otherwise the quote was never closed (`A="x` then `B="y"`) and the lines after the key
+ * are read as keys again.
+ */
 export function envKeys(src: string): string[] {
   const keys: string[] = [];
-  let open: string | null = null;
-  for (const line of src.split(/\r?\n/)) {
-    let rest = line;
-    if (open) {
-      const end = closeIndex(line, 0, open);
-      if (end < 0) continue;
-      open = null;
-      continue;
-    }
-    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*/.exec(rest);
+  const lines = src.split(/\r?\n/);
+  // Per quote char, the last search for its next line: reused while the start stays before the
+  // hit, so a file of unclosed quotes is still scanned in linear time.
+  const found = new Map<string, { from: number; at: number }>();
+  const nextWith = (q: string, from: number): number => {
+    const c = found.get(q);
+    if (c && from >= c.from && (c.at < 0 || from <= c.at)) return c.at;
+    let at = -1;
+    for (let j = from; j < lines.length; j++) if (closeIndex(lines[j], 0, q) >= 0) { at = j; break; }
+    found.set(q, { from, at });
+    return at;
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*/.exec(lines[i]);
     if (!m) continue;
     keys.push(m[1]);
-    rest = rest.slice(m[0].length);
+    const rest = lines[i].slice(m[0].length);
     const q = rest[0];
-    if (q === '"' || q === "'" || q === '`') {
-      if (closeIndex(rest, 1, q) < 0) open = q;
+    if ((q === '"' || q === "'" || q === '`') && closeIndex(rest, 1, q) < 0) {
+      const end = nextWith(q, i + 1);
+      if (end >= 0 && /^\s*(#.*)?$/.test(lines[end].slice(closeIndex(lines[end], 0, q) + 1))) i = end;
     }
   }
   return keys;
@@ -281,7 +296,7 @@ export async function readForModel(root: string, rel: string, realRoot?: string)
     const buf = await readCapped(abs, size);
     if (!buf) return null;
     if (buf.length > MAX_PARSE_BYTES) return { kind: 'secret', size: buf.length, envKeys: [] };
-    return { kind: 'secret', size, envKeys: envKeys(buf.toString('utf8')) };
+    return { kind: 'secret', size, envKeys: envKeys(stripBom(buf.toString('utf8'))) };
   }
   if (isBinaryPath(rel)) return { kind: 'binary', size };
   if (size > MAX_PARSE_BYTES) return { kind: 'tooLarge', size };
@@ -289,5 +304,5 @@ export async function readForModel(root: string, rel: string, realRoot?: string)
   if (!buf) return null;
   if (buf.length > MAX_PARSE_BYTES) return { kind: 'tooLarge', size: buf.length };
   if (buf.includes(0)) return { kind: 'binary', size };
-  return { kind: 'text', text: buf.toString('utf8'), size };
+  return { kind: 'text', text: stripBom(buf.toString('utf8')), size };
 }

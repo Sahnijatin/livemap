@@ -30,9 +30,16 @@ export function real(p: string): string {
 const fileFor = (realRoot: string): string =>
   path.join(runtimeDir(), `${crypto.createHash('sha1').update(realRoot).digest('hex')}.json`);
 
-/** Writes the entry atomically (0600 temp file in the same 0700 dir, then rename) and returns its path. */
-export function writeRuntime(root: string, port: number, token: string): string {
+/**
+ * Writes the entry atomically (0600 temp file in the same 0700 dir, then rename) and returns its path.
+ * Throws instead of replacing an entry another live LiveMap owns: its hooks would silently go here.
+ * `takeover` is for the holder of the project lock, which is the only LiveMap on the root: an entry with
+ * another live pid is then stale, its pid reused by an unrelated process, and is replaced.
+ */
+export function writeRuntime(root: string, port: number, token: string, opts: { takeover?: boolean } = {}): string {
   const realRoot = real(root);
+  const owner = opts.takeover ? null : runtimeFor(realRoot);
+  if (owner && owner.pid !== process.pid) throw new Error(`another LiveMap (pid ${owner.pid}) owns the runtime entry for ${realRoot}`);
   const dir = runtimeDir();
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(dir, 0o700); } catch { /* best effort on filesystems without modes */ }
@@ -59,7 +66,8 @@ export function removeRuntime(root: string): void {
   } catch { /* already gone or unreadable */ }
 }
 
-function alive(pid: number): boolean {
+/** Whether `pid` is a running process (EPERM: it exists but belongs to another user). */
+function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -74,8 +82,13 @@ function read(dir: string): RuntimeEntry | null {
   if (!o || typeof o !== 'object') return null;
   const e = o as Record<string, unknown>;
   if (typeof e.root !== 'string' || typeof e.token !== 'string' || !Number.isInteger(e.port) || !Number.isInteger(e.pid)) return null;
-  if (real(e.root) !== dir || (e.pid as number) <= 0 || !alive(e.pid as number)) return null;
+  if (real(e.root) !== dir || (e.pid as number) <= 0 || !pidAlive(e.pid as number)) return null;
   return { root: e.root, port: e.port as number, token: e.token, pid: e.pid as number };
+}
+
+/** The entry of a live LiveMap for exactly `root`, or null. */
+export function runtimeFor(root: string): RuntimeEntry | null {
+  return read(real(root));
 }
 
 /** The entry for `startDir` or its nearest ancestor that has a live LiveMap, or null. */

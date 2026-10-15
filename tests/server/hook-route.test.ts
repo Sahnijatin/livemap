@@ -54,3 +54,46 @@ describe('M1: POST /hook flag delivery', () => {
     expect(hub.control.state().flags[0].deliveredAt).toBeTypeOf('number');
   });
 });
+
+describe('#33: a block lost before it reached the hook', () => {
+  const cursorShell = { agent: 'cursor', event: 'beforeShellExecution', payload: { conversation_id: 'k', generation_id: 'g', command: 'rm -rf build' } };
+
+  it('is undone: the call is not blocked and no failed end is recorded', async () => {
+    const hub = new AgentHub('/proj');
+    hubs.push(hub);
+    hub.control.setPaused(true);
+    const res = fakeRes();
+    await handleHook(fakeReq(codexPre, false), res as never, () => {}, TOKEN, hub);
+    expect(hub.isBlocked('c', 'b')).toBe(true);
+    res.emit('close');
+    expect(hub.isBlocked('c', 'b')).toBe(false);
+    expect(hub.events().map((e) => e.type)).toEqual(['tool_start']);
+  });
+
+  it('with flags: undelivers them and unblocks the call', async () => {
+    const hub = new AgentHub('/proj');
+    hubs.push(hub);
+    hub.control.addFlag(null, 'wait');
+    const res = fakeRes();
+    await handleHook(fakeReq(cursorShell, false), res as never, () => {}, TOKEN, hub);
+    res.emit('close');
+    const [start] = hub.events();
+    expect(hub.isBlocked('k', start.tool!.id!)).toBe(false);
+    expect(hub.control.state().flags[0].deliveredAt).toBeUndefined();
+    expect(hub.events().map((e) => e.type)).toEqual(['tool_start']);
+  });
+
+  it('a delivered block keeps the call blocked and records the failed end once', async () => {
+    const hub = new AgentHub('/proj');
+    hubs.push(hub);
+    hub.control.setPaused(true);
+    const res = fakeRes();
+    await handleHook(fakeReq(cursorShell, false), res as never, () => { res.writableFinished = true; }, TOKEN, hub);
+    res.emit('finish');
+    res.emit('close');
+    const [start, end] = hub.events();
+    expect(hub.events()).toHaveLength(2);
+    expect(end).toMatchObject({ type: 'tool_end', tool: { id: start.tool!.id, ok: false, output: 'Blocked by LiveMap' } });
+    expect(hub.isBlocked('k', start.tool!.id!)).toBe(true);
+  });
+});

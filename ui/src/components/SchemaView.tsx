@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import {
   ReactFlow, ReactFlowProvider, applyNodeChanges, useNodesInitialized, useReactFlow,
   type NodeChange, type BuiltInEdge, type Viewport,
@@ -6,7 +6,9 @@ import {
 import '@xyflow/react/dist/style.css';
 import type { Table } from '@shared/domain.js';
 import { fieldKey, tableKey, useStore, type DomainBase } from '../store';
-import { MAX_ROWS, NODE_W, layoutTables, relationLinks, settle, shownRows, workerRun, type ElkRun, type Pos } from '../layout/schemaLayout';
+import {
+  BOTH_WAYS_MAX, FIT_PADDING, MAX_ROWS, NODE_W, fitZoom, layoutDirection, pickLayout, layoutTables, relationLinks, settle, shownRows, workerRun, type Direction, type ElkRun, type Pos,
+} from '../layout/schemaLayout';
 import { MORE_HANDLE, TableNode, headHandle, rowHandle, type TableFlowNode, type TableNodeData } from './TableNode';
 import { SchemaIcon } from './icons';
 
@@ -39,6 +41,37 @@ export function pickTables(tables: Table[], all: boolean): Table[] {
 const positions = new Map<string, Pos>();
 const firstShown = new Map<string, number>();
 let savedViewport: Viewport | null = null;
+/** The pane direction `positions` were laid out for; a pane that turns the other way lays every card out again. */
+let laidOut: Direction | null = null;
+/** The direction ELK actually ran in: the pane's, or the other one when that fits the schema larger. */
+let laidDir: Direction | null = null;
+/** Resizes settle for this long before the direction is read again, so a drag-resize lays out once. */
+export const TURN_DEBOUNCE = 250;
+
+/** The layout direction for the pane, read before the first paint and again after resizes settle. */
+function usePaneDirection(): [RefObject<HTMLDivElement>, Direction | null] {
+  const ref = useRef<HTMLDivElement>(null);
+  const [dir, setDir] = useState<Direction | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const read = () => {
+      const r = el.getBoundingClientRect();
+      // Same value: React skips the render, so steady resizes never re-lay out.
+      setDir(d => layoutDirection(r.width, r.height, d ?? laidOut ?? 'RIGHT'));
+    };
+    read();
+    if (typeof ResizeObserver !== 'function') return;
+    let t = 0;
+    const ro = new ResizeObserver(() => {
+      window.clearTimeout(t);
+      t = window.setTimeout(read, TURN_DEBOUNCE);
+    });
+    ro.observe(el);
+    return () => { ro.disconnect(); window.clearTimeout(t); };
+  }, []);
+  return [ref, dir];
+}
 
 /** Cards in a plain grid, for tables ELK could not place (the worker failed, crashed or timed out). */
 function gridFallback(tables: Table[], prev: Map<string, Pos>): Map<string, Pos> {
@@ -68,7 +101,7 @@ function ZoomControls() {
   return (
     <div className="zoomctl glass" role="group" aria-label="Zoom">
       <button type="button" aria-label="Zoom out" onClick={() => rf.zoomOut({ duration: motion(250) })}>−</button>
-      <button type="button" className="zfit" aria-label="Fit to screen" onClick={() => rf.fitView({ duration: motion(450), padding: 0.12, maxZoom: 1 })}>Fit</button>
+      <button type="button" className="zfit" aria-label="Fit to screen" onClick={() => rf.fitView({ duration: motion(450), padding: FIT_PADDING, maxZoom: 1 })}>Fit</button>
       <button type="button" aria-label="Zoom in" onClick={() => rf.zoomIn({ duration: motion(250) })}>+</button>
     </div>
   );
@@ -83,6 +116,7 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
   const rf = useReactFlow();
   const initialized = useNodesInitialized();
   const fitted = useRef(savedViewport !== null);
+  const [paneRef, dir] = usePaneDirection();
 
   const visible = useMemo(() => pickTables(tables, all), [tables, all]);
   const latest = useRef(visible);
@@ -91,15 +125,40 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
   const shape = visible.map(t => `${tableKey(t)}:${shownRows(t.fields.length)}`).join('\u0000');
 
   // Existing cards never move (layoutTables), except to clear a card above them that grew.
+  // A pane that turned (wide to tall or back) lays every card out again in the new direction and fits.
   useEffect(() => {
+    if (!dir) return;
     let live = true;
     const list = latest.current;
-    const start = new Map(positions);
-    layoutTables(list, start, run)
-      .catch(() => gridFallback(list, settle(list, start)))
-      .then(m => {
+    const turned = laidOut !== dir;
+    const start = turned ? new Map<string, Pos>() : new Map(positions);
+    const pane = paneRef.current?.getBoundingClientRect();
+    // A fresh layout tries both directions and keeps the one that fits the pane larger
+    // (a few tables in a chain read better stacked even in a pane slightly wider than tall).
+    const fresh = async (): Promise<{ dir: Direction; value: Map<string, Pos> }> => {
+      const own = await layoutTables(list, start, run, dir);
+      if (!pane || !(pane.width > 0) || list.length < 2 || list.length > BOTH_WAYS_MAX) return { dir, value: own };
+      const otherDir: Direction = dir === 'RIGHT' ? 'DOWN' : 'RIGHT';
+      const other = await layoutTables(list, start, run, otherDir).catch(() => null);
+      if (!other) return { dir, value: own };
+      return pickLayout(
+        { dir, zoom: fitZoom(list, own, pane.width, pane.height), value: own },
+        { dir: otherDir, zoom: fitZoom(list, other, pane.width, pane.height), value: other },
+      );
+    };
+    // Nothing placed yet (the first tables, or all new ones) is a fresh layout too.
+    const placedNone = list.every(t => !start.has(tableKey(t)));
+    const job = turned || placedNone ? fresh() : layoutTables(list, start, run, laidDir ?? dir).then(value => ({ dir: laidDir ?? dir, value }));
+    job
+      .catch(() => ({ dir: laidDir ?? dir, value: gridFallback(list, settle(list, start)) }))
+      .then(({ dir: used, value: m }) => {
         // A newer layout started (the drawn tables changed again): this result is stale.
         if (!live) return;
+        if (turned) {
+          if (laidOut !== null) { fitted.current = false; savedViewport = null; }
+          laidOut = dir;
+        }
+        laidDir = used;
         const next = new Map<string, Pos>();
         for (const [k, p] of m) {
           // A card dragged while the layout ran stays where the user put it.
@@ -112,7 +171,7 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
         setPos(next);
       });
     return () => { live = false; };
-  }, [shape, run]);
+  }, [shape, run, dir, paneRef]);
 
   const onToggle = useCallback((k: string) => setExpanded(e => ({ ...e, [k]: !e[k] })), []);
   const links = useMemo(() => relationLinks(visible), [visible]);
@@ -246,13 +305,14 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
     return () => window.clearTimeout(t);
   }, [pulse]);
 
-  // Fit once, when the first cards have been measured; afterwards the user's pan and zoom are kept.
+  // Fit once, when the first cards have been measured (and again after the pane turns); afterwards the
+  // user's pan and zoom are kept.
   useEffect(() => {
     if (fitted.current || !initialized || !nodes.length) return;
     fitted.current = true;
     // Never fit smaller than a readable zoom; a large schema is centered and panned from there.
-    rf.fitView({ padding: 0.12, maxZoom: 1, minZoom: 0.45, duration: 0 });
-  }, [initialized, nodes.length, rf]);
+    rf.fitView({ padding: FIT_PADDING, maxZoom: 1, minZoom: 0.45, duration: 0 });
+  }, [initialized, nodes, rf]);
 
   const onNodesChange = useCallback((changes: NodeChange<TableFlowNode>[]) => {
     setNodes(ns => applyNodeChanges(changes, ns));
@@ -264,7 +324,7 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
 
   return (
     <>
-      <div className="sv-canvas">
+      <div className="sv-canvas" ref={paneRef} data-direction={dir ?? undefined}>
         {/* Screen-space dot grid (prototype #gridbg): it stays crisp at every zoom. */}
         <div className="gridbg" aria-hidden="true" />
         <ReactFlow<TableFlowNode, BuiltInEdge>

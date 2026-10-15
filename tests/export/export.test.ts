@@ -5,7 +5,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { HistoryStore } from '../../src/history/store.js';
 import { projectDir } from '../../src/history/paths.js';
-import { buildExport, pathScrubber } from '../../src/export/export.js';
+import { buildExport, pathScrubber, stripCode } from '../../src/export/export.js';
 import { emptyState } from '../../src/shared/state.js';
 import type { ProjectState } from '../../src/shared/state.js';
 import type { ExportPayload } from '../../src/shared/export.js';
@@ -113,6 +113,44 @@ describe('buildExport', () => {
     expect(text).toContain('Edit a.ts');
     const { text: withCode } = decode((await buildExport(root, { home, code: true, uiHtml: UI })).html);
     expect(withCode).toContain('SECRET_NEW');
+  });
+
+  it('code: false reduces shell labels to the command name and removes code from agent text (#20)', async () => {
+    write('a.ts', 'const a = 1;\n');
+    const tool = (id: number, label: string): AgentEvent => ({ ...event(id, 's1'), type: 'tool_start', tool: { name: 'Bash', label, paths: [] } });
+    const said = (id: number, type: AgentEvent['type'], text: string): AgentEvent => ({ ...event(id, 's1'), type, text });
+    const intent = 'Adds `CODE_INLINE()` to a.ts';
+    const c = { ...change(1, 'a.ts'), attribution: { agent: 'claude-code' as const, sessionId: 's1', confidence: 'exact' as const, intent } };
+    await record([file('a.ts')], [
+      { type: 'session', session: { ...session('s1', root), title: 'Fix `CODE_TITLE` now' } },
+      { type: 'agentEvent', event: tool(1, '$ FOO=1 ./node_modules/.bin/vitest run CODE_ARG') },
+      { type: 'agentEvent', event: tool(2, '$ (command touching .env)') },
+      { type: 'agentEvent', event: said(3, 'prompt', 'Please change `CODE_A` here') },
+      { type: 'agentEvent', event: said(4, 'message', 'Done:\n```ts\nconst CODE_B = 1;\n```\nAll set.') },
+      { type: 'agentEvent', event: said(5, 'thinking', 'Maybe ```\nCODE_C unclosed') },
+      { type: 'agentEvent', event: said(6, 'commit', 'Add `a` helper') },
+      { type: 'change', change: c, files: [file('a.ts')], removed: [] },
+      { type: 'attribution', changeId: 1, attribution: { agent: 'claude-code', sessionId: 's1', confidence: 'exact', intent } },
+    ]);
+    const { text, payload } = decode((await buildExport(root, { home, code: false, uiHtml: UI })).html);
+    expect(text).not.toMatch(/CODE_/);
+    const events = plain(payload.messages).flatMap(m => (m.type === 'agentEvent' ? [m.event] : []));
+    expect(events.map(e => e.tool?.label ?? e.text)).toEqual([
+      '$ vitest', '$ (command touching .env)', 'Please change [code removed] here', 'Done:\n[code removed]\nAll set.', 'Maybe [code removed]', 'Add `a` helper',
+    ]);
+    const attributions = plain(payload.messages).flatMap(m => (m.type === 'attribution' ? [m.attribution.intent] : m.type === 'change' ? [m.change.attribution?.intent] : []));
+    expect(attributions).toEqual(['Adds [code removed] to a.ts', 'Adds [code removed] to a.ts']);
+    const { text: withCode } = decode((await buildExport(root, { home, code: true, uiHtml: UI })).html);
+    for (const s of ['CODE_ARG', 'CODE_A', 'CODE_B', 'CODE_C', 'CODE_INLINE', 'CODE_TITLE']) expect(withCode).toContain(s);
+  });
+
+  it('code: false removes code spans from labels of tools other than shell', async () => {
+    write('a.ts', 'const a = 1;\n');
+    const ev: AgentEvent = { ...event(1, 's1'), type: 'tool_start', tool: { name: 'Task', label: 'Subagent: add `LEAK_SPAN()` to a.ts', paths: [] } };
+    await record([file('a.ts')], [{ type: 'agentEvent', event: ev }]);
+    const { text } = decode((await buildExport(root, { home, code: false, uiHtml: UI })).html);
+    expect(text).not.toMatch(/LEAK_/);
+    expect(text).toContain('Subagent: add [code removed] to a.ts');
   });
 
   it('with a session, keeps that session\'s events, its attributed changes, and context within its span', async () => {
@@ -338,5 +376,28 @@ describe('pathScrubber', () => {
 
   it('scrubs keys and nested values', () => {
     expect(posix.value({ '/home/u/app/a.ts': ['/home/u/app', { p: '/home/u/b' }], n: 1 })).toEqual({ 'a.ts': ['app', { p: 'b' }], n: 1 });
+  });
+});
+
+describe('stripCode', () => {
+  const R = '[code removed]';
+  it('removes a fence that contains a shorter inner fence, up to its own closing fence', () => {
+    expect(stripCode('README:\n````md\n```js\nconst LEAK = 1;\n```\n````\nDone.')).toBe(`README:\n${R}\nDone.`);
+  });
+  it('removes tilde fences', () => {
+    expect(stripCode('Try:\n~~~\nLEAK()\n~~~\nok')).toBe(`Try:\n${R}\nok`);
+  });
+  it('removes inline spans of any backtick length', () => {
+    expect(stripCode('Use ``a `LEAK` c`` and `b`.')).toBe(`Use ${R} and ${R}.`);
+  });
+  it('removes an unclosed span to the end of its line, as in a truncated title', () => {
+    expect(stripCode('fix `foo(LEAK')).toBe(`fix ${R}`);
+  });
+  it('removes a fence opened mid-line, and an unclosed one to the end', () => {
+    expect(stripCode('Run ```\nLEAK\n``` then go')).toBe(`Run ${R}\n then go`);
+    expect(stripCode('Maybe ```\nLEAK unclosed')).toBe(`Maybe ${R}`);
+  });
+  it('leaves text without code alone', () => {
+    expect(stripCode('Adds a cancel route.\nNo code here.')).toBe('Adds a cancel route.\nNo code here.');
   });
 });

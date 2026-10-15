@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { toolLabel, toolPaths, patchPaths, redactSecretInput, touchesSecret, outputMentionsSecret, SECRET_COMMAND } from '../../src/agents/labels.js';
+import { describe, it, expect, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { toolLabel, toolPaths, patchPaths, redactSecretInput, touchesSecret, outputMentionsSecret, SECRET_COMMAND, REAL_CACHE_MS } from '../../src/agents/labels.js';
 
 describe('toolLabel', () => {
   it('labels known tools', () => {
@@ -91,6 +94,14 @@ describe('C1: shell commands and outputs that touch secret files', () => {
     expect(outputMentionsSecret('loaded environment.ts')).toBe(false);
     expect(outputMentionsSecret('process.env.KEY')).toBe(false);
   });
+  it('outputMentionsSecret covers credential rc files (#18)', () => {
+    expect(outputMentionsSecret('.npmrc:1://registry.npmjs.org/:_authToken=npm_SECRET')).toBe(true);
+    expect(outputMentionsSecret('cat: /home/u/.netrc')).toBe(true);
+    expect(outputMentionsSecret("'.pypirc' password = x")).toBe(true);
+    expect(outputMentionsSecret('pkg/.npmrc.bak:1:_authToken=x')).toBe(true);
+    expect(outputMentionsSecret('.npmrc.example:1:registry=')).toBe(false);
+    expect(outputMentionsSecret('.pypirc-sample:1:[pypi]')).toBe(false);
+  });
 });
 
 describe('M4: relative paths resolve against cwd', () => {
@@ -112,3 +123,59 @@ describe('review fixes: absolute paths with ..', () => {
   });
 });
 
+
+describe('symlinked project folder (#32)', () => {
+  it('maps paths named through a symlink onto the real root', () => {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-link-')));
+    try {
+      const real = path.join(tmp, 'real', 'app');
+      fs.mkdirSync(path.join(real, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(real, 'src', 'a.ts'), '');
+      fs.mkdirSync(path.join(tmp, 'link'));
+      fs.symlinkSync(real, path.join(tmp, 'link', 'app'), 'dir');
+      const viaLink = path.join(tmp, 'link', 'app');
+      expect(toolPaths('Edit', { file_path: `${viaLink}/src/a.ts` }, real)).toEqual(['src/a.ts']);
+      // A file not created yet still maps through its existing parent.
+      expect(toolPaths('Write', { file_path: `${viaLink}/src/new/b.ts` }, real)).toEqual(['src/new/b.ts']);
+      expect(toolPaths('Edit', { file_path: 'src/a.ts' }, real, viaLink)).toEqual(['src/a.ts']);
+      expect(toolLabel('Read', { file_path: `${viaLink}/src/a.ts` }, real)).toBe('Read src/a.ts');
+      expect(toolPaths('Edit', { file_path: `${tmp}/link/other.ts` }, real)).toEqual([]);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('#40: resolves an outside path once, then answers repeats from the cache', () => {
+    const outside = path.join(os.tmpdir(), `lm-outside-${process.pid}-${Date.now()}`, 'deep', 'missing', 'x.ts');
+    const spy = vi.spyOn(fs, 'realpathSync');
+    try {
+      expect(toolPaths('Read', { file_path: outside }, '/p')).toEqual([]);
+      expect(toolLabel('Read', { file_path: outside }, '/p')).toBe('Read deep/missing/x.ts');
+      const first = spy.mock.calls.length;
+      // Walks down from the longest prefix and stops at the first that exists (the tmp dir).
+      expect(first).toBe(5);
+      spy.mockClear();
+      expect(toolPaths('Read', { file_path: outside }, '/p')).toEqual([]);
+      expect(toolLabel('Read', { file_path: outside }, '/p')).toBe('Read deep/missing/x.ts');
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+  it('#40: sees a symlink created after an earlier lookup missed, once the cache entry expires', () => {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-late-')));
+    vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] });
+    try {
+      const real = path.join(tmp, 'real');
+      fs.mkdirSync(path.join(real, 'src'), { recursive: true });
+      const link = path.join(tmp, 'later');
+      expect(toolPaths('Edit', { file_path: `${link}/src/a.ts` }, real)).toEqual([]);
+      fs.symlinkSync(real, link, 'dir');
+      vi.setSystemTime(Date.now() + REAL_CACHE_MS + 1);
+      expect(toolPaths('Edit', { file_path: `${link}/src/a.ts` }, real)).toEqual(['src/a.ts']);
+    } finally {
+      vi.useRealTimers();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});

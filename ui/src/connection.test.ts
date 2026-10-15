@@ -84,6 +84,26 @@ describe('connect', () => {
     expect(FakeWebSocket.instances.length).toBe(before + 1);
   });
 
+  it('keeps saying reconnecting through every retry, not connecting then reconnecting each backoff', async () => {
+    const { useStore } = await start('?t=k');
+    expect(useStore.getState().connection).toBe('connecting');
+    const seen: string[] = [];
+    const unsub = useStore.subscribe(s => { if (seen[seen.length - 1] !== s.connection) seen.push(s.connection); });
+    for (let i = 0; i < 3; i++) {
+      last().onclose!({ code: 1006 });
+      vi.advanceTimersByTime(5000);
+    }
+    expect(FakeWebSocket.instances).toHaveLength(4);
+    expect(seen).toEqual(['closed']);
+    last().onopen!();
+    expect(useStore.getState().connection).toBe('open');
+    // A later drop starts over: reconnecting until the next socket opens.
+    last().onclose!({ code: 1006 });
+    vi.advanceTimersByTime(500);
+    expect(useStore.getState().connection).toBe('closed');
+    unsub();
+  });
+
   it('forgets a stored key the server rejects, so a reload shows the gate instead of retrying it', async () => {
     await start('?t=stale');
     last().onclose!({ code: 4401 });

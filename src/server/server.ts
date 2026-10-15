@@ -13,7 +13,7 @@ import type { DomainIndex } from '../shared/domain.js';
 import type { HistoryStatus, ServerMessage, UsedByEntry } from '../shared/protocol.js';
 import type { ProjectState } from '../shared/state.js';
 import { RECORDED_TYPES, type HistoryStore } from '../history/store.js';
-import type { AgentEvent, AgentSession, Attribution, ChangeSummary, CodeSymbol, ControlState, FileModel, Lang } from '../shared/types.js';
+import type { AgentEvent, AgentSession, Attribution, ChangeSummary, CodeSymbol, ControlState, FileModel } from '../shared/types.js';
 import { offStatus, type FileSummary, type SummariesState, type SummaryStatus } from '../shared/summaries.js';
 import { changeQualifies } from '../summarize/summarizer.js';
 import { authenticate, hostAllowed, newToken, originAllowed } from './auth.js';
@@ -131,9 +131,6 @@ export function symbolSetHash(file: FileModel): string {
   walk(file.symbols);
   return crypto.createHash('sha1').update(pairs.sort().join('\n')).digest('hex');
 }
-
-/** Config, data and prose: a file of these is not summarized when it is created. */
-const NON_CODE = new Set<Lang>(['other', 'text', 'json', 'yaml', 'toml', 'markdown', 'secret']);
 
 function listen(server: http.Server, port: number): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -343,8 +340,9 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   };
 
   /**
-   * After a change goes out: a one-line summary when it changed a symbol, route or entity, a file summary
-   * for a new code file, and a new file summary when a summarized file's symbol set changed.
+   * After a change goes out: a one-line summary when it changed a symbol, route or entity. File summaries
+   * are written only on request (`/api/summary`, for a file opened in the inspector): an outdated one is
+   * withdrawn, and the inspector asks again; a request still being answered is redone for the new symbols.
    */
   const summarizeAfter = (change: ChangeSummary): void => {
     if (!summarizer) return;
@@ -362,11 +360,12 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
       return;
     }
     const hash = symbolSetHash(file);
-    const known = fileSummaries.get(file.path)?.hash ?? fileJobs.get(file.path);
+    const have = fileSummaries.get(file.path)?.hash;
     // An outdated summary is withdrawn at once, so it never shows as current while (or if) a new one is written.
-    if (fileSummaries.has(file.path) && known !== hash) clearFileSummary(file.path);
-    const wanted = change.kind === 'created' ? !NON_CODE.has(file.lang) : known !== undefined && known !== hash;
-    if (!wanted) return;
+    if (have !== undefined && have !== hash) clearFileSummary(file.path);
+    // Its answer would be dropped as outdated, leaving the request unanswered.
+    const pending = fileJobs.get(file.path);
+    if (pending === undefined || pending === hash) return;
     const r = readText(file.path);
     if ('content' in r) summarizeFile(r.file, r.content);
   };

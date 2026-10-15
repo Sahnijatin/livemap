@@ -69,7 +69,7 @@ describe('livemap init', () => {
     expect(fs.readFileSync(hook, 'utf8')).toBe(fs.readFileSync(path.join(repo, 'dist', 'hook.mjs'), 'utf8'));
     expect(fs.statSync(hook).mode & 0o777).toBe(0o755);
     const cfg = JSON.parse(fs.readFileSync(path.join(root, '.claude/settings.local.json'), 'utf8'));
-    expect(cfg.hooks.Stop[0].hooks[0].command).toBe(`node "${hook}" claude-code Stop`);
+    expect(cfg.hooks.Stop[0].hooks[0].command).toBe(`node '${hook}' claude-code Stop`);
 
     await runToEnd(['init', root, '--agents=claude']);
     expect(exit!.code).toBe(0);

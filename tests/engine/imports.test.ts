@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Lang } from '../../src/shared/types.js';
-import { extractImports, readTsconfigAliases, indexStats, type ImportCtx } from '../../src/engine/imports.js';
+import { extractImports, readTsconfigAliases, indexStats, resolveSpecifier, type ImportCtx } from '../../src/engine/imports.js';
 
 const FILES = ['src/main/java/com/shop.java','src/a.ts','src/lib/b.ts','src/lib/index.ts','src/ui/c.tsx','pkg/__init__.py','pkg/mod.py','pkg/sub/x.py','app/main.py','internal/db/db.go','internal/db/conn.go','src/lib.rs','src/api.rs','src/api/routes.rs','src/main/java/com/shop/Order.java','lib/util.rb','include/geo.h'];
 const set = new Set(FILES);
@@ -21,6 +21,36 @@ describe('extractImports', () => {
     expect(imp('app/main.py','python','from pkg import mod\nfrom pkg.sub import x\nimport requests\nfrom . import nothing').local).toEqual(['pkg/__init__.py','pkg/mod.py','pkg/sub/x.py']);
     expect(imp('app/main.py','python','import requests.auth').external).toEqual(['requests']);
     expect(imp('pkg/mod.py','python','from .sub import x').local).toEqual(['pkg/sub/x.py']);
+  });
+  it('python resolves absolute modules from each ancestor of a nested project, nearest first', () => {
+    const files = ['backend/app/__init__.py','backend/app/main.py','backend/app/models.py','backend/app/api/__init__.py','backend/app/api/users.py','app/models.py'];
+    const has = new Set(files);
+    const py = (path: string, src: string) => extractImports(path, 'python', src, { has: p => has.has(p), files, aliases: [], goModule: null });
+    expect(py('backend/app/main.py', 'from app.models import User\nimport app.api.users\nfrom app.api import users\nimport fastapi'))
+      .toEqual({ local: ['backend/app/api/__init__.py', 'backend/app/api/users.py', 'backend/app/models.py'], external: ['fastapi'] });
+    expect(py('backend/app/api/users.py', 'from app import models').local).toEqual(['backend/app/__init__.py', 'backend/app/models.py']);
+    // A root-level project still resolves from the root.
+    expect(py('main.py', 'from app.models import User').local).toEqual(['app/models.py']);
+  });
+  it('python looks up modules on the import path Python would use, not from inside a package', () => {
+    const files = ['app/views.py', 'app/logging.py', 'app/util.py', 'svc/app/__init__.py', 'svc/app/views.py', 'svc/app/helpers.py', 'svc/helpers.py'];
+    const has = new Set(files);
+    const ctx: ImportCtx = { has: p => has.has(p), files, aliases: [], goModule: null };
+    // app/ is not a package, so it is on the import path of its scripts: as in Python, its logging.py
+    // shadows the standard library module.
+    expect(extractImports('app/views.py', 'python', 'import logging\nimport util\nimport json', ctx))
+      .toEqual({ local: ['app/logging.py', 'app/util.py'], external: ['json'] });
+    // svc/app is a package, so its own directory is not on the import path; its parent svc/ is.
+    expect(extractImports('svc/app/views.py', 'python', 'import helpers', ctx).local).toEqual(['svc/helpers.py']);
+    expect(resolveSpecifier('svc/app/views.py', 'python', 'helpers', ctx)).toBe('svc/helpers.py');
+  });
+  it('python resolves a nested local package named like a stdlib module', () => {
+    const files = ['backend/main.py', 'backend/email/__init__.py', 'backend/email/services.py', 'backend/queue/tasks.py'];
+    const has = new Set(files);
+    const ctx: ImportCtx = { has: p => has.has(p), files, aliases: [], goModule: null };
+    expect(extractImports('backend/main.py', 'python', 'from email.services import send\nimport queue.tasks\nfrom email import services', ctx).local)
+      .toEqual(['backend/email/__init__.py', 'backend/email/services.py', 'backend/queue/tasks.py']);
+    expect(resolveSpecifier('backend/main.py', 'python', 'email.services', ctx)).toBe('backend/email/services.py');
   });
   it('go', () => {
     expect(imp('cmd/main.go','go','import (\n "fmt"\n "shop/internal/db"\n)', { goModule: 'shop' }).local).toEqual(['internal/db/conn.go','internal/db/db.go']);
@@ -53,11 +83,18 @@ describe('extractImports', () => {
 
 describe('readTsconfigAliases', () => {
   it('tolerates comments and trailing commas', () => {
-    expect(readTsconfigAliases('{ // c\n "compilerOptions": { "baseUrl": ".", "paths": { "@app/*": ["src/app/*"], }, } }')).toEqual([['@app',['src/app']]]);
+    expect(readTsconfigAliases('{ // c\n "compilerOptions": { "baseUrl": ".", "paths": { "@app/*": ["src/app/*"], }, } }')).toEqual([['@app',['src/app']],['*',['']]]);
   });
   it('applies baseUrl and returns [] on junk', () => {
-    expect(readTsconfigAliases('{"compilerOptions":{"baseUrl":"./src","paths":{"~/*":["./x/*"]}}}')).toEqual([['~',['src/x']]]);
+    expect(readTsconfigAliases('{"compilerOptions":{"baseUrl":"./src","paths":{"~/*":["./x/*"]}}}')).toEqual([['~',['src/x']],['*',['src']]]);
+    expect(readTsconfigAliases('{"compilerOptions":{"paths":{"~/*":["./x/*"]}}}')).toEqual([['~',['x']]]);
+    expect(readTsconfigAliases('{"compilerOptions":{}}')).toEqual([]);
     expect(readTsconfigAliases('nope')).toEqual([]);
+  });
+  it('turns baseUrl alone and a "*" path into one wildcard entry, paths first', () => {
+    expect(readTsconfigAliases('{"compilerOptions":{"baseUrl":"src"}}')).toEqual([['*',['src']]]);
+    expect(readTsconfigAliases('{"compilerOptions":{"paths":{"*":["src/*","types/*"]}}}')).toEqual([['*',['src','types']]]);
+    expect(readTsconfigAliases('{"compilerOptions":{"baseUrl":".","paths":{"*":["src/*"]}}}')).toEqual([['*',['src','']]]);
   });
 });
 
@@ -107,6 +144,52 @@ describe('indexing and fixes', () => {
     imp('src/cache.ts', 'typescript', v1);
     imp('src/cache.ts', 'typescript', v1);
     expect(indexStats.jsParses - before).toBe(2);
+  });
+  it('resolves bare specifiers against baseUrl and a "*" path only when the file exists', () => {
+    for (const json of ['{"compilerOptions":{"baseUrl":"src"}}', '{"compilerOptions":{"paths":{"*":["src/*"]}}}']) {
+      const aliases = readTsconfigAliases(json);
+      expect(imp('src/ui/c.tsx', 'typescript', "import u from 'a'; import b from 'lib/b'; import l from 'lib'; import r from 'react'; import d from '@scope/x/deep'", { aliases }))
+        .toEqual({ local: ['src/a.ts', 'src/lib/b.ts', 'src/lib/index.ts'], external: ['react', '@scope/x'] });
+    }
+    // Explicit paths still win over the wildcard.
+    const aliases = readTsconfigAliases('{"compilerOptions":{"baseUrl":".","paths":{"lib/*":["src/lib/*"]}}}');
+    expect(imp('src/a.ts', 'typescript', "import b from 'lib/b'; import p from 'pkg/mod'", { aliases })).toEqual({ local: ['src/lib/b.ts'], external: ['pkg'] });
+  });
+  it('ignores import-like text inside strings and templates but keeps real specifiers', () => {
+    const src = "const s = \"import x from 'lodash'\";\nconst t = `export * from 'chalk'; require('fs-extra')`;\nconst q = 'import(\"zod\")';\n"
+      + "import y from './lib'; export { b } from \"./lib/b\";\nconst r = require('react'); const m = await import('./ui/c');\nconst esc = 'it\\'s import a from \"vue\"';\n";
+    expect(imp('src/a.ts', 'typescript', src)).toEqual({ local: ['src/lib/b.ts', 'src/lib/index.ts', 'src/ui/c.tsx'], external: ['react'] });
+    expect(imp('src/a.ts', 'typescript', "import a from 'react' // import b from 'vue'\n/* 'x' */ import c from \"preact\"")).toEqual({ local: [], external: ['react', 'preact'] });
+  });
+  it('keeps imports after a stray quote that opens no real string', () => {
+    const after = "\nimport y from './lib';\nimport {\n  b,\n} from './lib/b';\nexport * from 'vue';\n";
+    const want = { local: ['src/lib/b.ts', 'src/lib/index.ts'], external: ['vue'] };
+    expect(imp('src/a.ts', 'typescript', "const re = /`/; const q = /[/'\"]/g; const half = a / 2 / b;" + after)).toEqual(want);
+    expect(imp('src/a.ts', 'typescript', "const tick = c => /`/.test(c);" + after)).toEqual(want);
+    // A JSX closing tag is not a regex: the template after it is read as one.
+    expect(imp('src/a.tsx', 'tsx', after + "const P = () => <div><p>x</p>{`a/b`}</div>;\nconst m = require('./ui/c');\nconst v = `ok`;\n"))
+      .toEqual({ ...want, local: [...want.local, 'src/ui/c.tsx'] });
+    // A raw backtick in JSX text opens a template to the next backtick; imports come first in a module.
+    expect(imp('src/a.tsx', 'tsx', after + 'const P = () => <p>Don`t</p>;\nconst m = require("./lib");\n')).toEqual(want);
+    expect(imp('src/a.tsx', 'tsx', "const P = () => <p>Don't</p>;" + after)).toEqual(want);
+    // A regex body is not code, and a template still hides import-like text that does not start a line.
+    expect(imp('src/a.ts', 'typescript', "const r = /import x from 'lodash'/;\nconst t = `a\n  b; import z from 'chalk'`;" + after)).toEqual(want);
+  });
+  it('reads no imports from a code-generation template, and keeps the code after it', () => {
+    const src = "const out = `import { x } from './generated';\nexport * from './gen2';\n`;\nconst a = require('./lib');\nconst b = await import('vue');\n";
+    expect(imp('src/a.ts', 'typescript', src)).toEqual({ local: ['src/lib/index.ts'], external: ['vue'] });
+  });
+  it('reads a specifier on its own line after from', () => {
+    expect(imp('src/a.ts', 'typescript', "import { b } from\n                              './lib/b';\nimport * as v from 'vue';\n")).toEqual({ local: ['src/lib/b.ts'], external: ['vue'] });
+  });
+  it('reads a named import of any length', () => {
+    const names = Array.from({ length: 400 }, (_, i) => `  Icon${i},`).join('\n');
+    expect(imp('src/a.ts', 'typescript', `import {\n${names}\n} from './lib/b';\n`).local).toEqual(['src/lib/b.ts']);
+  });
+  it('stays fast on a long run of import keywords with no quote', () => {
+    const t = Date.now();
+    imp('src/a.ts', 'typescript', 'import '.repeat(300_000) + "\nimport a from 'vue';\n");
+    expect(Date.now() - t).toBeLessThan(2000);
   });
   it('prefers the longest alias prefix', () => {
     expect(imp('src/a.ts','typescript',`import b from '@a/lib/b'`, { aliases: [['@a',['nowhere']],['@a/lib',['src/lib']]] }).local).toEqual(['src/lib/b.ts']);

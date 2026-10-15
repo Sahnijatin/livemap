@@ -88,24 +88,74 @@ function indexOf(ctx: ImportCtx): FileIndex {
   return idx;
 }
 
-function stripJsComments(src: string): string {
+const blank = (s: string): string => s.replace(/[^\n]/g, ' ');
+
+/** Code after which a `/` starts a regex literal rather than a division. */
+const REGEX_AFTER = new Set(['', '=', '(', ',', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '~', '^']);
+/** Whether the `>` before `i` (past spaces) ends an arrow `=>`, after which `/` starts a regex; a JSX `</p>` does not. */
+function afterArrow(src: string, i: number): boolean {
+  let k = i - 1;
+  while (k > 0 && (src[k] === ' ' || src[k] === '\t')) k--;
+  return src[k] === '>' && src[k - 1] === '=';
+}
+const REGEX_KEYWORD = /\b(?:return|typeof|case|void|yield|await|in|of|delete|instanceof)$/;
+
+/** End of the regex literal opening at `i` (past its closing `/`), or -1 when the line does not close one. */
+function regexEnd(src: string, i: number): number {
+  let cls = false;
+  for (let j = i + 1; j < src.length && src[j] !== '\n'; j++) {
+    const c = src[j];
+    if (c === '\\') j++;
+    else if (c === '[') cls = true;
+    else if (c === ']') cls = false;
+    else if (c === '/' && !cls) return j + 1;
+  }
+  return -1;
+}
+
+/**
+ * `src` with comments and the bodies of string, template and regex literals blanked (quotes and newlines
+ * kept), so offsets still match `src`: statements are matched here and their specifiers read back from `src`.
+ * A stray quote or backtick in a regex must not hide the imports after it: a quoted string ends at its line's
+ * end and regex literals are skipped. (A raw backtick in JSX text still opens a template to the next one.)
+ */
+function blankJs(src: string): string {
   let out = '';
   let i = 0;
+  // The last code character on this line ('' at a line start), to tell a regex from a division.
+  let prev = '';
+  // Set when a `/` opened no regex: the rest of the line is not read for one again, keeping long lines linear.
+  let divisions = false;
   while (i < src.length) {
     const c = src[i];
     if (c === '"' || c === "'" || c === '`') {
       let j = i + 1;
-      while (j < src.length && src[j] !== c && (c === '`' || src[j] !== '\n')) j += src[j] === '\\' ? 2 : 1;
-      out += src.slice(i, j + 1);
-      i = j + 1;
-    } else if (c === '/' && src[i + 1] === '/') {
-      while (i < src.length && src[i] !== '\n') i++;
-    } else if (c === '/' && src[i + 1] === '*') {
-      const end = src.indexOf('*/', i + 2);
-      const stop = end === -1 ? src.length : end + 2;
-      out += src.slice(i, stop).replace(/[^\n]/g, ' ');
+      let closed = false;
+      for (; j < src.length; j += src[j] === '\\' ? 2 : 1) {
+        if (src[j] === c) { closed = true; break; }
+        if (src[j] === '\n' && c !== '`') break;
+      }
+      j = Math.min(j, src.length);
+      out += c + blank(src.slice(i + 1, j)) + (closed ? c : '');
+      i = closed ? j + 1 : j;
+      prev = c;
+    } else if (c === '/' && (src[i + 1] === '/' || src[i + 1] === '*')) {
+      const end = src[i + 1] === '/' ? src.indexOf('\n', i) : src.indexOf('*/', i + 2);
+      const stop = end === -1 ? src.length : src[i + 1] === '/' ? end : end + 2;
+      out += blank(src.slice(i, stop));
       i = stop;
-    } else { out += c; i++; }
+    } else if (c === '/' && !divisions && (REGEX_AFTER.has(prev) || (prev === '>' && afterArrow(src, i)) || (/[\w$]/.test(prev) && REGEX_KEYWORD.test(src.slice(Math.max(0, i - 12), i).trimEnd())))) {
+      const end = regexEnd(src, i);
+      if (end < 0) { out += c; i++; prev = c; divisions = true; continue; }
+      out += '/' + blank(src.slice(i + 1, end - 1)) + '/';
+      i = end;
+      prev = ')';
+    } else {
+      out += c;
+      i++;
+      if (c === '\n') { prev = ''; divisions = false; }
+      else if (c !== ' ' && c !== '\t' && c !== '\r') prev = c;
+    }
   }
   return out;
 }
@@ -131,16 +181,60 @@ function jsSpecs(path: string, src: string, cache: ImportCtx['specCache']): stri
   return specs;
 }
 
+const STATIC_HEAD = /\b(?:import|export)\s+(?:type\s+)?/g;
+/** Whether `from` (after a space or `}`) ends the clause before `stop`, past any whitespace. */
+function endsWithFrom(bare: string, stop: number): boolean {
+  let j = stop - 1;
+  while (j >= 0 && /\s/.test(bare[j])) j--;
+  return j >= 4 && bare.slice(j - 3, j + 1) === 'from' && /[\s}*]/.test(bare[j - 4]);
+}
+
+/**
+ * Specifiers of static `import ... from 'x'`, `import 'x'` and `export ... from 'x'` statements, of any length
+ * (a barrel import may name hundreds of bindings). The clause runs to the first quote or `;`; that position
+ * is found once per stretch of text, so the scan stays linear even on a long run of `import` with no quote.
+ */
+function staticSpecs(src: string, bare: string, out: string[]): void {
+  let stop = -1;
+  let fromTail = false;
+  let skip = 0;
+  for (const m of bare.matchAll(STATIC_HEAD)) {
+    if (m.index < skip) continue;
+    const from = m.index + m[0].length;
+    if (stop < from) {
+      stop = from;
+      while (stop < bare.length && bare[stop] !== "'" && bare[stop] !== '"' && bare[stop] !== ';') stop++;
+      // Every head before this quote shares the clause's end, so its `from` is checked once.
+      fromTail = endsWithFrom(bare, stop);
+    }
+    if (stop >= bare.length || bare[stop] === ';') continue;
+    // `import 'x'` (nothing between) or `import ... from 'x'`.
+    if (from !== stop && !fromTail) continue;
+    const close = bare.indexOf(bare[stop], stop + 1);
+    if (close < 0) continue;
+    const spec = src.slice(stop + 1, close);
+    if (spec.trim() && !spec.includes('\n')) out.push(spec);
+    skip = close + 1;
+  }
+}
+
 function parseJsSpecs(src: string): string[] {
   indexStats.jsParses++;
   const out: string[] = [];
+  // Text inside other strings (`"import x from 'y'"`) is blank, so only real statements match.
+  const bare = blankJs(src);
+  staticSpecs(src, bare, out);
   const patterns = [
-    /\b(?:import|export)\s+(?:type\s+)?(?:[^'";]*?\s+from\s+)?['"]([^'"\n]+)['"]/g,
-    /\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g,
-    /\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g,
+    /\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)/dg,
+    /\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*\)/dg,
   ];
-  const clean = stripJsComments(src);
-  for (const re of patterns) for (const m of clean.matchAll(re)) out.push(m[1]);
+  for (const re of patterns) {
+    for (const m of bare.matchAll(re)) {
+      const [start, end] = m.indices![1];
+      const spec = src.slice(start, end);
+      if (spec.trim()) out.push(spec);
+    }
+  }
   return out;
 }
 
@@ -169,7 +263,9 @@ function resolveJs(dir: string, spec: string, ctx: ImportCtx): JsTarget {
   if (spec.startsWith('./') || spec.startsWith('../') || spec === '.' || spec === '..') {
     return { local: resolveJsPath(join(dir, spec), ctx) };
   }
+  let any: string[] = [];
   for (const [prefix, targets] of longestFirst(ctx.aliases)) {
+    if (prefix === '*') { any = targets; continue; }
     if (spec !== prefix && !spec.startsWith(prefix + '/')) continue;
     const rest = spec.slice(prefix.length).replace(/^\//, '');
     for (const t of targets) {
@@ -187,6 +283,11 @@ function resolveJs(dir: string, spec: string, ctx: ImportCtx): JsTarget {
     return { local: null };
   }
   if (spec.startsWith('/') || /^[a-z]+:\/\//i.test(spec)) return { local: null };
+  // `baseUrl` and a `"*"` path: a bare specifier is a project file only when one exists there.
+  for (const t of any) {
+    const r = resolveJsPath(join(t, spec), ctx);
+    if (r) return { local: r };
+  }
   return { external: packageName(spec) };
 }
 
@@ -205,10 +306,21 @@ function pyModule(base: string, ctx: ImportCtx): string | null {
   return null;
 }
 
-/** Candidate directories for a dotted module: relative to `dir` (rel leading dots) or to the roots. */
-function pyBases(dir: string, mod: string, rel: number): string[] {
+
+/**
+ * Candidate directories for a dotted module, in order: relative to `dir` (rel leading dots), or, for an
+ * absolute module, each ancestor of the importing file nearest first that is not itself a package (a
+ * project nested under `backend/` or `services/ml/` runs with its own directory on the import path, while
+ * inside a package Python 3 has no implicit relative imports), then the root and `src`. As in Python, a
+ * project file on that path named like a standard library module (`logging.py`) shadows it.
+ */
+function pyBases(dir: string, mod: string, rel: number, ctx: ImportCtx): string[] {
   const p = mod.replace(/\./g, '/');
-  return rel > 0 ? [join(dir, ...Array(rel - 1).fill('..'), p)] : ['', 'src'].map(r => join(r, p));
+  if (rel > 0) return [join(dir, ...Array(rel - 1).fill('..'), p)];
+  const out: string[] = [];
+  if (mod) for (let d = dir; d; d = parentDir(d)) if (!ctx.has(join(d, '__init__.py'))) out.push(join(d, p));
+  for (const r of ['', 'src']) out.push(join(r, p));
+  return out;
 }
 
 /** The module file at a base; an empty module (`from . import x`) is the package's `__init__.py`. */
@@ -219,17 +331,15 @@ function pyTarget(base: string, mod: string, ctx: ImportCtx): string | null {
 
 function pythonImports(path: string, src: string, ctx: ImportCtx, local: Set<string>, external: Set<string>): void {
   const dir = parentDir(path);
+  // The first base holding the module or one of the imported submodules wins, as on Python's import path.
   const add = (mod: string, names: string[], rel: number): boolean => {
-    let found = false;
-    for (const b of pyBases(dir, mod, rel)) {
-      const m = pyTarget(b, mod, ctx);
-      if (m) { local.add(m); found = true; }
-      for (const n of names) {
-        const s = pyModule(join(b, n), ctx);
-        if (s) { local.add(s); found = true; }
-      }
+    for (const b of pyBases(dir, mod, rel, ctx)) {
+      const hits = [pyTarget(b, mod, ctx), ...names.map(n => pyModule(join(b, n), ctx))].filter((h): h is string => !!h);
+      if (!hits.length) continue;
+      for (const h of hits) local.add(h);
+      return true;
     }
-    return found;
+    return false;
   };
   for (const m of src.matchAll(/^[ \t]*from[ \t]+(\.*)([\w.]*)[ \t]+import[ \t]+(\([^)]*\)|[^\n#]*)/gm)) {
     const rel = m[1].length;
@@ -404,12 +514,7 @@ export function resolveSpecifier(from: string, lang: Lang, spec: string, ctx: Im
     case 'python': {
       const m = /^(\.*)([\w.]*)$/.exec(spec);
       if (!m) return null;
-      const rel = m[1].length;
-      // An absolute module also resolves from each ancestor of the importing file, nearest first: a project
-      // nested under `backend/` or `services/ml/` runs with its own directory on the import path.
-      const ancestors: string[] = [];
-      if (rel === 0 && m[2]) for (let d = dir; d; d = posix.dirname(d) === '.' ? '' : posix.dirname(d)) ancestors.push(join(d, m[2].replace(/\./g, '/')));
-      for (const b of [...ancestors, ...pyBases(dir, m[2], rel)]) {
+      for (const b of pyBases(dir, m[2], m[1].length, ctx)) {
         const hit = pyTarget(b, m[2], ctx);
         if (hit) return hit;
       }
@@ -442,20 +547,28 @@ function stripJsonc(text: string): string {
   return out.replace(/,(\s*[}\]])/g, '$1');
 }
 
-/** Alias prefix to target directories from tsconfig/jsconfig `compilerOptions.paths` (with `baseUrl` applied). */
+/**
+ * Alias prefix to target directories from tsconfig/jsconfig `compilerOptions.paths` (with `baseUrl` applied).
+ * A `"*"` path and `baseUrl` itself become one `*` entry (paths targets first), tried for any bare specifier.
+ */
 export function readTsconfigAliases(json: string): [string, string[]][] {
   try {
     const cfg = JSON.parse(stripJsonc(json)) as { compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> } };
     const opts = cfg.compilerOptions;
-    if (!opts?.paths) return [];
-    const baseUrl = typeof opts.baseUrl === 'string' ? opts.baseUrl : '';
+    const hasBase = typeof opts?.baseUrl === 'string';
+    if (!opts || (!opts.paths && !hasBase)) return [];
+    const baseUrl = hasBase ? opts.baseUrl! : '';
     const out: [string, string[]][] = [];
-    for (const [key, values] of Object.entries(opts.paths)) {
+    const any: string[] = [];
+    for (const [key, values] of Object.entries(opts.paths ?? {})) {
       if (!Array.isArray(values)) continue;
       const prefix = key.replace(/\/\*$/, '');
-      const targets = values.filter((v): v is string => typeof v === 'string').map(v => join(baseUrl, v.replace(/\/\*$/, '')));
-      out.push([prefix, targets]);
+      const targets = values.filter((v): v is string => typeof v === 'string').map(v => join(baseUrl, v.replace(/\/?\*$/, '')));
+      if (prefix === '*') any.push(...targets);
+      else out.push([prefix, targets]);
     }
+    if (hasBase) any.push(join(baseUrl));
+    if (any.length) out.push(['*', [...new Set(any)]]);
     return out;
   } catch {
     return [];

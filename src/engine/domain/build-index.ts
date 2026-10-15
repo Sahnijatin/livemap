@@ -1,5 +1,6 @@
 import type { ApiRoute, DomainIndex, EnvVar, Table } from '../../shared/domain.js';
 import type { Dep, Entity, FileModel, Lang, Route } from '../../shared/types.js';
+import { parseVersionCatalog, resolveCatalogDeps } from './deps.js';
 import { isEnvTemplate } from './env.js';
 import { detectStack } from './stack.js';
 import { defaultExport, filePath } from './util.js';
@@ -275,6 +276,21 @@ function buildEnv(files: FileModel[]): EnvVar[] {
   return [...vars.values()].sort((a, b) => cmp(a.name, b.name));
 }
 
+/** The Gradle version catalog nearest a build file: `gradle/libs.versions.toml` in its directory or an ancestor's. */
+function versionCatalog(file: string, contents: (p: string) => string | null, seen: Map<string, ReturnType<typeof parseVersionCatalog> | null>): ReturnType<typeof parseVersionCatalog> | null {
+  const segs = file.split('/').slice(0, -1);
+  for (let n = segs.length; n >= 0; n--) {
+    const path = [...segs.slice(0, n), 'gradle', 'libs.versions.toml'].join('/');
+    if (!seen.has(path)) {
+      const text = contents(path);
+      seen.set(path, text === null ? null : parseVersionCatalog(text));
+    }
+    const hit = seen.get(path);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 /** The project-wide domain index: mounted routes, merged tables, table references, stack, deps, scripts and env. */
 export function buildDomainIndex(input: FileModel[], contents: (p: string) => string | null, cache?: DataRefCache): DomainIndex {
   const files = [...input].sort((a, b) => cmp(a.path, b.path));
@@ -282,9 +298,12 @@ export function buildDomainIndex(input: FileModel[], contents: (p: string) => st
   const tables = buildTables(files);
   const deps: (Dep & { file: string })[] = [];
   const scripts: DomainIndex['scripts'] = [];
+  const catalogs = new Map<string, ReturnType<typeof parseVersionCatalog> | null>();
   for (const f of files) {
     if (!f.deps) continue;
-    for (const d of f.deps.deps) deps.push({ ...d, file: f.path });
+    const own = f.deps.deps.some(d => d.eco === 'maven' && d.name.startsWith('libs.'))
+      ? resolveCatalogDeps(f.deps.deps, versionCatalog(f.path, contents, catalogs)) : f.deps.deps;
+    for (const d of own) deps.push({ ...d, file: f.path });
     for (const [name, command] of Object.entries(f.deps.scripts ?? {})) scripts.push({ file: f.path, name, command });
   }
   const env = buildEnv(files);
