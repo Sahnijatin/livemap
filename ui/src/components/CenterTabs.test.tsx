@@ -8,6 +8,9 @@ import { useStore } from '../store';
 import { emptyDomain, file } from '../fixtures';
 import { CenterTabs } from './CenterTabs';
 
+// Warm the lazy Stack chunk so the tests below do not wait on its first load.
+await import('./StackView');
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 let host: HTMLDivElement;
@@ -104,10 +107,10 @@ describe('CenterTabs', () => {
     expect(host.querySelector('.c-head .c-tools')).toBeNull();
   });
 
-  it('shows the Stack view on the Stack tab', () => {
+  it('shows the Stack view on the Stack tab', async () => {
     mount();
-    act(() => tab('stack').click());
-    expect(host.querySelector('.stackv')).not.toBeNull();
+    await act(async () => { tab('stack').click(); });
+    await vi.waitFor(() => expect(host.querySelector('.stackv')).not.toBeNull());
   });
 });
 
@@ -117,9 +120,9 @@ describe('CenterTabs transitions', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
-  it('switching tabs renders the new panel at once and removes the old one after its exit', () => {
+  it('switching tabs renders the new panel at once and removes the old one after its exit', async () => {
     mount();
-    act(() => tab('stack').click());
+    await act(async () => { tab('stack').click(); });
     // Both are on screen during the cross-fade, but only the new one is reachable.
     expect(views()).toHaveLength(2);
     expect(live()).toHaveLength(1);

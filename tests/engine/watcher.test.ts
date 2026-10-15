@@ -287,6 +287,77 @@ describe('Watcher', () => {
     await waitFor(() => changes.some(c => c.change.path === 'gen/src/out.ts' && c.change.kind === 'modified'), 4000);
   });
 
+  it('un-ignoring a directory of 50 files reads each file once', async () => {
+    put('.gitignore', 'gen/\n');
+    for (let i = 0; i < 50; i++) put(`gen/f${i}.ts`, `export const v${i} = ${i};\n`);
+    await startWatcher();
+    const reads = new Map<string, number>();
+    const read = (model as unknown as { read: (rel: string) => Promise<unknown> }).read.bind(model);
+    vi.spyOn(model as unknown as { read: (rel: string) => Promise<unknown> }, 'read').mockImplementation(rel => {
+      reads.set(rel, (reads.get(rel) ?? 0) + 1);
+      return read(rel);
+    });
+    put('.gitignore', '# nothing ignored\n');
+    await waitFor(() => model.get('gen/f49.ts') !== undefined);
+    await sleep(800); // let chokidar's crawl of gen/ report its adds
+    for (let i = 0; i < 50; i++) expect(reads.get(`gen/f${i}.ts`)).toBe(1);
+    // The skip is not sticky: re-creating an indexed path later is read.
+    fs.rmSync(path.join(root, 'gen/f0.ts'));
+    await waitFor(() => model.get('gen/f0.ts') === undefined, 4000);
+    put('gen/f0.ts', 'export const again = 1;\n');
+    await waitFor(() => model.get('gen/f0.ts') !== undefined, 4000);
+    expect(reads.get('gen/f0.ts')).toBeGreaterThan(1);
+  });
+
+  // Un-ignores gen/ and runs `after` right after the reload returns, before its crawl adds are processed.
+  async function unignoreThen(after: () => void): Promise<void> {
+    put('.gitignore', 'gen/\n');
+    put('gen/a.ts', 'export const a = 1;\n');
+    put('gen/b.ts', 'export const b = 1;\n');
+    await startWatcher();
+    const reload = model.reloadIgnores.bind(model);
+    vi.spyOn(model, 'reloadIgnores').mockImplementation(async (...a) => { const r = await reload(...a); after(); return r; });
+    put('.gitignore', '# nothing ignored\n');
+    await waitFor(() => model.get('gen/a.ts') !== undefined && model.get('gen/b.ts') !== undefined);
+    await sleep(800);
+  }
+
+  it('an edit between the reload read and the crawl add is read, not skipped', async () => {
+    await unignoreThen(() => put('gen/a.ts', 'export const a = 1;\nexport function v2() {}\n'));
+    expect(model.get('gen/a.ts')!.symbols.map(s => s.name)).toContain('v2');
+  });
+
+  it('a path deleted after the reload does not leave a skip that hides its re-creation', async () => {
+    let mtime = 0;
+    await unignoreThen(() => {
+      mtime = fs.statSync(path.join(root, 'gen/b.ts')).mtimeMs;
+      fs.rmSync(path.join(root, 'gen/b.ts'));
+    });
+    await waitFor(() => model.get('gen/b.ts') === undefined, 4000);
+    // Same size and mtime as the reload saw: only a consumed entry lets this be read.
+    put('gen/b.ts', 'export const b = 2;\n');
+    fs.utimesSync(path.join(root, 'gen/b.ts'), mtime / 1000, mtime / 1000);
+    await waitFor(() => model.get('gen/b.ts') !== undefined, 4000);
+    expect(errors).toEqual([]);
+  });
+
+  it('a reload whose rescan also throws still emits reset', async () => {
+    put('.gitignore', 'gen/\n');
+    const w = await startWatcher();
+    const resets: number[] = [];
+    w.on('reset', () => resets.push(1));
+    vi.spyOn(model, 'reloadIgnores').mockRejectedValue(new Error('reload failed'));
+    vi.spyOn(model, 'scan').mockRejectedValue(new Error('scan failed'));
+    put('.gitignore', '# nothing\n');
+    await waitFor(() => resets.length >= 1);
+    expect(errors.map(e => e.message)).toEqual(['reload failed', 'scan failed']);
+  });
+
+  it('start() on a started watcher throws', async () => {
+    const w = await startWatcher();
+    expect(() => w.start()).toThrow('watcher already started');
+  });
+
   it('several .gitignore edits at once reload the rules once', async () => {
     for (let i = 0; i < 5; i++) put(`p${i}/.gitignore`, 'tmp/\n');
     const w = await startWatcher();

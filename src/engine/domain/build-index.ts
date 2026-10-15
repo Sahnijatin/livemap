@@ -146,11 +146,11 @@ function buildTables(files: FileModel[]): Table[] {
   const tables: Table[] = [];
   for (const g of groups.values()) {
     const head = g[0].e;
-    // Fields by lowercased name, in order; `orm` marks fields an ORM model declares (migrations never remove those).
+    // Fields by lowercased column (or name), in order; `orm` marks fields an ORM model declares (migrations never remove those).
     const byName = new Map<string, { field: Table['fields'][number]; orm: boolean }>();
     for (const { e, file } of g) {
       for (const fd of e.fields) {
-        const k = fd.name.toLowerCase();
+        const k = (fd.column ?? fd.name).toLowerCase();
         if (!byName.has(k)) byName.set(k, { field: { ...fd, file }, orm: isOrm(e) });
       }
       for (const d of e.dropped ?? []) {

@@ -77,6 +77,8 @@ function prisma(rel: string, text: string): Entity[] {
       const relation = /@relation\s*\(([^)\n]*)\)/.exec(ln);
       const isRelation = tables.has(base) || !!relation;
       const f: Field = { name, type: base + (list ? '[]' : ''), line: lineAt(text, at + m[0].length - m[0].trimStart().length) };
+      const col = /@map\s*\(\s*(?:name\s*:\s*)?"([^"\n]*)"/.exec(ln);
+      if (col && col[1] !== name) f.column = col[1];
       if (/(?<!@)@id\b/.test(sl)) { f.pk = true; f.required = true; }
       if (/@unique\b/.test(sl)) f.unique = true;
       if (!opt && !list && !isRelation) f.required = true;

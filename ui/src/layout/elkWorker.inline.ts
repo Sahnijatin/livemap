@@ -1,4 +1,12 @@
-import ElkWorker from './elk.worker.ts?worker&inline';
+import source from 'elkjs/lib/elk-worker.min.js?raw';
 
-/** The ELK layout worker inlined into the page, for the single-file export (no worker file to load). */
-export const createElkWorker = (): Worker => new ElkWorker();
+let url: string | undefined;
+
+/**
+ * The ELK layout worker inlined into the page, for the single-file export (no worker file to load):
+ * elkjs's worker script as plain text, run from a Blob URL (smaller than a base64 data URL).
+ */
+export const createElkWorker = (): Worker => {
+  url ??= URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+  return new Worker(url);
+};

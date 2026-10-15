@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { DomainIndex } from '@shared/domain.js';
-import { useStore, MAX_CHANGES, MAX_EVENTS, CENTER_TABS, loadTab, depKey, tableKey, fieldKey, routeBaseKey, liveGeneration } from './store';
+import { useStore, liveGeneration, MAX_CHANGES, MAX_EVENTS, CENTER_TABS, loadTab, depKey, tableKey, fieldKey, routeBaseKey } from './store';
 import { LARGE_PROJECT } from './map/mapModel';
 import { file, change, event, session, emptyDomain } from './fixtures';
 import { restHistorySource, setHistorySource, type HistorySource } from './history';
@@ -100,6 +100,21 @@ describe('store.apply', () => {
     expect(useStore.getState().expanded['a.ts']).toBe(false);
     s.setFilter('order');
     expect(useStore.getState().filter).toBe('order');
+  });
+
+  it('agentEvents appends a batch in one state update and keeps the last 2,000 events', () => {
+    const s = useStore.getState();
+    s.apply(hello());
+    for (let i = 1; i <= 1900; i++) s.apply({ type: 'agentEvent', event: event({ id: i, type: 'message', text: `m${i}` }) });
+    let updates = 0;
+    const unsub = useStore.subscribe(() => updates++);
+    s.apply({ type: 'agentEvents', events: Array.from({ length: 300 }, (_, i) => event({ id: 1901 + i, type: 'message', text: `m${1901 + i}` })) });
+    unsub();
+    expect(updates).toBe(1);
+    const st = useStore.getState();
+    expect(st.events).toHaveLength(2000);
+    expect(st.events[0].id).toBe(201);
+    expect(st.events[1999].id).toBe(2200);
   });
 
   it('agentEvent appends and keeps the last 2,000 events', () => {
@@ -395,6 +410,12 @@ describe('history and rewind', () => {
     s.apply({ type: 'summaryStatus', status: { ...ready, state: 'working' } });
     s.apply({ type: 'fileSummary', path: 'a.ts', hash: 'h3', summary: 'Later' });
     expect(useStore.getState().summaries).toEqual({ status: { ...ready, state: 'working' }, files: {} });
+  });
+
+  it('backToLive bumps the live generation even when not rewound, dropping a queued seek', async () => {
+    const before = liveGeneration();
+    await useStore.getState().backToLive();
+    expect(liveGeneration()).toBeGreaterThan(before);
   });
 
   it('backToLive keeps a summarizer status that arrived while it waited', async () => {

@@ -160,6 +160,40 @@ describe('POST /hook', () => {
     expect(ofType(c, 'session').at(-1)!.session).toMatchObject({ id: 'c1', agent: 'codex', title: 'Add a widget' });
   });
 
+  it('a transcript tailer batch of 300 events is broadcast as one agentEvents message', async () => {
+    const s = await boot();
+    const c = connect(s);
+    await waitFor(() => c.msgs.length >= 1);
+    const batch = Array.from({ length: 300 }, (_, i) => ({ agent: 'claude-code' as const, sessionId: 'cl1', at: 1000 + i, type: 'message' as const, text: `m${i}` }));
+    hub!.ingestRaw(batch, { agent: 'claude-code', cwd: root, transcriptPath: '/t/cl1.jsonl', hooks: false });
+    await waitFor(() => ofType(c, 'agentEvents').length >= 1);
+    await sleep(50);
+    expect(ofType(c, 'agentEvents')).toHaveLength(1);
+    expect(ofType(c, 'agentEvent')).toHaveLength(0);
+    expect(ofType(c, 'agentEvents')[0].events.map(e => e.text)).toEqual(batch.map(e => e.text));
+    const h = await hello(s);
+    expect(h.events).toHaveLength(300);
+  });
+
+  it('an attribution a batch triggers is broadcast after that batch', async () => {
+    const s = await boot();
+    const c = connect(s);
+    await waitFor(() => c.msgs.length >= 1);
+    put(root, 'src/a.ts', 'export const a = 5;\n');
+    await waitFor(() => ofType(c, 'change').length >= 1);
+    expect(ofType(c, 'change')[0].change.attribution).toBeUndefined();
+    const at = Date.now();
+    hub!.ingestRaw([
+      { agent: 'claude-code', sessionId: 'cl1', at, type: 'message', text: 'Editing a' },
+      { agent: 'claude-code', sessionId: 'cl1', at, type: 'tool_start', tool: { id: 't1', name: 'Edit', label: 'Edit a.ts', paths: ['src/a.ts'] } },
+    ], { agent: 'claude-code', cwd: root, transcriptPath: '/t/cl1.jsonl', hooks: false });
+    await waitFor(() => ofType(c, 'attribution').length >= 1);
+    const types = c.msgs.map(m => m.type);
+    expect(types.indexOf('agentEvents')).toBeGreaterThan(-1);
+    expect(types.indexOf('attribution')).toBeGreaterThan(types.indexOf('agentEvents'));
+    expect(ofType(c, 'attribution')[0].attribution).toMatchObject({ sessionId: 'cl1', confidence: 'exact' });
+  });
+
   it('pausing via /api/pause makes a claude PreToolUse block and broadcasts control', async () => {
     const s = await boot();
     const c = connect(s);
@@ -317,10 +351,11 @@ describe('attribution and hello', () => {
 
   it('close() detaches hub, control and attributor listeners', async () => {
     const s = await boot();
-    const before = { e: hub!.listenerCount('event'), c: hub!.control.listenerCount('change'), l: attributor!.listenerCount('late') };
+    const before = { c: hub!.control.listenerCount('change'), l: attributor!.listenerCount('late') };
+    expect(hub!.listenerCount('events')).toBe(1);
     await s.close();
     srv = null;
-    expect(hub!.listenerCount('event')).toBe(before.e - 1);
+    expect(hub!.listenerCount('events')).toBe(0);
     expect(hub!.listenerCount('session')).toBe(0);
     expect(hub!.control.listenerCount('change')).toBe(before.c - 1);
     expect(attributor!.listenerCount('late')).toBe(before.l - 1);

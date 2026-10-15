@@ -39,12 +39,11 @@ const change = (id: number, p: string): ChangeSummary => ({
   env: { added: [], removed: [] }, lines: { added: 1, removed: 0 }, hunks: [], truncated: false,
 });
 
-async function seed(): Promise<void> {
-  for (const f of ['a.ts', 'b.ts']) fs.writeFileSync(path.join(root, f), `export const ${f[0]} = 1;\n`);
+async function seed(names = ['a.ts', 'b.ts']): Promise<void> {
+  for (const f of names) fs.writeFileSync(path.join(root, f), `export const ${f[0]} = 1;\n`);
   const store = await HistoryStore.open(root, { home: lmHome });
-  await store.startRun({ ...emptyState(root, path.basename(root)), files: [file('a.ts'), file('b.ts')] });
-  store.append({ type: 'change', change: change(1, 'a.ts'), files: [file('a.ts')], removed: [] });
-  store.append({ type: 'change', change: change(2, 'b.ts'), files: [file('b.ts')], removed: [] });
+  await store.startRun({ ...emptyState(root, path.basename(root)), files: names.map(file) });
+  names.forEach((n, i) => store.append({ type: 'change', change: change(i + 1, n), files: [file(n)], removed: [] }));
   await store.close();
 }
 
@@ -64,6 +63,14 @@ describe('livemap export', () => {
     expect(html).toMatch(/^<!doctype html>/i);
     expect(html).toContain('id="livemap-data"');
     expect(html).not.toContain(root);
+  });
+
+  it('says "1 file" for one file', async () => {
+    await seed(['a.ts']);
+    const r = run([root, '--out', path.join(cwd, 'one.html')]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('source code for 1 file.');
+    expect(r.stdout).not.toContain('1 files');
   });
 
   it('names the file livemap-<name>-<YYYYMMDD-HHmm>.html in the current directory by default; --no-code drops the warning', async () => {

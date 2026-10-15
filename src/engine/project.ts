@@ -42,6 +42,9 @@ export function countLines(text: string): number {
   return text.endsWith('\n') ? n - 1 : n;
 }
 
+/** A file a reload indexed and its stat just before it was read. */
+export interface IndexedFile { path: string; size: number; mtimeMs: number }
+
 /** Live, in-memory structure of every indexed file in a project. */
 export class ProjectModel {
   readonly root: string;
@@ -176,12 +179,14 @@ export class ProjectModel {
    * freed room (returned as `created` changes).
    *
    * `onIncluded` gets the topmost newly included directories (empty ones too) right after the
-   * walk, before anything is read, so the watcher can start watching them.
+   * walk, before anything is read, so the watcher can start watching them. `indexed` lists the
+   * files read and indexed by this reload, with the size and mtime seen just before the read (so
+   * the caller can skip their redundant add events only while the file is unchanged).
    */
   reloadIgnores(
     changed: string[] = [],
     opts: { onIncluded?: (dirs: string[]) => void } = {},
-  ): Promise<{ files: FileModel[]; removed: string[]; created: UpdateResult[] }> {
+  ): Promise<{ files: FileModel[]; removed: string[]; created: UpdateResult[]; indexed: IndexedFile[] }> {
     // If this throws partway the model is left inconsistent; the caller rescans (see Watcher).
     return this.serial(() => this.reconcileIgnores(changed, opts));
   }
@@ -189,7 +194,7 @@ export class ProjectModel {
   private async reconcileIgnores(
     changed: string[],
     opts: { onIncluded?: (dirs: string[]) => void },
-  ): Promise<{ files: FileModel[]; removed: string[]; created: UpdateResult[] }> {
+  ): Promise<{ files: FileModel[]; removed: string[]; created: UpdateResult[]; indexed: IndexedFile[] }> {
     const old = this.isIgnored;
     const changedDirs = changed.map(parentDir);
     this.isIgnored = changed.length ? createIgnore(this.root, { previous: old, changed: changedDirs }) : createIgnore(this.root);
@@ -220,15 +225,22 @@ export class ProjectModel {
     // that fail to read leave their room to later candidates.
     const fresh = walked.files.filter(rel => !this.files.has(rel) && (old(rel, false) || wasTruncated));
     const isFull = (): boolean => this.files.size >= this.limit;
+    const seen = new Map<string, { size: number; mtimeMs: number }>();
+    const before = async (rel: string): Promise<void> => {
+      try {
+        const st = await fs.lstat(path.join(this.root, ...rel.split('/')));
+        seen.set(rel, { size: st.size, mtimeMs: st.mtimeMs });
+      } catch { /* the read fails too */ }
+    };
     const done = await this.readEach(fresh, new Map(), async (rel, r) => {
       if (!r) return;
       const res = this.apply(rel, r);
       if (res) { await res; (old(rel, false) ? included : unreached).push(rel); }
-    }, isFull);
+    }, isFull, before);
     if (done < fresh.length) full = true;
     if (whole) this.truncated = walked.truncated || full;
     else if (full || walked.truncated) this.truncated = true;
-    if (!removed.length && !included.length && !unreached.length) return { files: [], removed, created: [] };
+    if (!removed.length && !included.length && !unreached.length) return { files: [], removed, created: [], indexed: [] };
     const touched = this.relink([]);
     const byPath = new Map<string, FileModel>();
     for (const rel of included) byPath.set(rel, this.files.get(rel)!);
@@ -237,7 +249,7 @@ export class ProjectModel {
     const created: UpdateResult[] = unreached.map(rel => ({
       path: rel, kind: 'created', before: null, after: this.files.get(rel) ?? null, beforeText: null, afterText: this.texts.get(rel) ?? null, touched: [],
     }));
-    return { files: [...byPath.values()].sort((x, y) => cmp(x.path, y.path)), removed, created };
+    return { files: [...byPath.values()].sort((x, y) => cmp(x.path, y.path)), removed, created, indexed: [...included, ...unreached].map(rel => ({ path: rel, ...seen.get(rel)! })) };
   }
 
   /** Marks the file set changed; the rest of the burst resolves against the live set. */
@@ -280,8 +292,12 @@ export class ProjectModel {
   }
 
   /** Reads `files` with eachAhead; results already in `known` are reused instead of read again. */
-  private readEach(files: string[], known: Map<string, ReadResult>, each: (rel: string, r: ReadResult) => Promise<void>, stop?: () => boolean): Promise<number> {
-    return this.eachAhead(files, rel => (known.has(rel) ? Promise.resolve(known.get(rel)!) : this.read(rel)), each, stop);
+  private readEach(files: string[], known: Map<string, ReadResult>, each: (rel: string, r: ReadResult) => Promise<void>, stop?: () => boolean, before?: (rel: string) => Promise<void>): Promise<number> {
+    return this.eachAhead(files, async rel => {
+      if (known.has(rel)) return known.get(rel)!;
+      await before?.(rel);
+      return this.read(rel);
+    }, each, stop);
   }
 
   /** True when the path no longer exists or is no longer a regular file inside the root; transient errors are not gone. */

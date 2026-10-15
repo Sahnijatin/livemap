@@ -11,7 +11,7 @@
       { "name": "customer", "type": "String", "line": 28, "required": true },
       { "name": "total", "type": "Float", "line": 29, "required": true },
       { "name": "status", "type": "Status", "line": 30, "required": true },
-      { "name": "userId", "type": "String", "line": 31, "required": true, "fk": { "table": "users", "field": "id" } },
+      { "name": "userId", "type": "String", "column": "user_id", "line": 31, "required": true, "fk": { "table": "users", "field": "id" } },
       { "name": "user", "type": "User", "line": 32, "relation": { "model": "User", "many": false } },
       { "name": "items", "type": "OrderItem[]", "line": 33, "relation": { "model": "OrderItem", "many": true } },
       { "name": "tags", "type": "String[]", "line": 34 }

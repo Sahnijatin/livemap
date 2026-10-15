@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { AgentKind, AgentTool, RawAgentEvent } from '../shared/types.js';
+import { isBlockable } from '../shared/blockable.js';
 import { toolLabel, toolPaths, redactSecretInput, touchesSecret, outputMentionsSecret } from './labels.js';
 
 const MAX_OUTPUT = 4000;
@@ -72,7 +73,7 @@ export function normalizeHook(input: HookInput): NormalizedHook {
   const out: NormalizedHook = {
     sessionId: (agent === 'cursor' ? str(p.conversation_id) : str(p.session_id)) ?? '',
     cwd: str(p.cwd) ?? str(roots[0]) ?? root,
-    events: [], blockable: false, stop: false,
+    events: [], blockable: isBlockable(agent, event), stop: false,
   };
   const tp = str(p.transcript_path);
   if (tp) out.transcriptPath = tp;
@@ -90,14 +91,12 @@ export function normalizeHook(input: HookInput): NormalizedHook {
   };
 
   if (agent === 'claude-code') {
-    if (event === 'PreToolUse') out.blockable = true;
-    else if (event === 'UserPromptSubmit') out.prompt = str(p.prompt);
+    if (event === 'UserPromptSubmit') out.prompt = str(p.prompt);
     else if (event === 'Stop') { out.events.push(idle(base)); out.stop = true; }
   } else if (agent === 'codex') {
     switch (event) {
       case 'UserPromptSubmit': out.prompt = str(p.prompt); text('prompt', out.prompt); break;
       case 'PreToolUse':
-        out.blockable = true;
         if (name) tool('tool_start', name, toolInput, { id });
         break;
       case 'PostToolUse':
@@ -114,14 +113,12 @@ export function normalizeHook(input: HookInput): NormalizedHook {
       case 'afterAgentResponse': text('message', str(p.text)); break;
       case 'afterAgentThought': text('thinking', str(p.text)); break;
       case 'preToolUse':
-        out.blockable = true;
         if (name) tool('tool_start', name, toolInput, { id });
         break;
       case 'postToolUse':
         if (name) tool('tool_end', name, toolInput, { id, output: p.tool_output });
         break;
       case 'beforeShellExecution':
-        out.blockable = true;
         if (command) tool('tool_start', 'Shell', { command }, { id: shellId });
         break;
       case 'afterShellExecution':

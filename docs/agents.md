@@ -16,12 +16,12 @@ Run `livemap init` in the project folder. It detects agents by their config fold
 
 | Agent | File in your project | Events hooked |
 |---|---|---|
-| Claude Code | `.claude/settings.local.json` | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop` |
+| Claude Code | `.claude/settings.local.json` | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `Stop` (tool results come from the transcript) |
 | Codex CLI | `.codex/hooks.json` | `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop` |
 | Cursor | `.cursor/hooks.json` | `beforeSubmitPrompt`, `afterAgentResponse`, `afterAgentThought`, `preToolUse`, `postToolUse`, `beforeShellExecution`, `afterShellExecution`, `afterFileEdit`, `stop` |
 
 - **The hook script.** Init copies `livemap-hook.mjs` to the `bin/` folder of the LiveMap home (`~/.livemap/bin/`, or `$LIVEMAP_HOME/bin/`). Each hook entry runs `node '<home>/bin/livemap-hook.mjs' <agent> <event>` (double quotes on Windows, where init refuses a LiveMap home whose path contains `"`, `%`, `!`, `^`, `&`, `|`, `<` or `>`), where `<agent>` is `claude-code`, `codex` or `cursor`. Claude Code and Codex entries have a 5 second timeout.
-- **Your settings are kept.** Init adds its entries next to yours and leaves your own hooks in place. Running it again updates LiveMap's entries in place and prints `unchanged` when nothing differs. A file that is not valid JSON, or whose `hooks` has an unexpected shape, is skipped with the reason and left alone.
+- **Your settings are kept.** Init adds its entries next to yours and leaves your own hooks in place. Running it again updates LiveMap's entries in place, removes entries for events it no longer hooks (such as an older init's Claude Code `PostToolUse`), and prints `unchanged` when nothing differs. A file that is not valid JSON, or whose `hooks` has an unexpected shape, is skipped with the reason and left alone.
 - **Git excludes.** When the project has a `.git` folder, init adds `.claude/settings.local.json`, `.codex/hooks.json` and `.cursor/hooks.json` to `.git/info/exclude`, so the hook files (which hold a path on your machine) are not committed by accident.
 - **Codex.** Codex asks you to trust new hooks. Init reminds you: run `/hooks` inside Codex once.
 - **Records.** Init notes what it created in each file (the file itself, its `hooks` object, event lists, Cursor's `version`) under `<home>/init/`.
