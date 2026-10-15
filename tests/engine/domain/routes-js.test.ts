@@ -38,6 +38,16 @@ describe('routes-js analyzer', () => {
     expect(run('src/b.tsx', "import api from './lib/api';\napi.get('/users');\n").routes).toEqual([]);
   });
 
+  it('treats conventional receiver names as routers only when the file imports a server framework', () => {
+    expect(run('src/hooks/useUsers.ts', "export function useUsers(api) { return api.get('/users'); }\nexport const save = (router, app, server, fastify) => { router.post('/a'); app.put('/b'); server.delete('/c'); fastify.get('/d'); };\n").routes).toEqual([]);
+    expect(run('src/hooks/client.ts', "import { useQuery } from '@tanstack/react-query';\nexport const f = (api) => api.get('/users');\n").routes).toEqual([]);
+    // Without a server import, names assigned from a router factory still count.
+    const src = "const r = express.Router();\nconst app = express();\nconst h = new Hono();\nconst k = new Router();\nr.get('/r', a);\napp.post('/app', b);\nh.put('/h', c);\nk.delete('/k', d);\nfunction f(api) { api.get('/no'); }\n";
+    expect(run('src/legacy.js', src).routes.map(r => `${r.method} ${r.path} ${r.framework}`)).toEqual(['GET /r express', 'POST /app express', 'PUT /h hono', 'DELETE /k express']);
+    // With a server import, the conventional names stay routers (a router passed into a function).
+    expect(run('src/routes.ts', "import type { Router } from 'express';\nexport function mount(router: Router) { router.get('/x', h); }\n").routes.map(r => r.path)).toEqual(['/x']);
+  });
+
   it('ignores member receivers except this.app/router/server and this.X assigned from a router factory', () => {
     expect(run('src/users.service.ts', "export class UsersService {\n  list() { return this.api.get('/users'); }\n}\nctx.router.get('/x', h);\n").routes).toEqual([]);
     const src = "import express from 'express';\nclass S {\n  web = express();\n  start() {\n    this.app.get('/a', a);\n    this.web.get('/w', w);\n  }\n}\n";
