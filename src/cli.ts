@@ -8,14 +8,19 @@ import { openBrowser } from './server/open.js';
 import { AgentHub } from './agents/hub.js';
 import { Attributor } from './agents/attribution.js';
 import { GitWatcher } from './agents/git.js';
-import { removeRuntime, writeRuntime } from './agents/runtime.js';
+import { livemapHome, removeRuntime, writeRuntime } from './agents/runtime.js';
+import { HistoryStore } from './history/store.js';
+import { buildExport, codeWarning } from './export/export.js';
+import { loadSummaryConfig } from './summarize/config.js';
+import { Summarizer } from './summarize/summarizer.js';
 import { AGENT_NAMES, detectAgents, initAgents, installHookScript, removeAgents, type AgentName } from './init.js';
 
-const USAGE = 'Usage: livemap [dir=.] [--port N] [--no-open] [--pull[=SEC]]\n       livemap init [dir=.] [--agents claude,codex,cursor] [--remove]';
+const USAGE = 'Usage: livemap [dir=.] [--port N] [--no-open] [--pull[=SEC]] [--no-history] [--summaries]\n       livemap init [dir=.] [--agents claude,codex,cursor] [--remove]\n       livemap export [dir=.] [--session ID] [--no-code] [--out FILE]';
 const DEFAULT_PULL_SEC = 15;
 
-interface Args { dir: string; port: number; open: boolean; pullSec: number | null }
+interface Args { dir: string; port: number; open: boolean; pullSec: number | null; history: boolean; summaries: boolean }
 interface InitArgs { dir: string; agents?: AgentName[]; remove: boolean }
+interface ExportArgs { dir: string; session?: string; code: boolean; out?: string }
 
 function fail(message: string): never {
   process.stderr.write(`livemap: ${message}\n${USAGE}\n`);
@@ -55,12 +60,36 @@ function parseInitArgs(argv: string[]): InitArgs {
   return args;
 }
 
+function parseExportArgs(argv: string[]): ExportArgs {
+  const args: ExportArgs = { dir: '.', code: true };
+  let sawDir = false;
+  const value = (flag: string, v: string | undefined): string => {
+    if (!v) fail(`${flag} needs a value`);
+    return v;
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--no-code') args.code = false;
+    else if (a === '--session') args.session = value('--session', argv[++i]);
+    else if (a.startsWith('--session=')) args.session = value('--session', a.slice('--session='.length));
+    else if (a === '--out') args.out = value('--out', argv[++i]);
+    else if (a.startsWith('--out=')) args.out = value('--out', a.slice('--out='.length));
+    else if (a === '-h' || a === '--help') { process.stdout.write(`${USAGE}\n`); process.exit(0); }
+    else if (a.startsWith('-')) fail(`unknown option: ${a}`);
+    else if (sawDir) fail(`unexpected argument: ${a}`);
+    else { args.dir = a; sawDir = true; }
+  }
+  return args;
+}
+
 function parseArgs(argv: string[]): Args {
-  const args: Args = { dir: '.', port: DEFAULT_PORT, open: true, pullSec: null };
+  const args: Args = { dir: '.', port: DEFAULT_PORT, open: true, pullSec: null, history: true, summaries: false };
   let sawDir = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--no-open') args.open = false;
+    else if (a === '--no-history') args.history = false;
+    else if (a === '--summaries') args.summaries = true;
     else if (a === '--pull') args.pullSec = DEFAULT_PULL_SEC;
     else if (a.startsWith('--pull=')) args.pullSec = parsePull(a.slice('--pull='.length));
     else if (a === '--port') args.port = parsePort(argv[++i]);
@@ -108,9 +137,50 @@ function runInit(argv: string[]): void {
   if (results.every(r => r.action === 'skipped')) process.exit(1); // nothing could be configured
 }
 
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+
+/** `livemap-<name>-<YYYYMMDD-HHmm>.html`, in local time. */
+function exportName(name: string, d = new Date()): string {
+  return `livemap-${name}-${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}.html`;
+}
+
+function formatSize(bytes: number): string {
+  return bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** Writes a self-contained HTML replay of the recorded history; needs no running server. */
+async function runExport(argv: string[]): Promise<void> {
+  const args = parseExportArgs(argv);
+  const root = resolveRoot(args.dir);
+  const uiFile = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui-export', 'index.html');
+  let uiHtml: string;
+  try {
+    uiHtml = fs.readFileSync(uiFile, 'utf8');
+  } catch {
+    fail(`the export UI is not built (${uiFile} is missing)`);
+  }
+  let res: Awaited<ReturnType<typeof buildExport>>;
+  try {
+    res = await buildExport(root, { session: args.session, code: args.code, uiHtml });
+  } catch (e) {
+    process.stderr.write(`${(e as Error).message}\n`);
+    process.exit(1);
+  }
+  const out = path.resolve(args.out ?? exportName(path.basename(root)));
+  try {
+    fs.writeFileSync(out, res.html);
+  } catch (e) {
+    process.stderr.write(`livemap: could not write ${out}: ${(e as Error).message}\n`);
+    process.exit(1);
+  }
+  if (args.code && res.files > 0) process.stdout.write(`${codeWarning(res.files)}\n`);
+  process.stdout.write(`Wrote ${out} (${formatSize(Buffer.byteLength(res.html))})\n`);
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (argv[0] === 'init') return runInit(argv.slice(1));
+  if (argv[0] === 'export') return runExport(argv.slice(1));
   const args = parseArgs(argv);
   const root = resolveRoot(args.dir);
   const uiDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui');
@@ -120,10 +190,25 @@ async function main(): Promise<void> {
   watcher.on('error', (e: Error) => process.stderr.write(`livemap: watcher error: ${e.message}\n`));
   const hub = new AgentHub(root);
   const attributor = new Attributor(hub);
+  // A store that cannot open comes back disabled with the reason, which the UI then shows.
+  const history = args.history ? await HistoryStore.open(root) : undefined;
+  const historyError = history?.info().error;
+  if (historyError) process.stderr.write(`livemap: warning: history is unavailable: ${historyError}\n`);
+
+  // Summaries are opt-in: config.json `summaries.enabled` or --summaries; a key in the environment alone never enables them.
+  const home = livemapHome();
+  const summaryConfig = loadSummaryConfig({ env: process.env, home, flag: args.summaries });
+  const summarizer = 'disabled' in summaryConfig ? undefined : new Summarizer(summaryConfig, { home });
+  if ('disabled' in summaryConfig && summaryConfig.reason === 'bad-config') {
+    const why = summaryConfig.detail ?? 'could not be read or has an invalid "summaries" setting';
+    process.stderr.write(`livemap: warning: summaries are off: ${path.join(home, 'config.json')}: ${why}\n`);
+  } else if ('disabled' in summaryConfig && summaryConfig.reason === 'no-key') {
+    process.stderr.write('livemap: warning: summaries are off: no API key (set summaries.apiKey in config.json, ANTHROPIC_API_KEY or OPENAI_API_KEY)\n');
+  }
 
   let server: Awaited<ReturnType<typeof startServer>>;
   try {
-    server = await startServer({ model, watcher, port: args.port, uiDir, hub, attributor, warn: m => process.stderr.write(`livemap: warning: ${m}\n`) });
+    server = await startServer({ model, watcher, port: args.port, uiDir, hub, attributor, history, summarizer, warn: m => process.stderr.write(`livemap: warning: ${m}\n`) });
   } catch (e) {
     fail(`could not start server: ${(e as Error).message}`);
   }
@@ -148,10 +233,12 @@ async function main(): Promise<void> {
     setTimeout(() => process.exit(0), 3000).unref(); // failsafe if cleanup hangs
     try {
       git.stop();
+      summarizer?.stop();
       attributor.stop();
       hub.stop();
       await watcher.stop();
       await server.close();
+      await history?.close(); // flushes buffered records
     } finally {
       process.exit(0);
     }
