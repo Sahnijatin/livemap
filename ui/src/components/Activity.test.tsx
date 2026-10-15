@@ -79,6 +79,17 @@ describe('Activity', () => {
     expect(useStore.getState().selected).toBe('src/orders.ts');
   });
 
+  it('shows the change summary as a one-line lead above the facts, as plain text', () => {
+    mount();
+    expect(host.querySelector('.f-chg .lead')).toBeNull();
+    act(() => useStore.getState().apply({ type: 'summary', changeId: created.id, summary: 'Adds <i>order</i> creation.' }));
+    const card = host.querySelector('.f-chg')!;
+    const lead = card.querySelector('.lead')!;
+    expect(lead.textContent).toBe('Adds <i>order</i> creation.');
+    expect(lead.querySelector('i')).toBeNull();
+    expect(lead.nextElementSibling?.classList.contains('facts')).toBe(true);
+  });
+
   it('shows a new route at its full mounted path from the domain index, else at its file path', () => {
     const route = { method: 'DELETE', path: '/orders/:id', line: 9, kind: 'api' as const, framework: 'express', handler: 'removeOrder' };
     const added = change('src/routes/orders.ts', 'modified', { at: T + 6000, routes: { added: [route, { ...route, method: 'PUT', line: 10 }], removed: [] } });

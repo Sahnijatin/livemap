@@ -157,6 +157,7 @@ function Change({ change: c }: { change: ChangeSummary }) {
           <span className="cntx"><span className="plus">+{c.lines.added}</span> <span className="minus">−{c.lines.removed}</span></span>
         )}
       </button>
+      {c.summary && <p className="lead" title={c.summary}>{c.summary}</p>}
       {facts.length > 0 && (
         <div className="facts">
           {facts.slice(0, MAX_FACTS).map((f, i) => (
