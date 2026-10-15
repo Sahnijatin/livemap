@@ -96,6 +96,30 @@ describe('project lock (#21)', () => {
       expect(fs.readFileSync(lockFile(root), 'utf8').trim()).toBe(String(process.pid));
     });
 
+    it('is held while something listens on its port, however long since the last heartbeat (sleep, Ctrl-Z)', async () => {
+      const srv = net.createServer();
+      await new Promise<void>(r => srv.listen(0, '127.0.0.1', r));
+      try {
+        const port = (srv.address() as net.AddressInfo).port;
+        fs.writeFileSync(lockFile(root), JSON.stringify({ pid: other.pid, port }));
+        const old = (Date.now() - LOCK_STALE_MS * 10) / 1000;
+        fs.utimesSync(lockFile(root), old, old);
+        expect(await acquireLock(root)).toEqual({ ok: false, pid: other.pid });
+      } finally {
+        await new Promise(r => srv.close(r));
+      }
+    });
+
+    it('clears a takeover mutex whose pid was reused after a crash, once it is old', async () => {
+      const file = lockFile(root);
+      fs.writeFileSync(file, `${await deadPid()}\n`);
+      fs.writeFileSync(`${file}.takeover`, `${other.pid}\n`);
+      const old = (Date.now() - 60_000) / 1000;
+      fs.utimesSync(`${file}.takeover`, old, old);
+      expect(await acquireLock(root)).toEqual({ ok: true });
+      expect(fs.readdirSync(path.dirname(file))).toEqual([path.basename(file)]);
+    });
+
     it('is held while something listens on that port', async () => {
       const srv = net.createServer();
       await new Promise<void>(r => srv.listen(0, '127.0.0.1', r));
@@ -174,6 +198,24 @@ describe('project lock (#21)', () => {
       releaseLock(root);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it('keeps a heartbeat per lock when one process holds two roots', async () => {
+    const root2 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-lockroot2-')));
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      expect(await acquireLock(root)).toEqual({ ok: true });
+      expect(await acquireLock(root2)).toEqual({ ok: true });
+      releaseLock(root2);
+      const old = (Date.now() - LOCK_STALE_MS - 1000) / 1000;
+      fs.utimesSync(lockFile(root), old, old);
+      vi.advanceTimersByTime(HEARTBEAT_MS);
+      expect(Date.now() - fs.statSync(lockFile(root)).mtimeMs).toBeLessThan(5000);
+      releaseLock(root);
+    } finally {
+      vi.useRealTimers();
+      fs.rmSync(root2, { recursive: true, force: true });
     }
   });
 

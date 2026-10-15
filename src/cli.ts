@@ -194,7 +194,7 @@ async function main(): Promise<void> {
     locked = lock.ok;
   } catch (e) {
     if (e instanceof LockBusyError) {
-      process.stderr.write(`LiveMap is already starting for this project (${e.message}); try again in a moment\n`);
+      process.stderr.write('Another LiveMap is starting for this project; try again in a moment\n');
       process.exit(1);
     }
     // The lock file cannot be written (a read-only home, say): run without it rather than not at all.
@@ -244,6 +244,8 @@ async function main(): Promise<void> {
         process.stderr.write('livemap: warning: another LiveMap took over the project lock; agent hooks may not reach this run\n');
       }
     } catch (e) {
+      // Ownership is unknown, so do not take over a runtime entry another LiveMap may own.
+      locked = false;
       process.stderr.write(`livemap: warning: could not record the port in the project lock: ${(e as Error).message}\n`);
     }
   }
