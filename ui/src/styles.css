@@ -630,7 +630,8 @@
   .flagrow .fl-tx small { font-size:11px; color:var(--orange); }
   .flagrow.done .fl-tx small { color:var(--green); }
   .fl-x { border:0; background:none; width:24px; height:24px; border-radius:50%; cursor:pointer; color:var(--ink3); font-size:17px; line-height:1; flex-shrink:0; }
-  .fl-x:hover { background:var(--hair); color:var(--red); }
+  .fl-x:hover:not(:disabled) { background:var(--hair); color:var(--red); }
+  .fl-x:disabled { opacity:.4; cursor:not-allowed; }
 
   @keyframes drift1 { to { transform:translate(6vw,5vw) scale(1.08); } }
   @keyframes drift2 { to { transform:translate(-5vw,-4vw) scale(1.1); } }

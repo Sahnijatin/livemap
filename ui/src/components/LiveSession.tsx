@@ -4,6 +4,7 @@ import { agentName, latestMessage } from '../agents';
 import { layerOf } from '../layers';
 import { baseName, isRecent, useNow } from '../recent';
 import { removeFlag } from '../api';
+import { READ_ONLY_TIP } from '../history';
 import { COUNTER_LABELS, CountUp, useLiveState } from './Activity';
 import { FlagBox } from './FlagBox';
 import { FlagIcon, LayerTile } from './icons';
@@ -13,6 +14,8 @@ function YourFlags() {
   const select = useStore(s => s.select);
   const showToast = useStore(s => s.showToast);
   const replay = useStore(s => s.replay);
+  // While the UI shows the past, flags (which act on the live agent) are read-only, as in FlagBox.
+  const rewound = useStore(s => s.rewound !== null);
   if (!flags.length) return null;
   const sorted = [...flags].sort((a, b) => Number(!!a.deliveredAt) - Number(!!b.deliveredAt) || b.createdAt - a.createdAt).slice(0, 12);
   return (
@@ -30,7 +33,7 @@ function YourFlags() {
               <small>{f.deliveredAt ? `Delivered to ${agentName(f.deliveredTo?.agent)}` : 'Waiting for the next action'}</small>
             </div>
             {!f.deliveredAt && !replay && (
-              <button type="button" className="fl-x" aria-label={`Remove flag: ${f.note}`} onClick={() => removeFlag(f.id).catch(e => showToast(e instanceof Error ? e.message : 'Could not remove the flag', 'error'))}>×</button>
+              <button type="button" className="fl-x" aria-label={`Remove flag: ${f.note}`} disabled={rewound} title={rewound ? READ_ONLY_TIP : undefined} onClick={() => removeFlag(f.id).catch(e => showToast(e instanceof Error ? e.message : 'Could not remove the flag', 'error'))}>×</button>
             )}
           </div>
         ))}
