@@ -1,9 +1,11 @@
-import { isSecretEnvPath } from '../engine/languages.js';
+import { realpathSync } from 'node:fs';
+import { isSecretEnvPath, SECRET_NAME_ALT } from '../engine/languages.js';
 
 const MAX_LABEL = 160;
 /** Stored in place of a shell command that names a secret env file. */
 export const SECRET_COMMAND = '<touches a secret file>';
-const SECRET_LABEL = '$ (command touching .env)';
+/** Label of a shell command that names a secret env file. */
+export const SECRET_LABEL = '$ (command touching .env)';
 const PATH_KEYS = ['file_path', 'path', 'absolute_path', 'notebook_path', 'filePath', 'target_file'];
 
 export type ToolFamily = 'read' | 'write' | 'edit' | 'shell' | 'patch' | 'search' | 'glob' | 'fetch' | 'websearch' | 'subagent' | 'notebook';
@@ -57,6 +59,22 @@ function anchor(p: string, cwd?: string): string {
   return collapse(`${posix(cwd).replace(/\/+$/, '')}/${path}`);
 }
 
+/**
+ * An absolute path with its longest existing prefix resolved through symlinks (the rest, which
+ * may not exist yet, is kept as is), or null when nothing resolves or nothing changes.
+ */
+function realAbs(path: string): string | null {
+  const parts = path.split('/');
+  for (let n = parts.length; n > 1; n--) {
+    const head = parts.slice(0, n).join('/');
+    let real: string;
+    try { real = posix(realpathSync(head)); } catch { continue; }
+    const out = [real.replace(/\/+$/, ''), ...parts.slice(n)].join('/');
+    return out === path ? null : out;
+  }
+  return null;
+}
+
 /** Path relative to root in POSIX form, or null when it lies outside the root. Relative paths resolve against `cwd` when given. */
 function relToRoot(p: string, root: string, cwd?: string): string | null {
   const anchored = anchor(p, cwd);
@@ -64,8 +82,11 @@ function relToRoot(p: string, root: string, cwd?: string): string | null {
   const path = isAbs(anchored) ? collapse(anchored) : anchored;
   const r = posix(root).replace(/\/+$/, '');
   if (isAbs(path)) {
-    if (path === r || !path.startsWith(r + '/')) return null;
-    return path.slice(r.length + 1);
+    const under = (abs: string) => abs !== r && abs.startsWith(r + '/');
+    if (under(path)) return path.slice(r.length + 1);
+    // The root is a real path; an agent working through a symlinked folder names files by the link.
+    const real = realAbs(path);
+    return real && under(real) ? real.slice(r.length + 1) : null;
   }
   const parts: string[] = [];
   for (const seg of path.split('/')) {
@@ -194,7 +215,8 @@ export function touchesSecret(name: string, input: unknown, paths: string[]): bo
   return paths.some(isSecretEnvPath) || redactSecretInput(name, input) !== input;
 }
 
-const SECRET_REF = /(?:^|[\s/\\'"`(=])(\.env(?:rc)?(?:[._-][\w.-]*)?)(?=[:\s'"`),;]|$)/gim;
+// Built from the same names as isSecretEnvPath (`.env`, `.envrc`, `.npmrc`, `.netrc`, `.pypirc`), which then rules out examples.
+const SECRET_REF = new RegExp(`(?:^|[\\s/\\\\'"\`(=])(\\.(?:${SECRET_NAME_ALT})(?:[._-][\\w.-]*)?)(?=[:\\s'"\`),;]|$)`, 'gim');
 
 /** True when tool output names a secret env file (as grep, cat or diff output does), example files aside. */
 export function outputMentionsSecret(text: string): boolean {

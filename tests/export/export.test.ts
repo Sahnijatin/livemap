@@ -115,6 +115,35 @@ describe('buildExport', () => {
     expect(withCode).toContain('SECRET_NEW');
   });
 
+  it('code: false reduces shell labels to the command name and removes code from agent text (#20)', async () => {
+    write('a.ts', 'const a = 1;\n');
+    const tool = (id: number, label: string): AgentEvent => ({ ...event(id, 's1'), type: 'tool_start', tool: { name: 'Bash', label, paths: [] } });
+    const said = (id: number, type: AgentEvent['type'], text: string): AgentEvent => ({ ...event(id, 's1'), type, text });
+    const intent = 'Adds `CODE_INLINE()` to a.ts';
+    const c = { ...change(1, 'a.ts'), attribution: { agent: 'claude-code' as const, sessionId: 's1', confidence: 'exact' as const, intent } };
+    await record([file('a.ts')], [
+      { type: 'session', session: { ...session('s1', root), title: 'Fix `CODE_TITLE` now' } },
+      { type: 'agentEvent', event: tool(1, '$ FOO=1 ./node_modules/.bin/vitest run CODE_ARG') },
+      { type: 'agentEvent', event: tool(2, '$ (command touching .env)') },
+      { type: 'agentEvent', event: said(3, 'prompt', 'Please change `CODE_A` here') },
+      { type: 'agentEvent', event: said(4, 'message', 'Done:\n```ts\nconst CODE_B = 1;\n```\nAll set.') },
+      { type: 'agentEvent', event: said(5, 'thinking', 'Maybe ```\nCODE_C unclosed') },
+      { type: 'agentEvent', event: said(6, 'commit', 'Add `a` helper') },
+      { type: 'change', change: c, files: [file('a.ts')], removed: [] },
+      { type: 'attribution', changeId: 1, attribution: { agent: 'claude-code', sessionId: 's1', confidence: 'exact', intent } },
+    ]);
+    const { text, payload } = decode((await buildExport(root, { home, code: false, uiHtml: UI })).html);
+    expect(text).not.toMatch(/CODE_/);
+    const events = plain(payload.messages).flatMap(m => (m.type === 'agentEvent' ? [m.event] : []));
+    expect(events.map(e => e.tool?.label ?? e.text)).toEqual([
+      '$ vitest', '$ (command touching .env)', 'Please change [code removed] here', 'Done:\n[code removed]\nAll set.', 'Maybe [code removed]', 'Add `a` helper',
+    ]);
+    const attributions = plain(payload.messages).flatMap(m => (m.type === 'attribution' ? [m.attribution.intent] : m.type === 'change' ? [m.change.attribution?.intent] : []));
+    expect(attributions).toEqual(['Adds [code removed] to a.ts', 'Adds [code removed] to a.ts']);
+    const { text: withCode } = decode((await buildExport(root, { home, code: true, uiHtml: UI })).html);
+    for (const s of ['CODE_ARG', 'CODE_A', 'CODE_B', 'CODE_C', 'CODE_INLINE', 'CODE_TITLE']) expect(withCode).toContain(s);
+  });
+
   it('with a session, keeps that session\'s events, its attributed changes, and context within its span', async () => {
     for (const f of ['a.ts', 'b.ts', 'c.ts']) write(f, `// ${f}\n`);
     const msgs: ServerMessage[] = [

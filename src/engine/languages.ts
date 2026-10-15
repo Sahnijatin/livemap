@@ -38,7 +38,11 @@ function extOf(path: string): string {
 }
 
 /** Files whose values are never stored or sent; only variable names are read from them. */
-const SECRET_NAMES = new Set(['.env', '.envrc', '.npmrc', '.netrc', '.pypirc']);
+export const SECRET_FILE_NAMES: readonly string[] = ['.env', '.envrc', '.npmrc', '.netrc', '.pypirc'];
+const SECRET_NAMES = new Set(SECRET_FILE_NAMES);
+/** `envrc|env|npmrc|...`: the secret names without their dot, longest first, for regex alternations. */
+export const SECRET_NAME_ALT = [...SECRET_FILE_NAMES].sort((a, b) => b.length - a.length).map((n) => n.slice(1)).join('|');
+const SECRET_PREFIXED = new RegExp(`^\\.(?:${SECRET_NAME_ALT})([._-].*)$`);
 
 /** Formats an env file is written in (`prod.env.json`, `.env.sh`); other known formats are not env files. */
 const ENV_FORMATS = new Set<Lang>(['json', 'yaml', 'toml', 'shell', 'text']);
@@ -70,7 +74,7 @@ export function isSecretEnvPath(path: string): boolean {
   // Agents on Windows send backslash paths: take the name after either separator.
   const b = baseName(path.replace(/\\/g, '/')).toLowerCase().replace(/^#(.*)#$/, '$1').replace(/~+$/, '');
   if (SECRET_NAMES.has(b)) return true;
-  const prefixed = /^\.(?:envrc|env|npmrc|netrc|pypirc)([._-].*)$/.exec(b);
+  const prefixed = SECRET_PREFIXED.exec(b);
   if (prefixed) return !endsAsExample(prefixed[1]) && b !== '.env.d.ts';
   const m = /^(.+)\.env(?:[._-](.+))?$/.exec(b);
   if (!m) return false;

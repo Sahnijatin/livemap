@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { toolLabel, toolPaths, patchPaths, redactSecretInput, touchesSecret, outputMentionsSecret, SECRET_COMMAND } from '../../src/agents/labels.js';
 
 describe('toolLabel', () => {
@@ -91,6 +94,14 @@ describe('C1: shell commands and outputs that touch secret files', () => {
     expect(outputMentionsSecret('loaded environment.ts')).toBe(false);
     expect(outputMentionsSecret('process.env.KEY')).toBe(false);
   });
+  it('outputMentionsSecret covers credential rc files (#18)', () => {
+    expect(outputMentionsSecret('.npmrc:1://registry.npmjs.org/:_authToken=npm_SECRET')).toBe(true);
+    expect(outputMentionsSecret('cat: /home/u/.netrc')).toBe(true);
+    expect(outputMentionsSecret("'.pypirc' password = x")).toBe(true);
+    expect(outputMentionsSecret('pkg/.npmrc.bak:1:_authToken=x')).toBe(true);
+    expect(outputMentionsSecret('.npmrc.example:1:registry=')).toBe(false);
+    expect(outputMentionsSecret('.pypirc-sample:1:[pypi]')).toBe(false);
+  });
 });
 
 describe('M4: relative paths resolve against cwd', () => {
@@ -112,3 +123,25 @@ describe('review fixes: absolute paths with ..', () => {
   });
 });
 
+
+describe('symlinked project folder (#32)', () => {
+  it('maps paths named through a symlink onto the real root', () => {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-link-')));
+    try {
+      const real = path.join(tmp, 'real', 'app');
+      fs.mkdirSync(path.join(real, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(real, 'src', 'a.ts'), '');
+      fs.mkdirSync(path.join(tmp, 'link'));
+      fs.symlinkSync(real, path.join(tmp, 'link', 'app'), 'dir');
+      const viaLink = path.join(tmp, 'link', 'app');
+      expect(toolPaths('Edit', { file_path: `${viaLink}/src/a.ts` }, real)).toEqual(['src/a.ts']);
+      // A file not created yet still maps through its existing parent.
+      expect(toolPaths('Write', { file_path: `${viaLink}/src/new/b.ts` }, real)).toEqual(['src/new/b.ts']);
+      expect(toolPaths('Edit', { file_path: 'src/a.ts' }, real, viaLink)).toEqual(['src/a.ts']);
+      expect(toolLabel('Read', { file_path: `${viaLink}/src/a.ts` }, real)).toBe('Read src/a.ts');
+      expect(toolPaths('Edit', { file_path: `${tmp}/link/other.ts` }, real)).toEqual([]);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});

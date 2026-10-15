@@ -211,45 +211,59 @@ describe('server: file summaries', () => {
     expect(fake.files).toHaveLength(0);
   });
 
-  it('summarizes a newly created code file, and regenerates when its symbol set changes', async () => {
+  it('writes no file summary for a new or changed file until it is requested (#34)', async () => {
     const s = await boot();
     const c = connect(s.port, s.token);
     await waitFor(() => ofType(c, 'hello').length === 1);
     put('src/c.ts', 'export function gamma() { return 3; }\n');
-    await waitFor(() => ofType(c, 'fileSummary').length === 1);
-    expect(ofType(c, 'fileSummary')[0]).toMatchObject({ path: 'src/c.ts', summary: 'About src/c.ts (1)' });
-    put('notes.md', '# Notes\n');
+    await waitFor(() => ofType(c, 'change').some(m => m.change.path === 'src/c.ts'));
     put('src/c.ts', 'export function gamma() { return 3; }\nexport function delta() { return 4; }\n');
-    // A clear of the outdated summary, then the new one.
-    await waitFor(() => ofType(c, 'fileSummary').length === 3);
-    expect(ofType(c, 'fileSummary')[1]).toMatchObject({ path: 'src/c.ts', hash: '' });
-    const second = ofType(c, 'fileSummary')[2];
-    expect(second).toMatchObject({ path: 'src/c.ts', summary: 'About src/c.ts (2)', hash: symbolHash(model.get('src/c.ts')!) });
-    expect(second.hash).not.toBe(ofType(c, 'fileSummary')[0].hash);
-    // A body-only edit keeps the symbol set, so no new summary; markdown is not a code file.
-    await sleep(100);
-    put('src/c.ts', 'export function gamma() { return 30; }\nexport function delta() { return 4; }\n');
-    await waitFor(() => ofType(c, 'change').filter(m => m.change.path === 'src/c.ts').length === 3);
+    await waitFor(() => ofType(c, 'change').filter(m => m.change.path === 'src/c.ts').length === 2);
     await sleep(150);
-    expect(fake.files.map(f => f.path)).toEqual(['src/c.ts', 'src/c.ts']);
+    expect(fake.files).toEqual([]);
+    expect(ofType(c, 'fileSummary')).toEqual([]);
+    // Change cards are still summarized on their own.
+    await waitFor(() => ofType(c, 'summary').length === 2);
+    expect((await get('/api/summary?path=src/c.ts')).status).toBe(202);
+    await waitFor(() => ofType(c, 'fileSummary').length === 1);
+    expect(ofType(c, 'fileSummary')[0]).toMatchObject({ path: 'src/c.ts', summary: 'About src/c.ts (2)', hash: symbolHash(model.get('src/c.ts')!) });
   });
 
-  it('withdraws an outdated summary with a recorded clear when the symbol set changes, then writes a new one', async () => {
+  it('withdraws an outdated summary with a recorded clear when the symbol set changes; a new one waits for a request', async () => {
     const s = await boot();
     const c = connect(s.port, s.token);
     await waitFor(() => ofType(c, 'hello').length === 1);
     expect((await get('/api/summary?path=src/a.ts')).status).toBe(202);
     await waitFor(() => ofType(c, 'fileSummary').length === 1);
-    let release!: () => void;
-    fake.hold = new Promise(r => { release = r; });
     put('src/a.ts', 'export function alpha() { return 1; }\nexport function alphaTwo() { return 3; }\n');
     await waitFor(() => ofType(c, 'fileSummary').length === 2);
-    // The clear goes out before the new summary is written, and hello no longer carries the old one.
+    // The clear goes out at once, and hello no longer carries the old summary.
     expect(ofType(c, 'fileSummary')[1]).toMatchObject({ path: 'src/a.ts', hash: '', summary: '' });
     expect((await hello(s)).summaries?.files['src/a.ts']).toBeUndefined();
-    release();
+    await sleep(150);
+    expect(fake.files).toHaveLength(1);
+    // A body-only edit keeps the symbol set: nothing to withdraw.
+    put('src/a.ts', 'export function alpha() { return 10; }\nexport function alphaTwo() { return 3; }\n');
+    await waitFor(() => ofType(c, 'change').filter(m => m.change.path === 'src/a.ts').length === 2);
+    expect((await get('/api/summary?path=src/a.ts')).status).toBe(202);
     await waitFor(() => ofType(c, 'fileSummary').length === 3);
     expect(ofType(c, 'fileSummary')[2]).toMatchObject({ path: 'src/a.ts', hash: symbolHash(model.get('src/a.ts')!), summary: 'About src/a.ts (2)' });
+  });
+
+  it('redoes a requested summary still being written when the symbol set changes', async () => {
+    const s = await boot();
+    const c = connect(s.port, s.token);
+    await waitFor(() => ofType(c, 'hello').length === 1);
+    let release!: () => void;
+    fake.hold = new Promise(r => { release = r; });
+    expect((await get('/api/summary?path=src/a.ts')).status).toBe(202);
+    put('src/a.ts', 'export function alpha() { return 1; }\nexport function alphaTwo() { return 3; }\n');
+    await waitFor(() => fake.files.length === 2);
+    release();
+    await waitFor(() => ofType(c, 'fileSummary').length === 1);
+    await sleep(100);
+    expect(ofType(c, 'fileSummary')).toHaveLength(1);
+    expect(ofType(c, 'fileSummary')[0]).toMatchObject({ path: 'src/a.ts', hash: symbolHash(model.get('src/a.ts')!), summary: 'About src/a.ts (2)' });
   });
 
   it('withdraws a deleted file\'s summary with a clear', async () => {
