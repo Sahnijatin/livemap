@@ -4,7 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { AgentEvent } from '@shared/types.js';
 import { useStore } from '../store';
-import { change, event, session, emptyDomain } from '../fixtures';
+import { change, event, file, session, emptyDomain } from '../fixtures';
 import { Activity } from './Activity';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -29,9 +29,9 @@ const created = change('src/orders.ts', 'created', {
   attribution: { agent: 'claude-code', sessionId: 's1', confidence: 'exact', eventId: 3, intent: 'Add an order service' },
 });
 
-function mount() {
+function mount(changes = [created]) {
   useStore.getState().apply({
-    type: 'hello', root: '/p/shop', name: 'shop', files: [], changes: [created], usedBy: [], domain: emptyDomain(), indexing: false,
+    type: 'hello', root: '/p/shop', name: 'shop', files: [file('src/orders.ts')], changes, usedBy: [], domain: emptyDomain(), indexing: false,
     events, sessions: [s1], control: { paused: false, flags: [] },
   });
   act(() => root.render(<Activity />));
@@ -77,6 +77,36 @@ describe('Activity', () => {
     expect(card.querySelector('.ag-badge')?.textContent).toMatch(/exact/i);
     act(() => (card.querySelector('.ch') as HTMLElement).click());
     expect(useStore.getState().selected).toBe('src/orders.ts');
+  });
+
+  it('opens the inspector slide-over from a change card below 1080 px', () => {
+    const real = window.matchMedia;
+    window.matchMedia = ((q: string) => ({ matches: q.includes('max-width:1079'), media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
+    try {
+      mount();
+      act(() => (host.querySelector('.f-chg .ch') as HTMLElement).click());
+      expect(useStore.getState().selected).toBe('src/orders.ts');
+      expect(useStore.getState().panel).toBe('inspector');
+    } finally {
+      window.matchMedia = real;
+    }
+  });
+
+  it('makes a deleted file\'s change card non-interactive, so it never selects or joins Recent', () => {
+    const gone = change('src/old.ts', 'deleted', { at: T + 6000 });
+    const stale = change('src/moved.ts', 'modified', { at: T + 7000 });
+    mount([created, gone, stale]);
+    const cards = [...host.querySelectorAll('.f-chg')];
+    const header = (p: string) => cards.find(c => c.textContent?.includes(p))!.querySelector('.ch') as HTMLButtonElement;
+    expect(header('src/old.ts').disabled).toBe(true);
+    expect(header('src/old.ts').title).toMatch(/deleted/);
+    expect(header('src/moved.ts').disabled).toBe(true);
+    expect(header('src/moved.ts').title).toMatch(/no longer/);
+    act(() => header('src/old.ts').click());
+    act(() => header('src/moved.ts').click());
+    expect(useStore.getState().selected).toBeNull();
+    expect(useStore.getState().history).toEqual([]);
+    expect(header('src/orders.ts').disabled).toBe(false);
   });
 
   it('shows the change summary as a one-line lead above the facts, as plain text', () => {

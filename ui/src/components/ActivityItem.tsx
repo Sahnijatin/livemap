@@ -6,6 +6,7 @@ import { useStore } from '../store';
 import { agentName } from '../agents';
 import { changeFacts } from '../changes';
 import { layerOf } from '../layers';
+import { isNarrow } from '../media';
 import { prefersReducedMotion } from '../scroll';
 import type { FeedItem } from '../feed';
 import { Avatar } from './Avatar';
@@ -137,9 +138,17 @@ function hunkLines(c: ChangeSummary): { cls: string; text: string }[] {
   return out;
 }
 
+/** Open a changed file in the inspector (a slide-over below 1080 px). */
+function openFile(path: string): void {
+  const s = useStore.getState();
+  s.select(path);
+  if (isNarrow()) s.setPanel('inspector');
+}
+
 function Change({ change: c }: { change: ChangeSummary }) {
   const [open, setOpen] = useState(false);
-  const select = useStore(s => s.select);
+  // A deleted file (or one gone since) has nothing to open: the header is not a link to it.
+  const openable = useStore(s => c.kind !== 'deleted' && !!s.files[c.path]);
   // Only cards that added routes follow the domain index, and only its routes of this file.
   const routes = useStore(s => (c.routes.added.length ? s.routesByFile[c.path] ?? NO_ROUTES : NO_ROUTES));
   const facts = changeFacts(c, routes);
@@ -149,7 +158,10 @@ function Change({ change: c }: { change: ChangeSummary }) {
   const lines = open ? hunkLines(c) : [];
   return (
     <article className={clsx('fi f-chg', open && 'open')}>
-      <button type="button" className="ch" onClick={() => select(c.path)} title={`Open ${c.path}`}>
+      <button
+        type="button" className="ch" disabled={!openable} onClick={() => openFile(c.path)}
+        title={openable ? `Open ${c.path}` : `${c.path} ${c.kind === 'deleted' ? 'was deleted' : 'is no longer in the project'}`}
+      >
         <LayerTile layer={layer} className="ic" />
         <span className="p">{c.path}</span>
         <span className={clsx('tg', kind[1])}>{kind[0]}</span>

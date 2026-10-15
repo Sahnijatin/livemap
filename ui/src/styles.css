@@ -472,6 +472,7 @@
   .f-chg { margin-left:38px; background:var(--card); border-radius:18px; border:1px solid var(--hair); box-shadow:var(--shadow); overflow:hidden; transition:box-shadow .3s,transform .3s var(--ease); }
   .f-chg:hover { box-shadow:var(--shadow-lg); transform:translateY(-1px); }
   .f-chg .ch { display:flex; width:100%; align-items:center; gap:10px; padding:12px 14px; border:0; background:none; text-align:left; cursor:pointer; min-width:0; }
+  .f-chg .ch:disabled { cursor:default; color:inherit; }
   .f-chg .ch .ic { width:30px; height:30px; border-radius:9px; }
   .f-chg .ch .ic svg { width:15px; height:15px; }
   .f-chg .p { font:600 13px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
