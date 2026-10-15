@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -142,6 +142,24 @@ describe('symlinked project folder (#32)', () => {
       expect(toolPaths('Edit', { file_path: `${tmp}/link/other.ts` }, real)).toEqual([]);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('#40: resolves an outside path once, then answers repeats from the cache', () => {
+    const outside = path.join(os.tmpdir(), `lm-outside-${process.pid}-${Date.now()}`, 'deep', 'missing', 'x.ts');
+    const spy = vi.spyOn(fs, 'realpathSync');
+    try {
+      expect(toolPaths('Read', { file_path: outside }, '/p')).toEqual([]);
+      expect(toolLabel('Read', { file_path: outside }, '/p')).toBe('Read deep/missing/x.ts');
+      const first = spy.mock.calls.length;
+      // Walks down from the longest prefix and stops at the first that exists (the tmp dir).
+      expect(first).toBe(5);
+      spy.mockClear();
+      expect(toolPaths('Read', { file_path: outside }, '/p')).toEqual([]);
+      expect(toolLabel('Read', { file_path: outside }, '/p')).toBe('Read deep/missing/x.ts');
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
     }
   });
 });
