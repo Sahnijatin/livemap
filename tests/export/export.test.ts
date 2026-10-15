@@ -394,8 +394,15 @@ describe('stripCode', () => {
     expect(stripCode('fix `foo(LEAK')).toBe(`fix ${R}`);
   });
   it('removes a fence opened mid-line, and an unclosed one to the end', () => {
-    expect(stripCode('Run ```\nLEAK\n``` then go')).toBe(`Run ${R}\n then go`);
+    // A fence closes only on a line holding nothing else, so text after it is code still.
+    expect(stripCode('Run ```\nLEAK\n``` then go')).toBe(`Run ${R}`);
+    expect(stripCode('Run ```\nLEAK\n```\nthen go')).toBe(`Run ${R}\nthen go`);
     expect(stripCode('Maybe ```\nLEAK unclosed')).toBe(`Maybe ${R}`);
+  });
+  it('does not let a fence with text after it, or a wrapped inline span, leak code', () => {
+    expect(stripCode('```\ncode1\n```python\nLEAK1\n```\nafter')).toBe(`${R}\nafter`);
+    expect(stripCode('  ```\nLEAK3\n  ```  trailing LEAK4\nmore')).toBe(R);
+    expect(stripCode('a `foo\nLEAK2` b')).toBe(`a ${R} b`);
   });
   it('leaves text without code alone', () => {
     expect(stripCode('Adds a cancel route.\nNo code here.')).toBe('Adds a cancel route.\nNo code here.');

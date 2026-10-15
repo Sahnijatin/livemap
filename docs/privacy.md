@@ -29,7 +29,7 @@ Everything LiveMap stores lives in its home folder, `~/.livemap` (or `$LIVEMAP_H
 | `usage.json` | This month's summary token count, shared by every LiveMap process on the machine. |
 | `cache/summaries/` | Summaries already written, so they are not requested twice. |
 | `init/` | What `livemap init` created in each agent config file, so `--remove` can restore it. |
-| `locks/` | One lock file per running project, with the pid and port of the LiveMap holding it, so a second LiveMap on the same project exits. Removed when LiveMap stops. |
+| `locks/` | One lock file per running project, with the pid, port and a random id of the LiveMap holding it, so a second LiveMap on the same project exits. The server answers `/__livemap/lock` with that id without a token; it says nothing about the project. Removed when LiveMap stops. |
 | `run/` | The port and token of each running LiveMap, for the hooks. Removed when LiveMap stops. |
 | `bin/livemap-hook.mjs` | The hook script. |
 
