@@ -151,6 +151,27 @@ describe('Activity', () => {
     expect(host.querySelectorAll('.typing')).toHaveLength(1);
   });
 
+  it('a new LiveMap run (ids restart at 1) types its messages and keeps none of the old run\'s row state', () => {
+    const run = (sid: string, events: AgentEvent[]) => useStore.getState().apply({
+      type: 'hello', root: '/p/shop', name: 'shop', files: [], changes: [], usedBy: [], domain: emptyDomain(), indexing: false,
+      events, sessions: [session({ id: sid, status: 'working', startedAt: T })], control: { paused: false, flags: [] },
+    });
+    run('r1', [event({ id: 1, at: T, sessionId: 'r1', type: 'prompt', text: 'First run' }), event({ id: 2, at: T + 1, sessionId: 'r1', type: 'thinking', text: 'Old thought' })]);
+    act(() => root.render(<Activity />));
+    // Run 1: message 3 arrives live and types out; the reader opens the thinking row.
+    act(() => useStore.getState().apply({ type: 'agentEvent', event: event({ id: 3, at: T + 2, sessionId: 'r1', type: 'message', text: 'Run one says hi' }) }));
+    expect(host.querySelectorAll('.typing')).toHaveLength(1);
+    act(() => (host.querySelector('.f-think button') as HTMLElement).click());
+    expect(host.querySelector('.f-think.open')).not.toBeNull();
+
+    // LiveMap restarts: the same ids now name other events.
+    act(() => run('r2', [event({ id: 1, at: T + 10, sessionId: 'r2', type: 'prompt', text: 'Second run' }), event({ id: 2, at: T + 11, sessionId: 'r2', type: 'thinking', text: 'New thought' })]));
+    expect(host.querySelector('.f-prompt')?.textContent).toContain('Second run');
+    expect(host.querySelector('.f-think.open')).toBeNull();
+    act(() => useStore.getState().apply({ type: 'agentEvent', event: event({ id: 3, at: T + 12, sessionId: 'r2', type: 'message', text: 'Run two says hi' }) }));
+    expect(host.querySelectorAll('.typing')).toHaveLength(1);
+  });
+
   it('computes hero counters from change facts', () => {
     mount();
     const stats = [...host.querySelectorAll('.hero .stat')].map(s => s.textContent);

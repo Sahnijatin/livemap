@@ -78,18 +78,19 @@ export const STATE_THROTTLE_MS = 120;
  * last. A response applies only when no newer request has already applied, so an older answer never
  * overrides a newer one. `cancel` drops the pending request and every response still in flight.
  */
-export function latestThrottle<T>(fetch: (seq: number) => Promise<T>, apply: (v: T) => void, wait = STATE_THROTTLE_MS, onError?: () => void) {
+export function latestThrottle<T, A = number>(fetch: (req: A) => Promise<T>, apply: (v: T) => void, wait = STATE_THROTTLE_MS, onError?: () => void) {
   let last = -Infinity;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let pending: number | null = null;
+  // Boxed, so any request value (a seq, or a seq with what was true when it was asked) can be pending.
+  let pending: { req: A } | null = null;
   let issued = 0;
   let applied = 0;
   const fire = () => {
-    const seq = pending!;
+    const { req } = pending!;
     pending = null;
     last = Date.now();
     const id = ++issued;
-    fetch(seq).then(v => {
+    fetch(req).then(v => {
       if (id <= applied) return;
       applied = id;
       apply(v);
@@ -99,8 +100,8 @@ export function latestThrottle<T>(fetch: (seq: number) => Promise<T>, apply: (v:
     });
   };
   return {
-    request(seq: number) {
-      pending = seq;
+    request(req: A) {
+      pending = { req };
       if (timer) return;
       const due = last + wait - Date.now();
       if (due <= 0) return fire();

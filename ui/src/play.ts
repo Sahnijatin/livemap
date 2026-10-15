@@ -1,6 +1,9 @@
 import { historySource, type HistoryRecord, type HistorySource } from './history';
 import { setPlayEngine, useStore } from './store';
 
+const FAILED_START = 'Could not load the history to play. Try again.';
+const FAILED_PAGE = 'Playback stopped: the history could not be read.';
+
 // The playback engine. Loaded on the first Play, so the first paint does not carry it.
 
 export const PLAY_PAGE = 500;
@@ -54,8 +57,9 @@ export function play(
 /**
  * Starts the timeline's playback: from the rewound point, or from the start of the current run when live
  * (a replay at its end starts over from the first recorded event).
- * Gives up (null) when `current()` turns false while the first state loads. The engine's end returns to
- * live (whose `playing: false` stops it); a failed page calls `failed`.
+ * Gives up (null) when `current()` turns false while the first state loads, or when it cannot load (with an
+ * error toast). The engine's end returns to live (whose `playing: false` stops it); a failed page shows an
+ * error toast and calls `failed`.
  */
 export async function startPlayback(current: () => boolean, failed: () => void): Promise<(() => void) | null> {
   const st = useStore.getState();
@@ -74,6 +78,8 @@ export async function startPlayback(current: () => boolean, failed: () => void):
       st.rewind(first);
       from = { seq: first.seq, at: first.at };
     } catch {
+      // Say why Play went back to idle, unless something else stopped it meanwhile.
+      if (current()) st.showToast(FAILED_START, 'error');
       return null;
     }
   }
@@ -81,7 +87,10 @@ export async function startPlayback(current: () => boolean, failed: () => void):
   const stop = play(historySource(), from, () => useStore.getState().historyStatus.last, {
     apply: rec => useStore.getState().applyHistorical(rec),
     live: () => void useStore.getState().backToLive(),
-    failed,
+    failed: () => {
+      useStore.getState().showToast(FAILED_PAGE, 'error');
+      failed();
+    },
   });
   setPlayEngine(stop);
   return stop;

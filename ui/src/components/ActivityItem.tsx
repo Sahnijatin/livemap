@@ -14,6 +14,8 @@ import { Chevron, CheckIcon, CrossIcon, GitIcon, LayerTile } from './icons';
 
 /** Message ids already typed out, so a remount (Show earlier, reconnect) never types twice. */
 const typed = new Set<number>();
+// Event ids restart at 1 with every LiveMap run: a hello starts the set over.
+useStore.subscribe((s, prev) => { if (s.hellos !== prev.hellos) typed.clear(); });
 /** Long typing still finishes quickly. */
 const TYPE_MS = 1200;
 const CLAMP = 900;
