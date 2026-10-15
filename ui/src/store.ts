@@ -394,6 +394,12 @@ export const useStore = create<StoreState>()((set, get) => ({
         set({ events: prev.length >= MAX_EVENTS ? [...prev.slice(prev.length - MAX_EVENTS + 1), msg.event] : [...prev, msg.event] });
         return;
       }
+      case 'agentEvents': {
+        // One copy of the array and one update for the whole batch.
+        const all = get().events.concat(msg.events);
+        set({ events: all.length > MAX_EVENTS ? all.slice(all.length - MAX_EVENTS) : all });
+        return;
+      }
       case 'session':
         set({ sessions: { ...get().sessions, [msg.session.id]: msg.session } });
         return;

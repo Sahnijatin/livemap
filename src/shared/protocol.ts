@@ -23,7 +23,10 @@ export type ServerMessage =
   | { type: 'usedBy'; usedBy: UsedByEntry[] }
   | { type: 'domain'; domain: DomainIndex }
   | { type: 'indexing'; done: number; total: number }
+  /** One agent event. Batches use `agentEvents`; this stays for single events, older history and exports. */
   | { type: 'agentEvent'; event: AgentEvent }
+  /** Agent events recorded together (a transcript tailer's batch), oldest first, applied in one update. */
+  | { type: 'agentEvents'; events: AgentEvent[] }
   | { type: 'session'; session: AgentSession }
   | { type: 'control'; control: ControlState }
   | { type: 'attribution'; changeId: number; attribution: Attribution }

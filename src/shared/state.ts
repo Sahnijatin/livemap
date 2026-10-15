@@ -41,6 +41,11 @@ function appendCapped<T>(list: T[], item: T, max: number): T[] {
   return list.length >= max ? [...list.slice(list.length - max + 1), item] : [...list, item];
 }
 
+function appendAllCapped<T>(list: T[], items: T[], max: number): T[] {
+  const all = list.concat(items);
+  return all.length > max ? all.slice(all.length - max) : all;
+}
+
 /** Applies one server message. Pure: unchanged slices keep their references. Mirrors the UI store's `apply` for data. */
 export function applyMessage(state: ProjectState, msg: ServerMessage): ProjectState {
   switch (msg.type) {
@@ -78,6 +83,8 @@ export function applyMessage(state: ProjectState, msg: ServerMessage): ProjectSt
       return { ...state, summaries: { ...(state.summaries ?? emptySummaries()), status: msg.status } };
     case 'agentEvent':
       return { ...state, events: appendCapped<AgentEvent>(state.events, msg.event, MAX_EVENTS) };
+    case 'agentEvents':
+      return { ...state, events: appendAllCapped<AgentEvent>(state.events, msg.events, MAX_EVENTS) };
     case 'session': {
       const i = state.sessions.findIndex(s => s.id === msg.session.id);
       if (i < 0) return { ...state, sessions: [...state.sessions, msg.session] };

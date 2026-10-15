@@ -164,6 +164,35 @@ describe('buildExport', () => {
     for (const s of ['CODE_ARG', 'CODE_A', 'CODE_B', 'CODE_C', 'CODE_INLINE', 'CODE_TITLE']) expect(withCode).toContain(s);
   });
 
+  it('code: false redacts every event in an agentEvents batch', async () => {
+    write('a.ts', 'const a = 1;\n');
+    const tool: AgentEvent = { ...event(1, 's1'), type: 'tool_end', tool: { name: 'Edit', label: 'Edit a.ts', input: { old_string: 'BATCH_IN' }, output: 'BATCH_OUT', paths: ['a.ts'] } };
+    const said: AgentEvent = { ...event(2, 's1'), text: 'Done:\n```ts\nconst BATCH_CODE = 1;\n```\nAll set.' };
+    await record([file('a.ts')], [{ type: 'agentEvents', events: [tool, said] }]);
+    const { text, payload } = decode((await buildExport(root, { home, code: false, uiHtml: UI })).html);
+    expect(text).not.toMatch(/BATCH_/);
+    const batch = plain(payload.messages).find(m => m.type === 'agentEvents') as Extract<ServerMessage, { type: 'agentEvents' }>;
+    expect(batch.events.map(e => e.tool?.label ?? e.text)).toEqual(['Edit a.ts', 'Done:\n[code removed]\nAll set.']);
+    const { text: withCode } = decode((await buildExport(root, { home, code: true, uiHtml: UI })).html);
+    for (const s of ['BATCH_IN', 'BATCH_OUT', 'BATCH_CODE']) expect(withCode).toContain(s);
+  });
+
+  it('with a session, keeps only that session\'s events from agentEvents batches', async () => {
+    write('a.ts', 'x\n');
+    await record([file('a.ts')], [
+      { type: 'agentEvents', events: [event(1, 's2'), event(2, 's2')] },
+      { type: 'agentEvents', events: [event(3, 's1'), event(4, 's2'), event(5, 's1')] },
+      { type: 'agentEvents', events: [event(6, 's2')] },
+      { type: 'agentEvent', event: event(7, 's1') },
+    ]);
+    const { payload } = decode((await buildExport(root, { home, session: 's1', code: true, uiHtml: UI })).html);
+    const msgs = plain(payload.messages);
+    expect(msgs.map(m => m.type)).toEqual(['agentEvents', 'agentEvent']);
+    const ids = msgs.flatMap(m => (m.type === 'agentEvents' ? m.events : m.type === 'agentEvent' ? [m.event] : [])).map(e => e.id);
+    expect(ids).toEqual([3, 5, 7]);
+    expect(payload.initial.events).toEqual([]);
+  });
+
   it('code: false removes code spans from labels of tools other than shell', async () => {
     write('a.ts', 'const a = 1;\n');
     const ev: AgentEvent = { ...event(1, 's1'), type: 'tool_start', tool: { name: 'Task', label: 'Subagent: add `LEAK_SPAN()` to a.ts', paths: [] } };

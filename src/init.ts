@@ -24,7 +24,6 @@ const SCRIPT_NAME = 'livemap-hook.mjs';
  * written as `'\''`) or double-quoted (Windows, and every command before single quoting).
  */
 const LIVEMAP_COMMAND = /^node (?:"[^"]*[/\\]livemap-hook\.mjs"|'(?:[^']|'\\'')*[/\\]livemap-hook\.mjs') (claude-code|codex|cursor) [A-Za-z]+$/;
-const TOOL_EVENTS = new Set(['PreToolUse', 'PostToolUse']);
 
 interface AgentSpec {
   file: string;
@@ -36,14 +35,16 @@ interface AgentSpec {
   entry(command: string, event: string): Record<string, unknown>;
 }
 
-const SPECS: Record<AgentName, AgentSpec> = {
+/** Exported for tests. */
+export const SPECS: Record<AgentName, AgentSpec> = {
   claude: {
     file: '.claude/settings.local.json',
     hookAgent: 'claude-code',
-    events: ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop'],
+    // No PostToolUse: the transcript carries tool results, and an older init's entry is dropped on re-init.
+    events: ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop'],
     kind: 'groups',
     entry: (command, event) => ({
-      ...(TOOL_EVENTS.has(event) ? { matcher: '*' } : {}),
+      ...(event === 'PreToolUse' ? { matcher: '*' } : {}),
       hooks: [{ type: 'command', command, timeout: 5 }],
     }),
   },
@@ -226,6 +227,25 @@ function hasLiveMap(config: Obj): boolean {
   return Object.values(config.hooks).some(list => (list as unknown[]).some(item => isLiveMap(item) || groupHasLiveMap(item)));
 }
 
+/** `list` without its LiveMap entries; `removed` says whether it held any. */
+function withoutLiveMap(list: unknown[], kind: AgentSpec['kind']): { next: unknown[]; removed: boolean } {
+  const next: unknown[] = [];
+  let removed = false;
+  for (const item of list) {
+    if (kind === 'flat') {
+      if (isLiveMap(item)) removed = true;
+      else next.push(item);
+      continue;
+    }
+    if (!groupHasLiveMap(item)) { next.push(item); continue; }
+    removed = true;
+    const g = item as Obj;
+    const rest = (g.hooks as unknown[]).filter(h => !isLiveMap(h));
+    if (rest.length) next.push({ ...g, hooks: rest });
+  }
+  return { next, removed };
+}
+
 /**
  * Removes LiveMap entries. Containers are pruned only when init created them (per `created`), or,
  * for files init has no record of, when the removal itself emptied them.
@@ -236,20 +256,7 @@ function strip(config: Obj, kind: AgentSpec['kind'], created: Created | null): O
   let touched = false;
   for (const [ev, list] of Object.entries(config.hooks)) {
     const arr = list as unknown[];
-    const next: unknown[] = [];
-    let removed = false;
-    for (const item of arr) {
-      if (kind === 'flat') {
-        if (isLiveMap(item)) removed = true;
-        else next.push(item);
-        continue;
-      }
-      if (!groupHasLiveMap(item)) { next.push(item); continue; }
-      removed = true;
-      const g = item as Obj;
-      const rest = (g.hooks as unknown[]).filter(h => !isLiveMap(h));
-      if (rest.length) next.push({ ...g, hooks: rest });
-    }
+    const { next, removed } = withoutLiveMap(arr, kind);
     if (!removed) { hooks[ev] = arr; continue; }
     touched = true;
     const ours = created ? created.events.includes(ev) : true;
@@ -306,6 +313,18 @@ function initOne(root: string, agent: AgentName, hookPath: string, home: string)
   }
   if (!isObj(next.hooks)) created.hooks = true;
   const hooks: Obj = { ...((next.hooks as Obj | undefined) ?? {}) };
+  // LiveMap entries for events it no longer uses (an older init's): pruned like remove does.
+  for (const ev of Object.keys(hooks)) {
+    if (spec.events.includes(ev)) continue;
+    const { next: rest, removed } = withoutLiveMap(hooks[ev] as unknown[], spec.kind);
+    if (!removed) continue;
+    const ours = record ? created.events.includes(ev) : true;
+    if (rest.length || !ours) hooks[ev] = rest;
+    else {
+      delete hooks[ev];
+      created.events = created.events.filter(e => e !== ev);
+    }
+  }
   for (const ev of spec.events) {
     if (!Array.isArray(hooks[ev]) && !created.events.includes(ev)) created.events.push(ev);
     const entry = spec.entry(hookCommand(hookPath, spec.hookAgent, ev), ev);

@@ -8,6 +8,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildOnce } from '../build.js';
+import { SPECS } from '../../src/init.js';
+import { normalizeHook } from '../../src/agents/normalize.js';
+import { isBlockable } from '../../src/shared/blockable.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const hook = path.join(repo, 'dist', 'hook.mjs');
@@ -81,6 +84,23 @@ describe('hook bundle', () => {
       .map(m => m[1] ?? m[2] ?? m[3]);
     expect(specs.length).toBeGreaterThan(0);
     for (const s of specs) expect(s).toMatch(/^node:/);
+  });
+});
+
+describe('blockable rules', () => {
+  it('isBlockable matches normalizeHook for every agent and event init installs', () => {
+    let n = 0;
+    for (const spec of Object.values(SPECS)) {
+      const agent = spec.hookAgent as 'claude-code' | 'codex' | 'cursor';
+      for (const event of spec.events) {
+        const payload = { session_id: 's1', conversation_id: 's1', tool_name: 'Bash', tool_input: { command: 'ls' }, command: 'ls' };
+        expect([agent, event, isBlockable(agent, event)]).toEqual([agent, event, normalizeHook({ agent, event, payload, root, now: 1 }).blockable]);
+        n++;
+      }
+    }
+    expect(n).toBeGreaterThan(10);
+    expect(isBlockable('cursor', 'beforeShellExecution')).toBe(true);
+    expect(isBlockable('claude-code', 'Stop')).toBe(false);
   });
 });
 

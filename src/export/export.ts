@@ -79,7 +79,9 @@ export async function buildExport(root: string, opts: ExportOptions): Promise<Ex
  * records between its first and last event. Starts from the state just before its first event.
  */
 async function sessionScope(store: HistoryStore, all: Rec[], id: string, firstSeq: number, name: string): Promise<{ initial: ProjectState; messages: Rec[] }> {
-  const mine = all.filter(([, , m]) => m.type === 'agentEvent' && m.event.sessionId === id);
+  const ownEvents = (m: ServerMessage): AgentEvent[] =>
+    (m.type === 'agentEvent' ? [m.event] : m.type === 'agentEvents' ? m.events : []).filter(e => e.sessionId === id);
+  const mine = all.filter(([, , m]) => ownEvents(m).length > 0);
   if (!mine.length) throw new Error(`No events recorded for session ${id}.`);
   const first = mine[0][0];
   const last = mine[mine.length - 1][0];
@@ -93,7 +95,7 @@ async function sessionScope(store: HistoryStore, all: Rec[], id: string, firstSe
     if (seq < first) return false;
     const inSpan = seq <= last;
     switch (m.type) {
-      case 'agentEvent': return m.event.sessionId === id;
+      case 'agentEvent': case 'agentEvents': return ownEvents(m).length > 0;
       case 'session': return m.session.id === id;
       case 'change': return changeIds.has(m.change.id);
       case 'attribution': case 'summary': return changeIds.has(m.changeId);
@@ -107,7 +109,9 @@ async function sessionScope(store: HistoryStore, all: Rec[], id: string, firstSe
     sessions: s.sessions.filter(x => x.id === id),
     changes: s.changes.filter(c => changeIds.has(c.id)),
   });
-  const messages = all.filter(([seq, , m]) => keep(seq, m)).map(([seq, at, m]): Rec => [seq, at, m.type === 'hello' ? { ...m, ...only(m), type: 'hello' } : m]);
+  const scoped = (m: ServerMessage): ServerMessage =>
+    m.type === 'hello' ? { ...m, ...only(m), type: 'hello' } : m.type === 'agentEvents' ? { ...m, events: ownEvents(m) } : m;
+  const messages = all.filter(([seq, , m]) => keep(seq, m)).map(([seq, at, m]): Rec => [seq, at, scoped(m)]);
   let initial: ProjectState;
   // The nearest record before the first event: seqs can have gaps where a corrupt line was skipped.
   const before = all.filter(([seq]) => seq < first).at(-1)?.[0];
@@ -117,9 +121,9 @@ async function sessionScope(store: HistoryStore, all: Rec[], id: string, firstSe
   } else {
     // The cap trimmed history to start at this event: the state there, without the event it replays next.
     const { seq: _s, at: _a, ...state } = await store.stateAt(first);
-    const ev = (mine[0][2] as Extract<ServerMessage, { type: 'agentEvent' }>).event;
+    const replayed = new Set(ownEvents(mine[0][2]).map(e => e.id));
     const o = only(state);
-    initial = { ...emptyState(name, name), ...o, events: o.events.filter(e => e.id !== ev.id) };
+    initial = { ...emptyState(name, name), ...o, events: o.events.filter(e => !replayed.has(e.id)) };
   }
   return { initial, messages };
 }
@@ -205,6 +209,7 @@ function withoutCode(initial: ProjectState, messages: Rec[]): { initial: Project
       case 'hello': return state(m);
       case 'change': return { ...m, change: change(m.change) };
       case 'agentEvent': return { ...m, event: event(m.event) };
+      case 'agentEvents': return { ...m, events: m.events.map(event) };
       case 'attribution': return { ...m, attribution: attribution(m.attribution) };
       case 'session': return { ...m, session: session(m.session) };
       default: return m;

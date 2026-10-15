@@ -105,7 +105,8 @@ const tidyTitle = (s: string) => s.replace(/\s+/g, ' ').trim().slice(0, MAX_TITL
 
 /**
  * Collects agent activity from hooks and transcript tailers into sessions and a bounded event ring.
- * Emits 'event' (AgentEvent), 'session' (AgentSession) and, when a tailer fails and someone listens, 'error'.
+ * Emits 'event' (AgentEvent) per event, 'events' (AgentEvent[]) per batch recorded together (one event
+ * outside `ingestRaw`), 'session' (AgentSession) and, when a tailer fails and someone listens, 'error'.
  */
 export class AgentHub extends EventEmitter {
   readonly control = new Control();
@@ -124,6 +125,8 @@ export class AgentHub extends EventEmitter {
   private readonly tailerIdleMs: number;
   private readonly chains = new Map<string, { tail: Promise<void>; count: number }>();
   private nextId = 1;
+  /** Events recorded during the current `ingestRaw`, fired together as 'events' at its end. */
+  private batch: AgentEvent[] | null = null;
   private sweep?: NodeJS.Timeout;
   private discovery?: NodeJS.Timeout;
   private readonly discoveryMs: number;
@@ -247,7 +250,14 @@ export class AgentHub extends EventEmitter {
   }
 
   ingestRaw(events: RawAgentEvent[], hints: IngestHints): void {
-    for (const e of events) this.record(e, hints);
+    this.batch = [];
+    try {
+      for (const e of events) this.record(e, hints);
+    } finally {
+      const batch = this.batch;
+      this.batch = null;
+      if (batch.length) this.fire('events', batch);
+    }
   }
 
   watchClaudeTranscript(transcript: string): void {
@@ -303,7 +313,7 @@ export class AgentHub extends EventEmitter {
     }
   }
 
-  private fire(name: 'session' | 'event', arg: unknown): void {
+  private fire(name: 'session' | 'event' | 'events', arg: unknown): void {
     for (const l of this.listeners(name)) {
       try { (l as (a: unknown) => void).call(this, arg); } catch { /* a faulty listener must not break ingestion */ }
     }
@@ -401,6 +411,8 @@ export class AgentHub extends EventEmitter {
     st.session.status = status;
     this.touch(st, event.at);
     this.fire('event', event);
+    if (this.batch) this.batch.push(event);
+    else this.fire('events', [event]);
   }
 
   /**

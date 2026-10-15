@@ -36,7 +36,7 @@ const USER_CLAUDE = {
   permissions: { allow: ['Bash(ls)'] },
   hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'my-guard.sh' }] }] },
 };
-const CLAUDE_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop'];
+const CLAUDE_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop'];
 const CODEX_EVENTS = ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop'];
 const CURSOR_EVENTS = ['beforeSubmitPrompt', 'afterAgentResponse', 'afterAgentThought', 'preToolUse', 'postToolUse', 'beforeShellExecution', 'afterShellExecution', 'afterFileEdit', 'stop'];
 
@@ -112,6 +112,23 @@ describe('initAgents: claude', () => {
     expect(initAgents(root, { agents: ['claude'], hookPath: moved, home })[0].action).toBe('updated');
     const after = read('.claude/settings.local.json');
     expect(JSON.stringify(after)).toBe(JSON.stringify(before).split(hookPath).join(moved));
+  });
+
+  it('re-init drops the old LiveMap PostToolUse entry and keeps the user\'s own', () => {
+    const lm = (ev: string) => ({ ...(ev.endsWith('ToolUse') ? { matcher: '*' } : {}), hooks: [{ type: 'command', command: hookCommand(hookPath, 'claude-code', ev), timeout: 5 }] });
+    const mine = { matcher: 'Edit', hooks: [{ type: 'command', command: 'my-fmt.sh' }] };
+    const old = { hooks: { ...Object.fromEntries([...CLAUDE_EVENTS, 'PostToolUse'].map(ev => [ev, [lm(ev)]])), PostToolUse: [mine, lm('PostToolUse')] } };
+    write('.claude/settings.local.json', old);
+    expect(initAgents(root, { agents: ['claude'], hookPath, home })[0].action).toBe('updated');
+    expect(read('.claude/settings.local.json').hooks.PostToolUse).toEqual([mine]);
+    expect(initAgents(root, { agents: ['claude'], hookPath, home })[0].action).toBe('unchanged');
+  });
+
+  it('re-init removes a PostToolUse list that held only LiveMap\'s entry', () => {
+    const lm = (ev: string) => ({ hooks: [{ type: 'command', command: hookCommand(hookPath, 'claude-code', ev), timeout: 5 }] });
+    write('.claude/settings.local.json', { hooks: { Stop: [lm('Stop')], PostToolUse: [lm('PostToolUse')] } });
+    initAgents(root, { agents: ['claude'], hookPath, home });
+    expect(Object.keys(read('.claude/settings.local.json').hooks)).toEqual(['Stop', 'SessionStart', 'UserPromptSubmit', 'PreToolUse']);
   });
 
   it('skips a config file that is not valid JSON and leaves it untouched', () => {

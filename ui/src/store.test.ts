@@ -102,6 +102,21 @@ describe('store.apply', () => {
     expect(useStore.getState().filter).toBe('order');
   });
 
+  it('agentEvents appends a batch in one state update and keeps the last 2,000 events', () => {
+    const s = useStore.getState();
+    s.apply(hello());
+    for (let i = 1; i <= 1900; i++) s.apply({ type: 'agentEvent', event: event({ id: i, type: 'message', text: `m${i}` }) });
+    let updates = 0;
+    const unsub = useStore.subscribe(() => updates++);
+    s.apply({ type: 'agentEvents', events: Array.from({ length: 300 }, (_, i) => event({ id: 1901 + i, type: 'message', text: `m${1901 + i}` })) });
+    unsub();
+    expect(updates).toBe(1);
+    const st = useStore.getState();
+    expect(st.events).toHaveLength(2000);
+    expect(st.events[0].id).toBe(201);
+    expect(st.events[1999].id).toBe(2200);
+  });
+
   it('agentEvent appends and keeps the last 2,000 events', () => {
     const s = useStore.getState();
     s.apply(hello());
