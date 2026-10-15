@@ -91,14 +91,14 @@ function listening(port: number): Promise<boolean> {
 }
 
 /**
- * Whether the LiveMap holding lock `id` answers on `port`: `yes` when the server there names that id; `no`
- * when nothing listens, or a server answers with another id or is not a LiveMap; `silent` when a connection
- * opens but no answer comes in time (a suspended LiveMap, or a service that does not speak HTTP).
+ * What answers for lock `id` on `port`: `yes` when the server there names that id; `other` when a server
+ * answers with another id or is not a LiveMap (the port was reused); `none` when nothing listens or nothing
+ * answers in time (a LiveMap shutting down or suspended, or a silent service).
  */
-function answers(port: number, id: string): Promise<'yes' | 'no' | 'silent'> {
+function answers(port: number, id: string): Promise<'yes' | 'other' | 'none'> {
   return new Promise(resolve => {
     let settled = false;
-    const done = (r: 'yes' | 'no' | 'silent') => { if (!settled) { settled = true; req.destroy(); resolve(r); } };
+    const done = (r: 'yes' | 'other' | 'none') => { if (!settled) { settled = true; req.destroy(); resolve(r); } };
     const req = http.get({ host: '127.0.0.1', port, path: LOCK_PATH, timeout: PROBE_MS }, res => {
       let body = '';
       res.setEncoding('utf8');
@@ -106,21 +106,21 @@ function answers(port: number, id: string): Promise<'yes' | 'no' | 'silent'> {
       res.on('end', () => {
         let got: unknown;
         try { got = (JSON.parse(body) as { lock?: unknown }).lock; } catch { got = undefined; }
-        done(res.statusCode === 200 && got === id ? 'yes' : 'no');
+        done(res.statusCode === 200 && got === id ? 'yes' : 'other');
       });
-      res.on('error', () => done('no'));
+      res.on('error', () => done('none'));
     });
-    req.on('timeout', () => done('silent'));
-    req.on('error', () => done('no'));
+    req.on('timeout', () => done('none'));
+    req.on('error', () => done('none'));
   });
 }
 
 /**
  * Whether the lock still belongs to a running LiveMap: its pid runs and, once its port is recorded, the
  * LiveMap there answers with the lock's id, whatever the lock's age (a sleeping laptop's LiveMap answers once
- * it wakes). A crash leaves a lock whose pid or port something else may take after a reboot; neither
- * answers with the id. When nothing answers in time, or before the port is recorded, the holder's heartbeat
- * decides: recent means held (a suspended LiveMap, or one still starting), `LOCK_STALE_MS` old means gone.
+ * it wakes); a program answering with something else took the port after a crash. When nothing answers (a
+ * LiveMap shutting down after Ctrl+C, one suspended or still starting, or a crash), the holder's heartbeat
+ * decides: recent means held, `LOCK_STALE_MS` old means gone.
  */
 async function held(s: LockState): Promise<boolean> {
   if (s.pid === null || !pidRuns(s.pid)) return false;
@@ -129,7 +129,7 @@ async function held(s: LockState): Promise<boolean> {
   // A lock written before locks had ids: something listening on its port is all that can be checked.
   if (s.id === null) return listening(s.port);
   const a = await answers(s.port, s.id);
-  return a === 'yes' || (a === 'silent' && fresh);
+  return a === 'yes' || (a === 'none' && fresh);
 }
 
 /**

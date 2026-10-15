@@ -293,6 +293,14 @@ describe('project lock (#21)', () => {
       expect(await acquireLock(root)).toEqual({ ok: true });
     });
 
+    it('is held while its LiveMap shuts down (port closed, pid running, heartbeat recent), stale once it ages', async () => {
+      fs.writeFileSync(lockFile(root), JSON.stringify({ pid: other.pid, id: 'abc', port: await closedPort() }));
+      expect(await acquireLock(root)).toEqual({ ok: false, pid: other.pid });
+      const old = (Date.now() - LOCK_STALE_MS - 1000) / 1000;
+      fs.utimesSync(lockFile(root), old, old);
+      expect(await acquireLock(root)).toEqual({ ok: true });
+    });
+
     it('is held when nothing answers in time but the heartbeat is recent (a suspended LiveMap)', async () => {
       answer = () => { /* never answers */ };
       lockOn();
