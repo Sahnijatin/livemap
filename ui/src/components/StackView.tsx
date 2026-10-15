@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import clsx from 'clsx';
 import type { DomainIndex, EnvVar, Tech } from '@shared/domain.js';
+import type { SummaryStatus } from '@shared/summaries.js';
 import { depKey, useStore } from '../store';
 import { LAYERS, LAYER_ORDER, layerOf, type Layer } from '../layers';
 import { isNarrow } from '../media';
@@ -222,11 +223,56 @@ function Env({ env, hasExample }: { env: EnvVar[]; hasExample: boolean }) {
   );
 }
 
-/** The Stack tab: detected technologies, counts, dependencies, scripts and env var names. */
+const EXAMPLE_CONFIG = `${JSON.stringify({ summaries: { enabled: true, provider: 'anthropic', apiKey: 'your-api-key' } }, null, 2)}\n`;
+
+const PROVIDERS: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenAI', ollama: 'Ollama' };
+
+function stateText(s: SummaryStatus): string {
+  if (s.state === 'error') return `error: ${s.error ?? 'unknown'}`;
+  return s.state === 'cap' ? 'cap reached' : s.state;
+}
+
+/** Whether AI summaries are on, which model writes them, and this month's token use against the cap. */
+function AiSummaries() {
+  const status = useStore(s => s.summaries.status);
+  const copy = (): void => {
+    const { showToast } = useStore.getState();
+    navigator.clipboard.writeText(EXAMPLE_CONFIG).then(
+      () => showToast('Example config copied. Paste it into ~/.livemap/config.json.'),
+      () => showToast('Could not copy the example config.', 'error'),
+    );
+  };
+  if (status.state === 'off') {
+    return (
+      <section className="box b-ai">
+        <h4>AI summaries</h4>
+        <p className="muted">Off. Add a key and enable summaries in ~/.livemap/config.json to get one-line explanations.</p>
+        <button type="button" className="linkbtn" onClick={copy}>Copy an example config</button>
+      </section>
+    );
+  }
+  const pct = status.capTokens > 0 ? Math.min(100, (status.usedTokens / status.capTokens) * 100) : 100;
+  return (
+    <section className="box b-ai">
+      <h4>AI summaries</h4>
+      <div className="ai-row">
+        <span className="ai-prov">{PROVIDERS[status.provider ?? ''] ?? status.provider}</span>
+        <code>{status.model}</code>
+        <span className={clsx('ai-state', `s-${status.state}`)}>{stateText(status)}</span>
+      </div>
+      <span className={clsx('ai-bar', status.state === 'cap' && 'full')}><i style={{ width: `${Math.round(pct * 10) / 10}%` }} /></span>
+      <p className="ai-use">{status.usedTokens.toLocaleString()} of {status.capTokens.toLocaleString()} tokens this month</p>
+    </section>
+  );
+}
+
+/** The Stack tab: detected technologies, counts, AI summaries, dependencies, scripts and env var names. */
 export function StackView() {
   const domain = useStore(s => s.domain);
   const base = useStore(s => s.domainBase);
   const files = useStore(s => s.files);
+  // A replay hides the AI box: it would show the exporter's provider, model and use, not the viewer's.
+  const replay = useStore(s => s.replay);
   const hasExample = useMemo(() => Object.keys(files).some(p => ENV_TEMPLATE.test(p)) || domain.env.some(v => v.inExample), [files, domain.env]);
   return (
     <div className="stackv">
@@ -239,6 +285,7 @@ export function StackView() {
         </div>
         <div className="scol">
           <WhatExists counts={domain.counts} />
+          {!replay && <AiSummaries />}
           <Env env={domain.env} hasExample={hasExample} />
         </div>
       </div>
