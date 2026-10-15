@@ -301,9 +301,44 @@ describe('Watcher', () => {
     await waitFor(() => model.get('gen/f49.ts') !== undefined);
     await sleep(800); // let chokidar's crawl of gen/ report its adds
     for (let i = 0; i < 50; i++) expect(reads.get(`gen/f${i}.ts`)).toBe(1);
-    // A later add of the same path is not skipped.
-    put('gen/late.ts', 'export const late = 1;\n');
-    await waitFor(() => model.get('gen/late.ts') !== undefined, 4000);
+    // The skip is not sticky: re-creating an indexed path later is read.
+    fs.rmSync(path.join(root, 'gen/f0.ts'));
+    await waitFor(() => model.get('gen/f0.ts') === undefined, 4000);
+    put('gen/f0.ts', 'export const again = 1;\n');
+    await waitFor(() => model.get('gen/f0.ts') !== undefined, 4000);
+    expect(reads.get('gen/f0.ts')).toBeGreaterThan(1);
+  });
+
+  // Un-ignores gen/ and runs `after` right after the reload returns, before its crawl adds are processed.
+  async function unignoreThen(after: () => void): Promise<void> {
+    put('.gitignore', 'gen/\n');
+    put('gen/a.ts', 'export const a = 1;\n');
+    put('gen/b.ts', 'export const b = 1;\n');
+    await startWatcher();
+    const reload = model.reloadIgnores.bind(model);
+    vi.spyOn(model, 'reloadIgnores').mockImplementation(async (...a) => { const r = await reload(...a); after(); return r; });
+    put('.gitignore', '# nothing ignored\n');
+    await waitFor(() => model.get('gen/a.ts') !== undefined && model.get('gen/b.ts') !== undefined);
+    await sleep(800);
+  }
+
+  it('an edit between the reload read and the crawl add is read, not skipped', async () => {
+    await unignoreThen(() => put('gen/a.ts', 'export const a = 1;\nexport function v2() {}\n'));
+    expect(model.get('gen/a.ts')!.symbols.map(s => s.name)).toContain('v2');
+  });
+
+  it('a path deleted after the reload does not leave a skip that hides its re-creation', async () => {
+    let mtime = 0;
+    await unignoreThen(() => {
+      mtime = fs.statSync(path.join(root, 'gen/b.ts')).mtimeMs;
+      fs.rmSync(path.join(root, 'gen/b.ts'));
+    });
+    await waitFor(() => model.get('gen/b.ts') === undefined, 4000);
+    // Same size and mtime as the reload saw: only a consumed entry lets this be read.
+    put('gen/b.ts', 'export const b = 2;\n');
+    fs.utimesSync(path.join(root, 'gen/b.ts'), mtime / 1000, mtime / 1000);
+    await waitFor(() => model.get('gen/b.ts') !== undefined, 4000);
+    expect(errors).toEqual([]);
   });
 
   it('a reload whose rescan also throws still emits reset', async () => {

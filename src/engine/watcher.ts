@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { watch, type FSWatcher } from 'chokidar';
 import type { ChangeSummary, FileModel } from '../shared/types.js';
@@ -45,8 +46,11 @@ export class Watcher extends EventEmitter {
   private waiting = 0;
   private nextId = 1;
   private stopped = false;
-  /** Files a reload indexed under a directory it began watching: their crawl `add` is skipped once. */
-  private skipAdd = new Set<string>();
+  /**
+   * Files a reload indexed under a directory it began watching, with the stat it saw. Any event
+   * job for the path consumes the entry; an `add` is skipped only if the file still matches it.
+   */
+  private skipAdd = new Map<string, { size: number; mtimeMs: number }>();
   /** chokidar finished its initial crawl. */
   private ready = false;
 
@@ -128,11 +132,23 @@ export class Watcher extends EventEmitter {
       return;
     }
     if (this.model.ignored(rel)) return;
-    this.schedule(`f:${rel}`, deferRelink => {
+    this.schedule(`f:${rel}`, async deferRelink => {
       // The reload already read this file; chokidar's crawl of its directory reports it again.
-      if (ev === 'add' && this.skipAdd.delete(rel)) return Promise.resolve([]);
-      return this.model.update(rel, ev, { deferRelink }).then(r => (r ? [r] : []));
+      const seen = this.skipAdd.get(rel);
+      this.skipAdd.delete(rel);
+      if (ev === 'add' && seen && (await this.unchanged(rel, seen))) return [];
+      const r = await this.model.update(rel, ev, { deferRelink });
+      return r ? [r] : [];
     });
+  }
+
+  private async unchanged(rel: string, seen: { size: number; mtimeMs: number }): Promise<boolean> {
+    try {
+      const st = await fsp.lstat(path.join(this.model.root, ...rel.split('/')));
+      return st.size === seen.size && st.mtimeMs === seen.mtimeMs;
+    } catch {
+      return false;
+    }
   }
 
   /** Reloads the rules for every pending .gitignore path in one debounced job. */
@@ -154,13 +170,14 @@ export class Watcher extends EventEmitter {
         // A reload that fails partway leaves the model inconsistent with the new rules; rebuild it
         // from disk and have clients start over from a fresh hello.
         this.fail(e);
+        // If the rescan fails too, clients still get a reset from whatever the model holds (possibly empty); both errors are reported.
         try { await this.model.scan(); } catch (err) { this.fail(err); }
         if (!this.stopped) this.emit('reset');
         return [];
       }
       const { files, removed, created, indexed } = reloaded;
       // Only files under a newly watched directory get a crawl add; others have none to skip.
-      for (const rel of indexed) if (watched.some(d => rel.startsWith(`${d}/`))) this.skipAdd.add(rel);
+      for (const f of indexed) if (watched.some(d => f.path.startsWith(`${d}/`))) this.skipAdd.set(f.path, f);
       // A throwing listener must not lose the .gitignore files' own changes below.
       if (!this.stopped && (files.length || removed.length)) {
         try { this.emit('touched', files, removed); } catch (e) { this.fail(e); }
