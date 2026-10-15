@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:export": "vite build --config vite.export.config.ts",
+    "build:export": "vite build --config vite.export.config.ts && node scripts/export-grammars.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

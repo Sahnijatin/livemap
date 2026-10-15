@@ -17,6 +17,7 @@ const T0 = Date.UTC(2026, 9, 15, 9, 0);
 let root: string;
 let home: string;
 let out: string;
+let outNoCode: string;
 
 const file = (p: string, lines = 3): FileModel => ({
   path: p, lang: 'typescript', size: 60, lines, symbols: [],
@@ -47,9 +48,14 @@ test.beforeAll(async () => {
   }
   await store.close();
 
-  out = path.join(root, 'replay.html');
-  const r = spawnSync(process.execPath, [path.join(repo, 'dist/cli.js'), 'export', root, '--out', out], { env: { ...process.env, LIVEMAP_HOME: home }, encoding: 'utf8' });
-  if (r.status !== 0) throw new Error(`export failed: ${r.stdout}${r.stderr}`);
+  const exportTo = (file: string, ...args: string[]): string => {
+    const to = path.join(root, file);
+    const r = spawnSync(process.execPath, [path.join(repo, 'dist/cli.js'), 'export', root, '--out', to, ...args], { env: { ...process.env, LIVEMAP_HOME: home }, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`export failed: ${r.stdout}${r.stderr}`);
+    return to;
+  };
+  out = exportTo('replay.html');
+  outNoCode = exportTo('replay-no-code.html', '--no-code');
 });
 
 test.afterAll(() => {
@@ -101,4 +107,34 @@ test('export: opens offline from file://, rewound at the end, plays, and shows e
   const offending = requests.filter(u => !/^(file|data|blob):/.test(u));
   expect(offending).toEqual([]);
   console.log(`[export e2e] ${fs.statSync(out).size} bytes; requests: ${[...new Set(requests.map(u => u.split(':')[0]))].join(', ')}`);
+});
+
+test('export: the code view highlights with the embedded grammars, and --no-code embeds none (#17)', async ({ page, context }) => {
+  await context.route(/^(https?|wss?):/, r => r.abort());
+  const errors: string[] = [];
+  page.on('pageerror', e => errors.push(e.message));
+  page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+  const inspector = page.getByRole('complementary', { name: 'Inspector' });
+  const openApp = async (): Promise<void> => {
+    await expect(page.getByRole('group', { name: 'Session timeline' }).locator('.tl-state')).toHaveText('REWOUND');
+    await page.getByRole('tree', { name: 'Files' }).locator(`[data-file="${APP}"]`).click();
+  };
+
+  await page.goto(pathToFileURL(out).href);
+  expect(await page.locator('#livemap-grammars').count()).toBe(1);
+  await openApp();
+  const line2 = inspector.locator('pre.code [data-line="2"]');
+  await expect(line2).toContainText(MARKER);
+  // Highlighted: the line is split into colored tokens after its number.
+  await expect.poll(() => line2.locator('span:not(.n)').count()).toBeGreaterThan(1);
+  expect(await line2.locator('span:not(.n)').first().getAttribute('style')).toContain('color');
+
+  await page.goto(pathToFileURL(outNoCode).href);
+  expect(await page.locator('#livemap-grammars').count()).toBe(0);
+  await openApp();
+  await expect(inspector.locator('.notshown')).toContainText('Code not included in this export');
+  await expect(inspector.locator('pre.code')).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+  console.log(`[export e2e] with code ${fs.statSync(out).size} bytes, --no-code ${fs.statSync(outNoCode).size} bytes`);
 });

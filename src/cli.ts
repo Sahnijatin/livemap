@@ -116,7 +116,8 @@ function formatSize(bytes: number): string {
 async function runExport(argv: string[]): Promise<void> {
   const args = parseExportArgs(argv);
   const root = resolveRoot(args.dir);
-  const uiFile = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui-export', 'index.html');
+  const uiDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui-export');
+  const uiFile = path.join(uiDir, 'index.html');
   let uiHtml: string;
   try {
     uiHtml = fs.readFileSync(uiFile, 'utf8');
@@ -125,7 +126,7 @@ async function runExport(argv: string[]): Promise<void> {
   }
   let res: Awaited<ReturnType<typeof buildExport>>;
   try {
-    res = await buildExport(root, { session: args.session, code: args.code, uiHtml });
+    res = await buildExport(root, { session: args.session, code: args.code, uiHtml, grammars: path.join(uiDir, 'grammars') });
   } catch (e) {
     process.stderr.write(`${(e as Error).message}\n`);
     process.exit(1);

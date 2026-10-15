@@ -1,19 +1,24 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { fileURLToPath } from 'node:url';
+import { buildOnce } from '../build.js';
 import { HistoryStore } from '../../src/history/store.js';
 import { projectDir } from '../../src/history/paths.js';
 import { buildExport, pathScrubber, stripCode } from '../../src/export/export.js';
 import { emptyState } from '../../src/shared/state.js';
 import type { ProjectState } from '../../src/shared/state.js';
-import type { ExportPayload } from '../../src/shared/export.js';
+import type { ExportGrammars, ExportPayload } from '../../src/shared/export.js';
+import { grammarId, HIGHLIGHTED } from '../../src/shared/grammars.js';
 import type { ServerMessage } from '../../src/shared/protocol.js';
 import type { AgentEvent, AgentSession, ChangeSummary, FileModel } from '../../src/shared/types.js';
 
 const UI = '<!doctype html><html><head><title>LiveMap</title></head><body><div id="root"></div><script type="module">boot()</script></body></html>';
 const DATA_RE = /<script type="application\/octet-stream" id="livemap-data">([^<]*)<\/script>/;
+const GRAMMARS_RE = /<script type="application\/json" id="livemap-grammars">([^<]*)<\/script>/;
+const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 let home: string;
 let root: string;
@@ -67,6 +72,21 @@ function decode(html: string): { text: string; payload: ExportPayload } {
 }
 
 const plain = (msgs: ExportPayload['messages']) => msgs.map(([, , msg]) => msg);
+
+function grammarsOf(html: string): ExportGrammars {
+  const m = GRAMMARS_RE.exec(html);
+  expect(m).not.toBeNull();
+  return JSON.parse(m![1]) as ExportGrammars;
+}
+
+const py = (p: string): FileModel => ({ ...file(p), lang: 'python' });
+const vue = (p: string): FileModel => ({ ...file(p), lang: 'vue' });
+
+/** Records a change to each file, written with a line of text. */
+async function recordFiles(files: FileModel[]): Promise<void> {
+  for (const f of files) write(f.path, `x = 1\n`);
+  await record(files, files.map((f, i) => ({ type: 'change', change: change(i + 1, f.path), files: [f], removed: [] })));
+}
 
 describe('buildExport', () => {
   it('embeds a gzip, base64 payload that round-trips the recorded history', async () => {
@@ -347,6 +367,74 @@ describe('buildExport', () => {
     expect(ms).toBeLessThan(10_000);
     expect(mb).toBeLessThan(60);
   }, 120_000);
+});
+
+describe('buildExport grammars (#17)', () => {
+  let grammars: string;
+  beforeEach(() => {
+    grammars = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-exp-grammars-'));
+    const put = (id: string, langs: object[]) => fs.writeFileSync(path.join(grammars, `${id}.json`), JSON.stringify(langs));
+    put('typescript', [{ name: 'typescript', scopeName: 'source.ts' }]);
+    put('python', [{ name: 'python', scopeName: 'source.python' }]);
+    put('vue', [{ name: 'html', end: '(</)(script)>' }, { name: 'typescript', scopeName: 'source.ts' }, { name: 'vue', scopeName: 'source.vue' }]);
+    fs.writeFileSync(path.join(grammars, 'onig.wasm.b64'), 'AGFzbQ==\n');
+  });
+  afterEach(() => fs.rmSync(grammars, { recursive: true, force: true }));
+
+  it('embeds the grammars of the exported files and no others', async () => {
+    await recordFiles([file('a.ts'), py('b.py')]);
+    const res = await buildExport(root, { home, code: true, uiHtml: UI, grammars });
+    const g = grammarsOf(res.html);
+    expect(g.langs.map(l => l.name).sort()).toEqual(['python', 'typescript']);
+    expect(g.wasm).toBe('AGFzbQ==');
+    expect(res.html).not.toContain('source.vue');
+  });
+
+  it('embeds no grammars with code: false', async () => {
+    await recordFiles([file('a.ts'), py('b.py')]);
+    const res = await buildExport(root, { home, code: false, uiHtml: UI, grammars });
+    expect(res.html).not.toContain('livemap-grammars');
+  });
+
+  it('embeds each grammar once, with no closing script tag', async () => {
+    await recordFiles([file('a.ts'), vue('c.vue')]);
+    const res = await buildExport(root, { home, code: true, uiHtml: UI, grammars });
+    const g = grammarsOf(res.html);
+    expect(g.langs.map(l => l.name).sort()).toEqual(['html', 'typescript', 'vue']);
+    expect(g.langs.find(l => l.name === 'html')).toEqual({ name: 'html', end: '(</)(script)>' });
+    expect(res.html.match(/<\/script>/g)).toHaveLength(3); // the grammars', the data's and the app script's own
+  });
+});
+
+describe('the built export template (#17)', () => {
+  const dist = path.join(repo, 'dist', 'ui-export');
+  beforeAll(buildOnce, 180_000);
+
+  it('is under 3 MB and carries no grammar or engine wasm of its own', () => {
+    const html = fs.readFileSync(path.join(dist, 'index.html'), 'utf8');
+    console.log(`[export template] ${Buffer.byteLength(html)} bytes`);
+    expect(Buffer.byteLength(html)).toBeLessThan(3_000_000);
+    expect(html).not.toContain('source.python');
+    expect(html).not.toContain('source.ts');
+    const wasm = fs.readFileSync(path.join(dist, 'grammars', 'onig.wasm.b64'), 'utf8');
+    expect(html).not.toContain(wasm.slice(0, 200));
+  });
+
+  it('builds a grammar for every language the UI highlights', () => {
+    for (const id of [...HIGHLIGHTED.map(l => grammarId(l, '')), 'jsx']) {
+      const langs = JSON.parse(fs.readFileSync(path.join(dist, 'grammars', `${id}.json`), 'utf8')) as { name: string }[];
+      expect(langs.map(l => l.name)).toContain(id);
+    }
+  });
+
+  it('an export of a.ts and b.py embeds the built typescript and python grammars and no vue', async () => {
+    await recordFiles([file('a.ts'), py('b.py')]);
+    const res = await buildExport(root, { home, code: true, uiHtml: UI, grammars: path.join(dist, 'grammars') });
+    const names = grammarsOf(res.html).langs.map(l => l.name);
+    expect(names).toContain('typescript');
+    expect(names).toContain('python');
+    expect(names).not.toContain('vue');
+  });
 });
 
 describe('pathScrubber', () => {
