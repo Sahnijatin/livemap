@@ -33,6 +33,12 @@ describe('currentTarget', () => {
     expect(currentTarget([start('Bash', ['out.txt'])], [], sess(), NOW)?.path).toBe('out.txt');
     expect(currentTarget([start('Edit', ['src/a.ts'])], [], sess({ lastAt: NOW - 61_000 }), NOW)).toBeNull();
   });
+  it('counts MCP writes with paths and ignores MCP reads (#49)', () => {
+    expect(currentTarget([start('mcp__github__create_or_update_file', ['src/a.ts'])], [], sess(), NOW)?.path).toBe('src/a.ts');
+    expect(currentTarget([start('mcp__github__get_file_contents', ['src/a.ts'])], [], sess(), NOW)).toBeNull();
+    const pull = event({ sessionId: 's1', type: 'tool_start', at: NOW - 2000, tool: { id: 't1', name: 'tool_execute', label: 'x', paths: ['src/w.html'], inner: 'sn_pull_artifact', access: 'read' } });
+    expect(currentTarget([pull], [], sess(), NOW)).toBeNull();
+  });
   it('pairs by session and tool id', () => {
     const evs = [start('Edit', ['src/a.ts'], 't1'), start('Edit', ['src/c.ts'], 't2'), end('t2')];
     expect(currentTarget(evs, [], sess(), NOW)?.path).toBe('src/a.ts');

@@ -1,3 +1,5 @@
+import type { RecordTarget, ToolAccess } from './tools.js';
+
 export type Lang = 'typescript'|'tsx'|'javascript'|'python'|'go'|'rust'|'java'|'kotlin'|'csharp'|'php'|'ruby'|'swift'|'c'|'cpp'|'dart'|'vue'|'svelte'|'sql'|'prisma'|'markdown'|'json'|'yaml'|'toml'|'css'|'html'|'shell'|'text'|'secret'|'other';
 export type SymbolKind = 'function'|'method'|'class'|'component'|'hook'|'interface'|'type'|'enum'|'struct'|'trait'|'impl'|'module'|'namespace'|'variable'|'heading';
 export interface CodeSymbol { name: string; qname: string; kind: SymbolKind; signature: string; line: number; endLine: number; exported: boolean; hash: string; children: CodeSymbol[] }
@@ -46,7 +48,14 @@ export interface ChangeSummary {
 
 export type AgentKind = 'claude-code' | 'codex' | 'cursor' | 'git' | 'other';
 export type AgentEventType = 'prompt' | 'message' | 'thinking' | 'tool_start' | 'tool_end' | 'commit' | 'status';
-export interface AgentTool { id?: string; name: string; label: string; input?: unknown; output?: string; ok?: boolean; paths: string[] }
+/**
+ * `inner` is the real tool of a gateway call (`tool_execute`), `access` its read or write class, and
+ * `targets` the records it names (see src/shared/tools.ts). Older events may lack all three.
+ */
+export interface AgentTool {
+  id?: string; name: string; label: string; input?: unknown; output?: string; ok?: boolean; paths: string[];
+  inner?: string; access?: ToolAccess; targets?: RecordTarget[];
+}
 /** `paths` and `seenAt` are set on git commit events: the root-relative files the commit changed and when LiveMap saw it. */
 export interface AgentEvent { id: number; agent: AgentKind; sessionId: string; at: number; type: AgentEventType; text?: string; tool?: AgentTool; status?: 'working' | 'idle'; subagent?: boolean; paths?: string[]; seenAt?: number }
 /** An event as emitted by a normalizer; the hub assigns `id`. */

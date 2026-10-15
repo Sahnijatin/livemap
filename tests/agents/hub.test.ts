@@ -558,3 +558,21 @@ describe('review fixes: transcript keys', () => {
   });
 });
 
+
+describe('#49: tool classification across start and end', () => {
+  it('a codex MCP tool_execute keeps its inner tool, access and targets on the end, plus sys_ids from the result', async () => {
+    const h = mk({ readTail: async () => '' });
+    const base = { session_id: 'c9', transcript_path: '/t/r9', cwd: ROOT };
+    const SYS_ID = '871f6b2a1b2c3d4e5f60718293a4b5c6';
+    h.ingestHook('codex', 'PreToolUse', { ...base, tool_name: 'mcp__skyforge-nexus__tool_execute', tool_use_id: 'm1', tool_input: { tool: 'sn_record_manage', args: { table: 'sys_script', action: 'create', name: 'Set offer' } } }, 1000);
+    h.ingestHook('codex', 'PostToolUse', { ...base, tool_name: 'mcp__skyforge-nexus__tool_execute', tool_use_id: 'm1', tool_input: {}, tool_response: JSON.stringify({ success: true, data: { sys_id: SYS_ID } }) }, 1001);
+    await h.flush();
+    const [start, end] = h.events().filter((e) => e.tool);
+    expect(start.tool).toMatchObject({ inner: 'sn_record_manage', access: 'write', label: 'sn_record_manage create sys_script Set offer' });
+    expect(end.tool).toMatchObject({ inner: 'sn_record_manage', access: 'write' });
+    expect(end.tool?.targets).toEqual([
+      { kind: 'record', instance: '', table: 'sys_script', name: 'Set offer' },
+      { kind: 'record', instance: '', table: 'sys_script', name: 'Set offer', sysId: SYS_ID },
+    ]);
+  });
+});

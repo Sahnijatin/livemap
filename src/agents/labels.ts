@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { isSecretEnvPath, SECRET_NAME_ALT } from '../engine/languages.js';
+import { classifyTool, familyOf, unwrapTool, type RecordTarget, type ToolAccess, type ToolClass } from '../shared/tools.js';
 
 const MAX_LABEL = 160;
 /** Stored in place of a shell command that names a secret env file. */
@@ -8,25 +9,9 @@ export const SECRET_COMMAND = '<touches a secret file>';
 export const SECRET_LABEL = '$ (command touching .env)';
 const PATH_KEYS = ['file_path', 'path', 'absolute_path', 'notebook_path', 'filePath', 'target_file'];
 
-export type ToolFamily = 'read' | 'write' | 'edit' | 'shell' | 'patch' | 'search' | 'glob' | 'fetch' | 'websearch' | 'subagent' | 'notebook';
-const FAMILIES: Record<ToolFamily, string[]> = {
-  read: ['read', 'read_file', 'view'],
-  write: ['write', 'write_file', 'create_file'],
-  edit: ['edit', 'multiedit', 'replace', 'edit_file', 'str_replace'],
-  shell: ['bash', 'shell', 'run_shell_command', 'exec_command'],
-  patch: ['apply_patch'],
-  search: ['grep', 'search_file_content'],
-  glob: ['glob', 'list_directory', 'ls'],
-  fetch: ['webfetch', 'web_fetch'],
-  websearch: ['websearch', 'google_web_search'],
-  subagent: ['task', 'agent'],
-  notebook: ['notebookedit'],
-};
-const BY_NAME = new Map<string, ToolFamily>();
-for (const [fam, names] of Object.entries(FAMILIES)) for (const n of names) BY_NAME.set(n, fam as ToolFamily);
-const familyOf = (name: string): ToolFamily | undefined => BY_NAME.get(name.toLowerCase());
+export type { ToolFamily } from '../shared/tools.js';
 
-/** Family of a tool name (case-insensitive), or undefined when unknown. */
+/** Family of a built-in tool name (case-insensitive), or undefined when unknown. MCP tools have none: see classifyTool. */
 export const toolFamily = familyOf;
 
 const rec = (input: unknown): Record<string, unknown> =>
@@ -194,13 +179,39 @@ export function toolLabel(name: string, input: unknown, root?: string, cwd?: str
       return withArg('Web search', q && `"${q}"`);
     }
     case 'subagent': return withArg('Subagent:', str(o.description) ?? str(o.prompt));
-    default: return trunc(name);
+    default: return trunc(callLabel(name, input));
   }
+}
+
+/**
+ * Classification fields stored on an AgentTool: inner tool, access and record targets. Built-in agent
+ * tools get none, since their access follows from the name and older stored events lack it too.
+ */
+export function toolMeta(name: string, input: unknown, output?: unknown): { inner?: string; access?: ToolAccess; targets?: RecordTarget[] } {
+  const c = classifyTool(name, input, output === undefined ? {} : { output });
+  if (c.family) return {};
+  return { ...(c.inner ? { inner: c.inner } : {}), access: c.access, ...(c.targets.length ? { targets: c.targets } : {}) };
+}
+
+/** Short id for labels: the first 8 characters of a 32-hex sys_id. */
+const shortId = (id: string) => (/^[0-9a-f]{32}$/i.test(id) ? `${id.slice(0, 8)}…` : id);
+
+/**
+ * Label of an MCP or gateway call: the real tool, then its action, table and record when it names them
+ * (`sn_record_manage update sys_script 871f6b2a…`). Other tools keep their full name.
+ */
+function callLabel(name: string, input: unknown): string {
+  const c: ToolClass = classifyTool(name, input);
+  const a = rec(c.args);
+  const table = str(a.table) ?? str(a.table_name);
+  if (!c.inner && !table) return name;
+  const target = str(a.sys_id) ?? str(a.sysId) ?? str(a.name) ?? str(a.api_name);
+  return [c.inner ?? c.name, str(a.action), table, target && shortId(target)].filter(Boolean).join(' ');
 }
 
 export function toolPaths(name: string, input: unknown, root: string, cwd?: string): string[] {
   const fam = familyOf(name);
-  const raw = fam === 'patch' ? patchPaths(commandText(input) ?? '') : inputPaths(input);
+  const raw = fam === 'patch' ? patchPaths(commandText(input) ?? '') : inputPaths(unwrapTool(name, input).args);
   const set = new Set<string>();
   for (const p of raw) {
     const rel = relToRoot(p, root, cwd);
@@ -214,6 +225,12 @@ export function toolPaths(name: string, input: unknown, root: string, cwd?: stri
  * secret file becomes `{command: SECRET_COMMAND}`. Returns `input` itself when nothing is secret.
  */
 export function redactSecretInput(name: string, input: unknown): unknown {
+  const call = unwrapTool(name, input);
+  if (call.inner) {
+    // A gateway call: redact the inner tool's args and keep the wrapper's shape.
+    const args = redactSecretInput(call.inner, call.args);
+    return args === call.args ? input : { ...rec(input), args };
+  }
   const o = rec(input);
   if (familyOf(name) === 'patch') {
     const patch = commandText(input) ?? '';
