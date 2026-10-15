@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import http from 'node:http';
 import path from 'node:path';
 import type { Duplex } from 'node:stream';
@@ -9,10 +10,15 @@ import type { Attributor } from '../agents/attribution.js';
 import { buildUsedBy, type TokenCache } from '../engine/usedby.js';
 import { buildDomainIndex, newDataRefCache } from '../engine/domain/build-index.js';
 import type { DomainIndex } from '../shared/domain.js';
-import type { ServerMessage, UsedByEntry } from '../shared/protocol.js';
-import type { AgentEvent, AgentSession, Attribution, ChangeSummary, ControlState, FileModel } from '../shared/types.js';
+import type { HistoryStatus, ServerMessage, UsedByEntry } from '../shared/protocol.js';
+import type { ProjectState } from '../shared/state.js';
+import type { HistoryStore } from '../history/store.js';
+import type { AgentEvent, AgentSession, Attribution, ChangeSummary, CodeSymbol, ControlState, FileModel, Lang } from '../shared/types.js';
+import { offStatus, type FileSummary, type SummariesState, type SummaryStatus } from '../shared/summaries.js';
+import { changeQualifies } from '../summarize/summarizer.js';
 import { authenticate, hostAllowed, newToken, originAllowed } from './auth.js';
 import { handleControlApi, handleHook } from './agent-routes.js';
+import { handleHistoryApi, sendJsonMaybeGzip } from './history-routes.js';
 import { serveStatic } from './static.js';
 
 export interface ServerOptions {
@@ -30,6 +36,19 @@ export interface ServerOptions {
   buildDomain?: typeof buildDomainIndex;
   /** Security warnings for the person running LiveMap (the CLI prints them to stderr). */
   warn?: (message: string) => void;
+  /** Records every broadcast data message; without it nothing is recorded and the history routes answer 404. */
+  history?: HistoryStore;
+  /** Writes AI summaries of files and changes. Without it summaries are off and `/api/summary` answers 503. */
+  summarizer?: SummaryEngine;
+}
+
+/** What the server uses of a summarizer (`src/summarize/summarizer.ts`); tests inject a fake. */
+export interface SummaryEngine {
+  status(): SummaryStatus;
+  summarizeFile(file: FileModel, text: string): Promise<string | null>;
+  summarizeChange(change: ChangeSummary, file: FileModel | null): Promise<string | null>;
+  on(event: 'status', listener: (status: SummaryStatus) => void): unknown;
+  off(event: 'status', listener: (status: SummaryStatus) => void): unknown;
 }
 
 export interface LiveMapServer {
@@ -66,6 +85,10 @@ const EMPTY_DOMAIN: DomainIndex = {
   counts: { routes: 0, pages: 0, screens: 0, tables: 0, deps: 0, env: 0 },
 };
 const INDEXING_INTERVAL_MS = 100;
+/** A `history` status goes out at most this often while recording. */
+const HISTORY_STATUS_INTERVAL_MS = 5000;
+/** No store: history was turned off (`--no-history`), which the UI words differently from a failure. */
+const NO_HISTORY: HistoryStatus = { enabled: false, first: 0, last: 0, firstAt: 0, lastAt: 0, off: true };
 const WS_UNAUTHORIZED = 4401;
 const REUSED_LINK = 'the browser launch link was used more than once. If you did not open it twice, stop LiveMap and start it again for a new key.';
 /** How long a launch code from launchUrl() stays redeemable. */
@@ -95,6 +118,22 @@ export function safeRelPath(raw: string | null): string | null {
   const clean = segs.filter(s => s !== '' && s !== '.').join('/');
   return clean === '' ? null : clean;
 }
+
+/** sha1 over a file's sorted `qname|signature` pairs, nested symbols included: its summary is redone when this changes. */
+export function symbolSetHash(file: FileModel): string {
+  const pairs: string[] = [];
+  const walk = (syms: CodeSymbol[]): void => {
+    for (const s of syms) {
+      pairs.push(`${s.qname}|${s.signature}`);
+      walk(s.children);
+    }
+  };
+  walk(file.symbols);
+  return crypto.createHash('sha1').update(pairs.sort().join('\n')).digest('hex');
+}
+
+/** Config, data and prose: a file of these is not summarized when it is created. */
+const NON_CODE = new Set<Lang>(['other', 'text', 'json', 'yaml', 'toml', 'markdown', 'secret']);
 
 function listen(server: http.Server, port: number): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -153,7 +192,7 @@ function reject(socket: Duplex, status: number, text: string): void {
 }
 
 export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
-  const { model, watcher, uiDir, hub, attributor, buildDomain = buildDomainIndex } = opts;
+  const { model, watcher, uiDir, hub, attributor, history, summarizer, buildDomain = buildDomainIndex } = opts;
   const token = opts.token ?? newToken();
   const name = path.basename(model.root);
 
@@ -171,6 +210,15 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   let domainAt = 0;
   let domainTimer: NodeJS.Timeout | null = null;
   const usedByTokens: TokenCache = new Map();
+  /** The last recorded seq: what the live state (and so every hello) includes. */
+  let seq = 0;
+  let statusSent: HistoryStatus | null = null;
+  let statusAt = 0;
+  let statusTimer: NodeJS.Timeout | null = null;
+  let closed = false;
+  /** File summaries by path, and the symbol-set hash of each summary being written. */
+  const fileSummaries = new Map<string, FileSummary>();
+  const fileJobs = new Map<string, string>();
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
   /** One-time launch codes (see launchUrl). */
@@ -186,15 +234,157 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   const broadcastText = (text: string, helloBytes: number | null = null): void => {
     for (const ws of wss.clients) sendTracked(ws, text, helloBytes, allowances);
   };
-  const broadcast = (msg: ServerMessage): void => {
-    if (wss.clients.size === 0) return;
-    const text = JSON.stringify(msg);
-    broadcastText(text, helloBytesOf(msg, text)); // measured once, not per client
+
+  const historyStatus = (): HistoryStatus => {
+    if (!history) return NO_HISTORY;
+    const { enabled, first, last, firstAt, lastAt, error } = history.info();
+    return error ? { enabled, first, last, firstAt, lastAt, error } : { enabled, first, last, firstAt, lastAt };
   };
-  const hello = (): ServerMessage => ({
-    type: 'hello', root: model.root, name, files: model.all(), changes: [...changes], usedBy, domain, indexing: false,
-    events: hub ? hub.events(HELLO_EVENTS) : [], sessions: hub ? hub.sessions() : [], control: hub ? hub.control.state() : { paused: false, flags: [] },
+  /** Broadcasts the status when it changed since the last one sent. */
+  const sendStatus = (): void => {
+    if (statusTimer) clearTimeout(statusTimer);
+    statusTimer = null;
+    const status = historyStatus();
+    if (statusSent && status.last === statusSent.last && status.enabled === statusSent.enabled) return;
+    statusSent = status;
+    statusAt = Date.now();
+    broadcast({ type: 'history', history: status });
+  };
+  const scheduleStatus = (): void => {
+    if (statusTimer || !isReady) return;
+    statusTimer = setTimeout(sendStatus, Math.max(0, statusAt + HISTORY_STATUS_INTERVAL_MS - Date.now()));
+    statusTimer.unref?.();
+  };
+  if (history) {
+    // Recording failed: the store already stopped itself; say so once and tell every client now.
+    history.onError = (e: Error) => {
+      process.stderr.write(`livemap: history is unavailable: ${history.info().error ?? e.message}\n`);
+      if (isReady) sendStatus();
+    };
+  }
+  /**
+   * Appends a recorded-type message (with its JSON when already built); other types are ignored by the store.
+   * Returns the seq it was given, or -1 when it was not recorded.
+   */
+  const record = (msg: ServerMessage, text?: string): number => {
+    if (!history) return -1;
+    const s = history.append(msg, Date.now(), text);
+    if (s > 0) {
+      seq = s;
+      scheduleStatus();
+    }
+    return s;
+  };
+
+  /**
+   * Records a message from its JSON (recorded even when no client is connected, without the envelope
+   * seq), then sends it. A recorded message goes out stamped with its seq (`WireMessage`), so a client
+   * returning to live can tell which buffered messages its fetched state already includes. The seq is
+   * spliced into the JSON, not re-serialized. Every broadcast of a recordable message goes through here.
+   */
+  const recordAndSend = (msg: ServerMessage, text: string): void => {
+    const s = record(msg, text);
+    if (!wss.clients.size) return;
+    const out = s > 0 ? `${text.slice(0, -1)},"seq":${s}}` : text;
+    broadcastText(out, helloBytesOf(msg, out)); // measured once, not per client
+  };
+
+  const broadcast = (msg: ServerMessage): void => {
+    if (!history && wss.clients.size === 0) return;
+    recordAndSend(msg, JSON.stringify(msg));
+  };
+  const summariesState = (): SummariesState => ({
+    status: summarizer ? summarizer.status() : offStatus(new Date().toISOString().slice(0, 7)),
+    files: Object.fromEntries(fileSummaries),
   });
+
+  /**
+   * A file's text as `/api/file` serves it, or the status and error to answer with. Secret, binary and
+   * too-large files have no text here, so neither the UI nor the summarizer ever gets theirs.
+   */
+  const readText = (raw: string | null): { file: FileModel; content: string } | { status: number; error: string } => {
+    const rel = safeRelPath(raw);
+    if (!rel) return { status: 400, error: 'invalid path' };
+    const file = model.get(rel);
+    if (!file) return { status: 404, error: 'not found' };
+    const content = file.flags.secret || file.flags.binary || file.flags.tooLarge ? null : model.content(rel);
+    if (content === null) return { status: 403, error: 'content not available' };
+    return { file, content };
+  };
+
+  /** Writes a file summary unless one for this symbol set is already being written; broadcasts it when done. */
+  const summarizeFile = (file: FileModel, text: string): void => {
+    if (!summarizer) return;
+    const hash = symbolSetHash(file);
+    if (fileJobs.get(file.path) === hash) return;
+    fileJobs.set(file.path, hash);
+    summarizer.summarizeFile(file, text).catch(() => null).then(summary => {
+      if (fileJobs.get(file.path) === hash) fileJobs.delete(file.path);
+      if (!summary || closed) return;
+      // The file changed while this was written: a newer request covers it.
+      const now = model.get(file.path);
+      if (!now || symbolSetHash(now) !== hash) return;
+      fileSummaries.set(file.path, { hash, summary });
+      broadcast({ type: 'fileSummary', path: file.path, hash, summary });
+    });
+  };
+
+  /** Drops a file's summary and tells clients (a recorded `fileSummary` with an empty hash). */
+  const clearFileSummary = (path: string): void => {
+    if (!fileSummaries.delete(path)) return;
+    broadcast({ type: 'fileSummary', path, hash: '', summary: '' });
+  };
+
+  /**
+   * After a change goes out: a one-line summary when it changed a symbol, route or entity, a file summary
+   * for a new code file, and a new file summary when a summarized file's symbol set changed.
+   */
+  const summarizeAfter = (change: ChangeSummary): void => {
+    if (!summarizer) return;
+    const file = model.get(change.path) ?? null;
+    if (changeQualifies(change)) {
+      summarizer.summarizeChange(change, file).catch(() => null).then(summary => {
+        if (!summary || closed) return;
+        const i = changes.findIndex(c => c.id === change.id);
+        if (i !== -1) changes[i] = { ...changes[i], summary };
+        broadcast({ type: 'summary', changeId: change.id, summary });
+      });
+    }
+    if (change.kind === 'deleted' || !file) {
+      clearFileSummary(change.path);
+      return;
+    }
+    const hash = symbolSetHash(file);
+    const known = fileSummaries.get(file.path)?.hash ?? fileJobs.get(file.path);
+    // An outdated summary is withdrawn at once, so it never shows as current while (or if) a new one is written.
+    if (fileSummaries.has(file.path) && known !== hash) clearFileSummary(file.path);
+    const wanted = change.kind === 'created' ? !NON_CODE.has(file.lang) : known !== undefined && known !== hash;
+    if (!wanted) return;
+    const r = readText(file.path);
+    if ('content' in r) summarizeFile(r.file, r.content);
+  };
+
+  const liveState = (): ProjectState => ({
+    root: model.root, name, files: model.all(), changes: [...changes], usedBy, domain, indexing: false,
+    events: hub ? hub.events(HELLO_EVENTS) : [], sessions: hub ? hub.sessions() : [], control: hub ? hub.control.state() : { paused: false, flags: [] },
+    summaries: summariesState(),
+  });
+  const hello = (state: ProjectState = liveState()): ServerMessage => ({ type: 'hello', ...state, history: historyStatus(), seq });
+  /**
+   * Starts a recording run from the live state (the run-start record carries it, without the hello's
+   * recording fields) and returns the hello for it. The run is current once startRun returns its promise.
+   * The run-start record's seq is assigned synchronously, so the hello's `seq` is that record's seq: the
+   * hello goes out stamped like every other recorded broadcast (`WireMessage.seq` is the same field).
+   */
+  const startRun = (): ServerMessage => {
+    const state = liveState();
+    if (history) {
+      history.startRun(state).catch(() => undefined); // failures surface through onError
+      const status = history.info();
+      if (status.enabled) seq = status.last;
+    }
+    return hello(state);
+  };
   const computeUsedBy = (): void => {
     usedByAt = Date.now();
     usedBy = buildUsedBy(model.all(), p => model.content(p), usedByTokens);
@@ -238,8 +428,10 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     const wait = Math.max(0, domainAt + DOMAIN_INTERVAL_MS - Date.now());
     domainTimer = setTimeout(() => {
       domainTimer = null;
-      // The index is sent from the JSON already built for the comparison.
-      if (computeDomain() && wss.clients.size) broadcastText(`{"type":"domain","domain":${domainJson}}`);
+      // The index is sent and recorded from the JSON already built for the comparison.
+      if (!computeDomain()) return;
+      const text = `{"type":"domain","domain":${domainJson}}`;
+      recordAndSend({ type: 'domain', domain }, text);
     }, wait);
   };
 
@@ -256,6 +448,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     const own = model.get(change.path);
     const files = own ? [own, ...touched.filter(f => f.path !== own.path)] : touched;
     broadcast({ type: 'change', change, files, removed: change.kind === 'deleted' ? [change.path] : [] });
+    summarizeAfter(change);
     scheduleUsedBy();
     scheduleDomain();
   };
@@ -271,7 +464,8 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     if (!isReady) return; // hello will carry the state
     computeUsedBy();
     computeDomain();
-    broadcast(hello());
+    // The model was rebuilt from disk: a new run, so replay starts from the rebuilt state.
+    broadcast(startRun());
   };
   watcher.on('reset', onReset);
 
@@ -284,6 +478,8 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     if (i !== -1) changes[i] = { ...changes[i], attribution };
     if (isReady) broadcast({ type: 'attribution', changeId, attribution });
   };
+  const onSummaryStatus = (status: SummaryStatus): void => { if (isReady && !closed) broadcast({ type: 'summaryStatus', status }); };
+  summarizer?.on('status', onSummaryStatus);
   hub?.on('event', onEvent);
   hub?.on('session', onSession);
   hub?.control.on('change', onControl);
@@ -328,14 +524,25 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     }
 
     if (url.pathname === '/api/health') return json(res, 200, { ok: true });
+    if (url.pathname === '/api/state') {
+      if (!isReady) return json(res, 503, { error: 'indexing' });
+      return sendJsonMaybeGzip(req, res, reply, hello(), BASE_HEADERS);
+    }
+    if (await handleHistoryApi(req, res, reply, url, history, BASE_HEADERS)) return;
     if (url.pathname === '/api/file') {
-      const rel = safeRelPath(url.searchParams.get('path'));
-      if (!rel) return json(res, 400, { error: 'invalid path' });
-      const file = model.get(rel);
-      if (!file) return json(res, 404, { error: 'not found' });
-      const content = file.flags.secret || file.flags.binary || file.flags.tooLarge ? null : model.content(rel);
-      if (content === null) return json(res, 403, { error: 'content not available' });
-      return json(res, 200, { path: rel, content });
+      const r = readText(url.searchParams.get('path'));
+      if (!('content' in r)) return json(res, r.status, { error: r.error });
+      return json(res, 200, { path: r.file.path, content: r.content });
+    }
+    if (url.pathname === '/api/summary') {
+      // The same checks as /api/file, so a secret, binary or too-large file is never sent.
+      const r = readText(url.searchParams.get('path'));
+      if (!('content' in r)) return json(res, r.status, { error: r.error });
+      if (!summarizer) return json(res, 503, { error: 'summaries are off' });
+      const have = fileSummaries.get(r.file.path);
+      if (have && have.hash === symbolSetHash(r.file)) return json(res, 200, { summary: have.summary, hash: have.hash });
+      summarizeFile(r.file, r.content);
+      return json(res, 202, { pending: true });
     }
     if (isApiPath(url.pathname)) return json(res, 404, { error: 'not found' });
 
@@ -398,9 +605,12 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
       computeUsedBy();
       computeDomain();
       isReady = true;
-      broadcast(hello());
+      // The run starts before the first hello, so everything recorded after it builds on that hello's state.
+      broadcast(startRun());
     },
     async close(): Promise<void> {
+      closed = true;
+      summarizer?.off('status', onSummaryStatus);
       watcher.off('change', onChange);
       hub?.off('event', onEvent);
       hub?.off('session', onSession);
@@ -412,6 +622,8 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
       usedByTimer = null;
       if (domainTimer) clearTimeout(domainTimer);
       domainTimer = null;
+      if (statusTimer) clearTimeout(statusTimer);
+      statusTimer = null;
       for (const ws of wss.clients) ws.terminate();
       await new Promise<void>(resolve => wss.close(() => resolve()));
       server.closeAllConnections?.();
