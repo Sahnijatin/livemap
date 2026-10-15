@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 import { initAgents, removeAgents, detectAgents, hookCommand } from '../src/init.js';
 
 let root: string;
@@ -41,10 +42,35 @@ const CURSOR_EVENTS = ['beforeSubmitPrompt', 'afterAgentResponse', 'afterAgentTh
 
 describe('hookCommand', () => {
   it('quotes the hook path and names agent and event', () => {
-    expect(hookCommand(hookPath, 'claude-code', 'Stop')).toBe(`node "${hookPath}" claude-code Stop`);
+    expect(hookCommand(hookPath, 'claude-code', 'Stop', 'linux')).toBe(`node '${hookPath}' claude-code Stop`);
+    expect(hookCommand(hookPath, 'claude-code', 'Stop', 'win32')).toBe(`node "${hookPath}" claude-code Stop`);
   });
-  it('rejects paths holding a double quote', () => {
-    expect(() => hookCommand('/a"b/livemap-hook.mjs', 'codex', 'Stop')).toThrow();
+  it('POSIX: the shell passes a path holding $, backticks, backslashes and quotes through unchanged', () => {
+    if (process.platform === 'win32') return;
+    // A stand-in `node` that prints the words the shell passed it, one per line.
+    const bin = path.join(root, 'bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'node'), '#!/bin/sh\nprintf \'%s\\n\' "$@"\n', { mode: 0o755 });
+    const script = path.join(root, 'a $(echo X) `echo Y` \\z $HOME it\'s "q"', 'livemap-hook.mjs');
+    const out = execSync(hookCommand(script, 'codex', 'Stop'), { shell: '/bin/sh', encoding: 'utf8', env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` } });
+    expect(out.split('\n').slice(0, -1)).toEqual([script, 'codex', 'Stop']);
+  });
+  it('Windows: rejects characters cmd interprets inside double quotes', () => {
+    for (const c of ['"', '%', '!', '^', '&', '|', '<', '>']) {
+      expect(() => hookCommand(`C:\\a${c}b\\livemap-hook.mjs`, 'codex', 'Stop', 'win32'), c).toThrow();
+    }
+    expect(hookCommand("C:\\it's $x\\livemap-hook.mjs", 'codex', 'Stop', 'win32')).toBe(`node "C:\\it's $x\\livemap-hook.mjs" codex Stop`);
+  });
+  it('re-init and remove recognize both the old double-quoted and the new single-quoted commands', () => {
+    const odd = "/opt/it's/livemap-hook.mjs";
+    write('.codex/hooks.json', { hooks: { Stop: [{ hooks: [{ type: 'command', command: `node "${hookPath}" codex Stop`, timeout: 5 }] }] } });
+    expect(initAgents(root, { agents: ['codex'], hookPath: odd, home })[0].action).toBe('updated');
+    expect(read('.codex/hooks.json').hooks.Stop).toEqual([{ hooks: [{ type: 'command', command: `node '/opt/it'\\''s/livemap-hook.mjs' codex Stop`, timeout: 5 }] }]);
+    expect(initAgents(root, { agents: ['codex'], hookPath: odd, home })[0].action).toBe('unchanged');
+    expect(removeAgents(root, { home })[0].action).toBe('deleted');
+    write('.codex/hooks.json', { hooks: { Stop: [{ hooks: [{ type: 'command', command: `node "${hookPath}" codex Stop` }, { type: 'command', command: 'mine.sh' }] }] } });
+    expect(removeAgents(root, { home })[0].action).toBe('removed');
+    expect(read('.codex/hooks.json')).toEqual({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'mine.sh' }] }] } });
   });
 });
 
@@ -57,8 +83,8 @@ describe('initAgents: claude', () => {
     expect(raw).toContain('\n  "hooks"');
     const cfg = JSON.parse(raw);
     expect(Object.keys(cfg.hooks)).toEqual(CLAUDE_EVENTS);
-    expect(cfg.hooks.PreToolUse).toEqual([{ matcher: '*', hooks: [{ type: 'command', command: `node "${hookPath}" claude-code PreToolUse`, timeout: 5 }] }]);
-    expect(cfg.hooks.SessionStart).toEqual([{ hooks: [{ type: 'command', command: `node "${hookPath}" claude-code SessionStart`, timeout: 5 }] }]);
+    expect(cfg.hooks.PreToolUse).toEqual([{ matcher: '*', hooks: [{ type: 'command', command: `node '${hookPath}' claude-code PreToolUse`, timeout: 5 }] }]);
+    expect(cfg.hooks.SessionStart).toEqual([{ hooks: [{ type: 'command', command: `node '${hookPath}' claude-code SessionStart`, timeout: 5 }] }]);
   });
 
   it('preserves user hooks and permissions, is idempotent, and remove restores the original', () => {
@@ -105,7 +131,7 @@ describe('initAgents: codex', () => {
     initAgents(root, { agents: ['codex'], hookPath, home });
     const cfg = read('.codex/hooks.json');
     expect(Object.keys(cfg.hooks)).toEqual(CODEX_EVENTS);
-    expect(cfg.hooks.Stop).toEqual([{ hooks: [{ type: 'command', command: `node "${hookPath}" codex Stop`, timeout: 5 }] }]);
+    expect(cfg.hooks.Stop).toEqual([{ hooks: [{ type: 'command', command: `node '${hookPath}' codex Stop`, timeout: 5 }] }]);
     expect(removeAgents(root, { home })).toEqual([{ agent: 'codex', file: '.codex/hooks.json', action: 'deleted' }]);
     expect(fs.existsSync(path.join(root, '.codex/hooks.json'))).toBe(false);
   });
@@ -120,7 +146,7 @@ describe('initAgents: cursor', () => {
     expect(initAgents(root, { agents: ['cursor'], hookPath, home })[0].action).toBe('unchanged');
     const cfg = read('.cursor/hooks.json');
     expect(cfg.version).toBe(1);
-    expect(cfg.hooks.afterFileEdit).toEqual([{ command: './format.sh' }, { command: `node "${hookPath}" cursor afterFileEdit` }]);
+    expect(cfg.hooks.afterFileEdit).toEqual([{ command: './format.sh' }, { command: `node '${hookPath}' cursor afterFileEdit` }]);
     for (const ev of CURSOR_EVENTS) expect(cfg.hooks[ev].filter((h: { command: string }) => isLm(h.command))).toHaveLength(1);
     expect(removeAgents(root, { home })[0].action).toBe('removed');
     expect(read('.cursor/hooks.json')).toEqual(USER_CURSOR);

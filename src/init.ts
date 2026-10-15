@@ -19,8 +19,11 @@ export interface InitResult { agent: AgentName; file: string; action: 'created' 
 export interface RemoveResult { agent: AgentName; file: string; action: 'removed' | 'unchanged' | 'deleted' | 'skipped'; reason?: string }
 
 const SCRIPT_NAME = 'livemap-hook.mjs';
-/** Only the exact command init generates counts as LiveMap's. */
-const LIVEMAP_COMMAND = /^node "[^"]*[/\\]livemap-hook\.mjs" (claude-code|codex|cursor) [A-Za-z]+$/;
+/**
+ * Only the exact command init generates counts as LiveMap's: the path single-quoted (POSIX, `'`
+ * written as `'\''`) or double-quoted (Windows, and every command before single quoting).
+ */
+const LIVEMAP_COMMAND = /^node (?:"[^"]*[/\\]livemap-hook\.mjs"|'(?:[^']|'\\'')*[/\\]livemap-hook\.mjs') (claude-code|codex|cursor) [A-Za-z]+$/;
 const TOOL_EVENTS = new Set(['PreToolUse', 'PostToolUse']);
 
 interface AgentSpec {
@@ -69,9 +72,18 @@ const isLiveMap = (v: unknown): boolean => isObj(v) && typeof v.command === 'str
 const groupHasLiveMap = (g: unknown): boolean => isObj(g) && Array.isArray(g.hooks) && g.hooks.some(isLiveMap);
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export function hookCommand(hookPath: string, agent: string, event: string): string {
-  if (hookPath.includes('"')) throw new Error(`hook path must not contain a double quote: ${hookPath}`);
-  return `node "${hookPath}" ${agent} ${event}`;
+/**
+ * The shell command an agent runs for one event. POSIX shells expand `$`, backticks and `\` inside
+ * double quotes, so the path is single-quoted there. cmd.exe has no such quoting: the path is
+ * double-quoted and characters cmd still interprets inside quotes are refused.
+ */
+export function hookCommand(hookPath: string, agent: string, event: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'win32') {
+    const bad = /["%!^&|<>]/.exec(hookPath);
+    if (bad) throw new Error(`hook path must not contain ${bad[0]}: ${hookPath}`);
+    return `node "${hookPath}" ${agent} ${event}`;
+  }
+  return `node '${hookPath.replace(/'/g, "'\\''")}' ${agent} ${event}`;
 }
 
 function livemapHome(): string {
