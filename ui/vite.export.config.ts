@@ -1,0 +1,32 @@
+import { fileURLToPath } from 'node:url';
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { viteSingleFile } from 'vite-plugin-singlefile';
+
+const shared = fileURLToPath(new URL('../src/shared', import.meta.url));
+const inlineWorker = fileURLToPath(new URL('./src/layout/elkWorker.inline.ts', import.meta.url));
+
+// `livemap export` UI: one HTML file that opens offline from file://. Every chunk, dynamic import, the
+// stylesheet, the fonts (as data URIs) and the ELK worker are inlined; the CLI embeds the history into it.
+export default defineConfig(({ command }) => {
+  // Production React regardless of an inherited NODE_ENV (see vite.config.ts).
+  if (command === 'build') process.env.NODE_ENV = 'production';
+  return {
+    // main.tsx keeps its export boot only in this mode.
+    mode: 'export',
+    plugins: [react(), viteSingleFile({ removeViteModuleLoader: true })],
+    base: './',
+    resolve: {
+      alias: [
+        { find: '@shared', replacement: shared },
+        { find: /^\.\/elkWorker$/, replacement: inlineWorker },
+      ],
+    },
+    build: {
+      outDir: '../dist/ui-export',
+      emptyOutDir: true,
+      target: 'es2020',
+      chunkSizeWarningLimit: 10_000,
+    },
+  };
+});

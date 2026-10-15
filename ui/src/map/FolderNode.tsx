@@ -6,6 +6,8 @@ import { Chevron, LayerTile, layerVars } from '../components/icons';
 import { ARROWS, type FolderFlowNode } from './mapFlow';
 import { useMapActions } from './MapContext';
 import { Anchors } from './FileNode';
+import { useStore } from '../store';
+import { READ_ONLY_TIP } from '../history';
 
 const midHandle: CSSProperties = { top: '50%', opacity: 0, pointerEvents: 'none' };
 const n = (v: number): string => v.toLocaleString();
@@ -20,6 +22,8 @@ const slash = (label: string, path: string): string => (path === '' ? label : `$
 function FolderNodeView({ id, data }: NodeProps<FolderFlowNode>) {
   const { folder: f, level, large, expanded } = data;
   const actions = useMapActions();
+  // Folder cards are draggable pins: read-only while the UI shows the past.
+  const ro = useStore(s => s.rewound !== null);
   const layer = LAYERS[f.layer];
 
   if (level === 'folders') {
@@ -42,6 +46,7 @@ function FolderNodeView({ id, data }: NodeProps<FolderFlowNode>) {
         tabIndex={0}
         aria-label={`${f.label} (${layer.name}, ${plural(f.counts.files, 'file', 'files')}). Open to see its files.`}
         data-folder={id}
+        title={ro ? READ_ONLY_TIP : undefined}
         onKeyDown={onKeyDown}
       >
         <Anchors style={midHandle} />

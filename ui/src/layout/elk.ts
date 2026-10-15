@@ -1,4 +1,5 @@
 import type { ElkNode } from 'elkjs/lib/elk-api.js';
+import { createElkWorker } from './elkWorker';
 
 /** Shared ELK plumbing: the layout worker, its start cache and failure handling, and the layout timeout. */
 
@@ -30,7 +31,7 @@ async function startWorker(): Promise<WorkerHandle> {
   let raw: Worker | null = null;
   const elk = new ELK({
     workerFactory: () => {
-      raw = new Worker(new URL('./elk.worker.ts', import.meta.url), { type: 'module' });
+      raw = createElkWorker();
       raw.addEventListener('error', e => { e.preventDefault?.(); handle.fail(new Error('layout worker failed')); });
       raw.addEventListener('messageerror', () => handle.fail(new Error('layout worker sent an unreadable message')));
       return raw;
