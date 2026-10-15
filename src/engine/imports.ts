@@ -88,7 +88,13 @@ function indexOf(ctx: ImportCtx): FileIndex {
   return idx;
 }
 
-function stripJsComments(src: string): string {
+const blank = (s: string): string => s.replace(/[^\n]/g, ' ');
+
+/**
+ * `src` with comments and the bodies of string and template literals blanked (quotes and newlines kept),
+ * so offsets still match `src`: statements are matched here and their specifiers read back from `src`.
+ */
+function blankJs(src: string): string {
   let out = '';
   let i = 0;
   while (i < src.length) {
@@ -96,14 +102,13 @@ function stripJsComments(src: string): string {
     if (c === '"' || c === "'" || c === '`') {
       let j = i + 1;
       while (j < src.length && src[j] !== c && (c === '`' || src[j] !== '\n')) j += src[j] === '\\' ? 2 : 1;
-      out += src.slice(i, j + 1);
+      const closed = j < src.length;
+      out += c + blank(src.slice(i + 1, closed ? j : src.length)) + (closed ? src[j] : '');
       i = j + 1;
-    } else if (c === '/' && src[i + 1] === '/') {
-      while (i < src.length && src[i] !== '\n') i++;
-    } else if (c === '/' && src[i + 1] === '*') {
-      const end = src.indexOf('*/', i + 2);
-      const stop = end === -1 ? src.length : end + 2;
-      out += src.slice(i, stop).replace(/[^\n]/g, ' ');
+    } else if (c === '/' && (src[i + 1] === '/' || src[i + 1] === '*')) {
+      const end = src[i + 1] === '/' ? src.indexOf('\n', i) : src.indexOf('*/', i + 2);
+      const stop = end === -1 ? src.length : src[i + 1] === '/' ? end : end + 2;
+      out += blank(src.slice(i, stop));
       i = stop;
     } else { out += c; i++; }
   }
@@ -135,12 +140,19 @@ function parseJsSpecs(src: string): string[] {
   indexStats.jsParses++;
   const out: string[] = [];
   const patterns = [
-    /\b(?:import|export)\s+(?:type\s+)?(?:[^'";]*?\s+from\s+)?['"]([^'"\n]+)['"]/g,
-    /\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g,
-    /\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g,
+    /\b(?:import|export)\s+(?:type\s+)?(?:[^'";]*?\s+from\s+)?['"]([^'"\n]+)['"]/dg,
+    /\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)/dg,
+    /\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*\)/dg,
   ];
-  const clean = stripJsComments(src);
-  for (const re of patterns) for (const m of clean.matchAll(re)) out.push(m[1]);
+  // Text inside other strings (`"import x from 'y'"`) is blank, so only real statements match.
+  const bare = blankJs(src);
+  for (const re of patterns) {
+    for (const m of bare.matchAll(re)) {
+      const [start, end] = m.indices![1];
+      const spec = src.slice(start, end);
+      if (spec.trim()) out.push(spec);
+    }
+  }
   return out;
 }
 
@@ -169,7 +181,9 @@ function resolveJs(dir: string, spec: string, ctx: ImportCtx): JsTarget {
   if (spec.startsWith('./') || spec.startsWith('../') || spec === '.' || spec === '..') {
     return { local: resolveJsPath(join(dir, spec), ctx) };
   }
+  let any: string[] = [];
   for (const [prefix, targets] of longestFirst(ctx.aliases)) {
+    if (prefix === '*') { any = targets; continue; }
     if (spec !== prefix && !spec.startsWith(prefix + '/')) continue;
     const rest = spec.slice(prefix.length).replace(/^\//, '');
     for (const t of targets) {
@@ -187,6 +201,11 @@ function resolveJs(dir: string, spec: string, ctx: ImportCtx): JsTarget {
     return { local: null };
   }
   if (spec.startsWith('/') || /^[a-z]+:\/\//i.test(spec)) return { local: null };
+  // `baseUrl` and a `"*"` path: a bare specifier is a project file only when one exists there.
+  for (const t of any) {
+    const r = resolveJsPath(join(t, spec), ctx);
+    if (r) return { local: r };
+  }
   return { external: packageName(spec) };
 }
 
@@ -443,20 +462,28 @@ function stripJsonc(text: string): string {
   return out.replace(/,(\s*[}\]])/g, '$1');
 }
 
-/** Alias prefix to target directories from tsconfig/jsconfig `compilerOptions.paths` (with `baseUrl` applied). */
+/**
+ * Alias prefix to target directories from tsconfig/jsconfig `compilerOptions.paths` (with `baseUrl` applied).
+ * A `"*"` path and `baseUrl` itself become one `*` entry (paths targets first), tried for any bare specifier.
+ */
 export function readTsconfigAliases(json: string): [string, string[]][] {
   try {
     const cfg = JSON.parse(stripJsonc(json)) as { compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> } };
     const opts = cfg.compilerOptions;
-    if (!opts?.paths) return [];
-    const baseUrl = typeof opts.baseUrl === 'string' ? opts.baseUrl : '';
+    const hasBase = typeof opts?.baseUrl === 'string';
+    if (!opts || (!opts.paths && !hasBase)) return [];
+    const baseUrl = hasBase ? opts.baseUrl! : '';
     const out: [string, string[]][] = [];
-    for (const [key, values] of Object.entries(opts.paths)) {
+    const any: string[] = [];
+    for (const [key, values] of Object.entries(opts.paths ?? {})) {
       if (!Array.isArray(values)) continue;
       const prefix = key.replace(/\/\*$/, '');
-      const targets = values.filter((v): v is string => typeof v === 'string').map(v => join(baseUrl, v.replace(/\/\*$/, '')));
-      out.push([prefix, targets]);
+      const targets = values.filter((v): v is string => typeof v === 'string').map(v => join(baseUrl, v.replace(/\/?\*$/, '')));
+      if (prefix === '*') any.push(...targets);
+      else out.push([prefix, targets]);
     }
+    if (hasBase) any.push(join(baseUrl));
+    if (any.length) out.push(['*', [...new Set(any)]]);
     return out;
   } catch {
     return [];

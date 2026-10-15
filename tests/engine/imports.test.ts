@@ -63,11 +63,18 @@ describe('extractImports', () => {
 
 describe('readTsconfigAliases', () => {
   it('tolerates comments and trailing commas', () => {
-    expect(readTsconfigAliases('{ // c\n "compilerOptions": { "baseUrl": ".", "paths": { "@app/*": ["src/app/*"], }, } }')).toEqual([['@app',['src/app']]]);
+    expect(readTsconfigAliases('{ // c\n "compilerOptions": { "baseUrl": ".", "paths": { "@app/*": ["src/app/*"], }, } }')).toEqual([['@app',['src/app']],['*',['']]]);
   });
   it('applies baseUrl and returns [] on junk', () => {
-    expect(readTsconfigAliases('{"compilerOptions":{"baseUrl":"./src","paths":{"~/*":["./x/*"]}}}')).toEqual([['~',['src/x']]]);
+    expect(readTsconfigAliases('{"compilerOptions":{"baseUrl":"./src","paths":{"~/*":["./x/*"]}}}')).toEqual([['~',['src/x']],['*',['src']]]);
+    expect(readTsconfigAliases('{"compilerOptions":{"paths":{"~/*":["./x/*"]}}}')).toEqual([['~',['x']]]);
+    expect(readTsconfigAliases('{"compilerOptions":{}}')).toEqual([]);
     expect(readTsconfigAliases('nope')).toEqual([]);
+  });
+  it('turns baseUrl alone and a "*" path into one wildcard entry, paths first', () => {
+    expect(readTsconfigAliases('{"compilerOptions":{"baseUrl":"src"}}')).toEqual([['*',['src']]]);
+    expect(readTsconfigAliases('{"compilerOptions":{"paths":{"*":["src/*","types/*"]}}}')).toEqual([['*',['src','types']]]);
+    expect(readTsconfigAliases('{"compilerOptions":{"baseUrl":".","paths":{"*":["src/*"]}}}')).toEqual([['*',['src','']]]);
   });
 });
 
@@ -117,6 +124,22 @@ describe('indexing and fixes', () => {
     imp('src/cache.ts', 'typescript', v1);
     imp('src/cache.ts', 'typescript', v1);
     expect(indexStats.jsParses - before).toBe(2);
+  });
+  it('resolves bare specifiers against baseUrl and a "*" path only when the file exists', () => {
+    for (const json of ['{"compilerOptions":{"baseUrl":"src"}}', '{"compilerOptions":{"paths":{"*":["src/*"]}}}']) {
+      const aliases = readTsconfigAliases(json);
+      expect(imp('src/ui/c.tsx', 'typescript', "import u from 'a'; import b from 'lib/b'; import l from 'lib'; import r from 'react'; import d from '@scope/x/deep'", { aliases }))
+        .toEqual({ local: ['src/a.ts', 'src/lib/b.ts', 'src/lib/index.ts'], external: ['react', '@scope/x'] });
+    }
+    // Explicit paths still win over the wildcard.
+    const aliases = readTsconfigAliases('{"compilerOptions":{"baseUrl":".","paths":{"lib/*":["src/lib/*"]}}}');
+    expect(imp('src/a.ts', 'typescript', "import b from 'lib/b'; import p from 'pkg/mod'", { aliases })).toEqual({ local: ['src/lib/b.ts'], external: ['pkg'] });
+  });
+  it('ignores import-like text inside strings and templates but keeps real specifiers', () => {
+    const src = "const s = \"import x from 'lodash'\";\nconst t = `export * from 'chalk'; require('fs-extra')`;\nconst q = 'import(\"zod\")';\n"
+      + "import y from './lib'; export { b } from \"./lib/b\";\nconst r = require('react'); const m = await import('./ui/c');\nconst esc = 'it\\'s import a from \"vue\"';\n";
+    expect(imp('src/a.ts', 'typescript', src)).toEqual({ local: ['src/lib/b.ts', 'src/lib/index.ts', 'src/ui/c.tsx'], external: ['react'] });
+    expect(imp('src/a.ts', 'typescript', "import a from 'react' // import b from 'vue'\n/* 'x' */ import c from \"preact\"")).toEqual({ local: [], external: ['react', 'preact'] });
   });
   it('prefers the longest alias prefix', () => {
     expect(imp('src/a.ts','typescript',`import b from '@a/lib/b'`, { aliases: [['@a',['nowhere']],['@a/lib',['src/lib']]] }).local).toEqual(['src/lib/b.ts']);
