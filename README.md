@@ -6,7 +6,7 @@ LiveMap watches your project while Claude Code, Codex, Cursor or a cloud builder
 
 ![The LiveMap Map following an agent as it writes a file, with a plain-English summary in the inspector](docs/images/hero.png)
 
-**Try the demo:** download `livemap-demo.html` from the [latest GitHub Release](https://github.com/Sahnijatin/livemap/releases/latest) and open it in a browser. No install needed. Its AI summaries are sample text written for the demo; real summaries need your own provider key (see [AI summaries](docs/guide.md#ai-summaries)).
+**Try the demo:** download `livemap-demo.html` from the [latest GitHub Release](https://github.com/Sahnijatin/livemap/releases/latest) and open it in a browser. No install needed. Its AI summaries are sample text written for the demo; real summaries need a provider you configure, such as your own API key or a local Ollama (see [AI summaries](docs/guide.md#ai-summaries)).
 
 ## Quickstart (from source)
 

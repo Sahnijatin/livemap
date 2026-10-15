@@ -20,7 +20,7 @@ Run `livemap init` in the project folder. It detects agents by their config fold
 | Codex CLI | `.codex/hooks.json` | `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop` |
 | Cursor | `.cursor/hooks.json` | `beforeSubmitPrompt`, `afterAgentResponse`, `afterAgentThought`, `preToolUse`, `postToolUse`, `beforeShellExecution`, `afterShellExecution`, `afterFileEdit`, `stop` |
 
-- **The hook script.** Init copies `livemap-hook.mjs` to the `bin/` folder of the LiveMap home (`~/.livemap/bin/`, or `$LIVEMAP_HOME/bin/`). Each hook entry runs `node "<home>/bin/livemap-hook.mjs" <agent> <event>`. Claude Code and Codex entries have a 5 second timeout.
+- **The hook script.** Init copies `livemap-hook.mjs` to the `bin/` folder of the LiveMap home (`~/.livemap/bin/`, or `$LIVEMAP_HOME/bin/`). Each hook entry runs `node "<home>/bin/livemap-hook.mjs" <agent> <event>`, where `<agent>` is `claude-code`, `codex` or `cursor`. Claude Code and Codex entries have a 5 second timeout.
 - **Your settings are kept.** Init adds its entries next to yours and leaves your own hooks in place. Running it again updates LiveMap's entries in place and prints `unchanged` when nothing differs. A file that is not valid JSON, or whose `hooks` has an unexpected shape, is skipped with the reason and left alone.
 - **Git excludes.** When the project has a `.git` folder, init adds `.claude/settings.local.json`, `.codex/hooks.json` and `.cursor/hooks.json` to `.git/info/exclude`, so the hook files (which hold a path on your machine) are not committed by accident.
 - **Codex.** Codex asks you to trust new hooks. Init reminds you: run `/hooks` inside Codex once.
@@ -64,14 +64,14 @@ Both work by blocking the agent's next action that can be blocked and telling it
 | Cursor | `preToolUse` and `beforeShellExecution`. File edits cannot be blocked. |
 
 - **Pause.** "Pause agent" in the toolbar. While it is on, every blockable action of every connected agent is blocked, and the agent is told: "The user paused this session in LiveMap. Stop and wait for their instructions." The blocked tool call does not run. Click "Resume agent" to let agents carry on.
-- **Flag.** Write a note in a file's Flag box in the inspector, or in "Flag the project" (shown in the inspector when no file is open), and press Flag. The note waits ("Waiting for the next action") until a connected agent next tries a blockable action. That action is blocked and the agent receives every waiting flag at once:
+- **Flag.** Write a note in a file's Flag box in the inspector, or in "Flag the project" (shown in the inspector when no file is open), and press Flag. The note waits ("Waiting for the agent's next action") until a connected agent next tries a blockable action. That action is blocked and the agent receives every waiting flag at once:
 
   ```text
   The user flagged this in LiveMap:
   - src/routes/orders.ts: Use the existing db client, not a new one.
   ```
 
-  The flag then shows "Delivered to <agent>". You can remove a flag before it is delivered. While Pause is on, flags wait.
+  The flag then shows "Delivered <when> to <agent>", for example "Delivered just now to Claude Code". You can remove a flag before it is delivered. While Pause is on, flags wait.
 - **Timing.** The agent sees a flag or pause only when it next tries a blockable action, not mid-step. If its hook already gave up waiting, nothing is blocked and the flag stays queued for the next action.
 - **Lifetime.** Flags and the pause state live in the running LiveMap. Restarting LiveMap clears them.
 

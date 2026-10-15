@@ -29,7 +29,7 @@ Indexes the project, starts the local server and opens the UI in your browser.
 | `--no-open` | the browser opens | Does not open a browser. Open the URL LiveMap prints instead. |
 | `--pull[=SEC]` | off; `--pull` alone pulls every 15 seconds | Runs `git pull --ff-only` every SEC seconds (5 to 3600), for agents that push to a remote. See [agents.md](agents.md#cloud-builders-git-and---pull). |
 | `--no-history` | history is recorded | Records nothing; the timeline says "History is off". |
-| `--summaries` | off | Turns on AI summaries for this run. A provider key is still needed. See [AI summaries](#ai-summaries). |
+| `--summaries` | off | Turns on AI summaries for this run. You still need to configure a provider (a key, or a local Ollama). See [AI summaries](#ai-summaries). |
 
 On start LiveMap prints `LiveMap is watching <project>` and the URL, which includes the access token (`http://127.0.0.1:<port>/?t=<token>`). The browser it opens gets a one-time link instead, valid for 2 minutes. Stop LiveMap with Ctrl+C.
 
@@ -82,7 +82,7 @@ LiveMap records what the UI receives (file changes, agent prompts, messages and 
 - **Read-only past.** While rewound, the Flag box, Pause and dragging Map cards are disabled. The code view shows the file as it is now, with a notice, because past file contents are not stored.
 - **Restarts.** Each start of LiveMap begins a new run, marked on the timeline with a separator, so you can scrub back into earlier runs.
 - **Storage.** History lives in `~/.livemap/projects/<id>/` (or under `LIVEMAP_HOME` when it is set), where `<id>` is the SHA-1 of the project's real path. It holds one `events-<run>.jsonl` file per run, gzip snapshots in `snapshots/` and an `index.json`. Folders are readable only by you (mode 0700, files 0600). History contains only what the UI already received, so `.env` values never appear in it.
-- **Size cap.** Each project keeps at most 200 MB of history. Set `LIVEMAP_HISTORY_MB` to change it (for example `LIVEMAP_HISTORY_MB=500`). When a project goes over, its oldest runs are deleted first; the current run is never deleted.
+- **Size cap.** Each project keeps at most 200 MB of history. Set `LIVEMAP_HISTORY_MB` to change it (for example `LIVEMAP_HISTORY_MB=500`). When a project goes over, its oldest runs are deleted first; the current run is never deleted. If the current run alone is over the cap, its older events are dropped and it keeps only its newest snapshot onward.
 - **Turning it off.** Start with `livemap --no-history` to record nothing; the timeline then says "History is off". If history cannot be written (a full disk, for example), the live UI keeps working and shows "History is unavailable" with the reason. Rewinding then shows only what was recorded before the failure, and "Back to live" still returns to the current state without repeating or dropping updates.
 
 ## AI summaries
