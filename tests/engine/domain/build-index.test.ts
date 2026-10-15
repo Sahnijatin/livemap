@@ -152,6 +152,22 @@ describe('buildDomainIndex: tables', () => {
     ]);
   });
 
+  it('merges a Prisma @map field with its SQL column into one FK field', () => {
+    const mapped: Entity = {
+      name: 'Order', table: 'orders', orm: 'prisma', file: 'prisma/schema.prisma', line: 1,
+      fields: [{ name: 'id', type: 'String', pk: true }, { name: 'userId', type: 'String', column: 'user_id', fk: { table: 'users', field: 'id' } }],
+    };
+    const sql: Entity = { name: 'orders', table: 'orders', orm: 'sql', file: 'db/001.sql', line: 1, fields: [{ name: 'id', type: 'text' }, { name: 'user_id', type: 'text' }] };
+    const t = buildDomainIndex([
+      fm('db/001.sql', { lang: 'sql', entities: [sql] }),
+      fm('prisma/schema.prisma', { lang: 'prisma', entities: [mapped, user] }),
+    ], noText).tables.find(x => x.table === 'orders')!;
+    const hits = t.fields.filter(f => (f.column ?? f.name) === 'user_id');
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ name: 'userId', type: 'String', fk: { table: 'users', field: 'id' } });
+    expect(t.fields.map(f => f.name)).toEqual(['id', 'userId']);
+  });
+
   it('heads a merged table with the ORM entity over SQL migrations, whatever the path order', () => {
     const idx = buildDomainIndex([
       fm('a/001.sql', { lang: 'sql', entities: [sqlOrders] }),
