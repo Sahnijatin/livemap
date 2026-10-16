@@ -1,12 +1,12 @@
 import { useEffect, useRef, type KeyboardEvent, type PointerEvent } from 'react';
 import { useStore } from '../store';
-import { PANELS, drawn, setCollapsed } from '../panels';
+import { PANELS, drawn, setCollapsed, shownLayout } from '../panels';
 import { LIMITS, saveLayout, type Panel, type PanelLayout } from '../panelLayout';
 
 /**
  * The drag handle on a docked panel's inner edge (1080 px and wider): drag or arrow keys resize (Shift: 64 px), Home
  * and End go to the minimum and to the widest the box allows, Enter collapses, a double-click restores the default.
- * A resize or a reset on either handle ends the widened state (see WidenButton).
+ * A handle change that moves a panel ends the widened state (see WidenButton); an input that moves nothing keeps it.
  * What the user sees is what is stored: the panel's drawn width, and it becomes the panel the other gives way to.
  * A drag saves once, when it ends; a lost pointer capture or a window blur ends it too.
  */
@@ -21,11 +21,11 @@ export function PanelHandle({ panel }: { panel: Panel }) {
 
   const set = (w: number | null, save = true) => {
     const s = useStore.getState();
-    // Either handle ends the widened state without a restore: the inspector keeps the width it is drawn at, or while
-    // it is hidden the width Widen replaced. The box is remembered: in a smaller one the inspector gives way first
-    // (fitLayout).
+    // A handle change that moves a panel ends the widened state, without a restore: the inspector keeps the width it
+    // is drawn at, or while it is hidden (not peeked) the width Widen replaced. The box is remembered: in a smaller
+    // one the inspector gives way first (fitLayout).
     const { wide, ...l } = s.layout;
-    const base = wide ? { ...l.w, inspector: l.collapsed.inspector ? wide.w.inspector : drawn(s).fit.inspector } : l.w;
+    const base = wide ? { ...l.w, inspector: shownLayout(s).collapsed.inspector ? wide.w.inspector : drawn(s).fit.inspector } : l.w;
     s.setLayout({ ...l, w: { ...base, [panel]: w }, last: panel, at: s.dock.width }, save);
   };
   /** Draws the panel at `d`, within reach; nothing happens (or is saved) when that is the width drawn now. */

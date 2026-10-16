@@ -15,7 +15,7 @@ const { Inspector, loadDetail } = await import('./Inspector');
 await loadDetail();
 const { Dock } = await import('./Dock');
 const { PanelHandle } = await import('./PanelHandle');
-const { useSlideOvers } = await import('../panels');
+const { useSlideOvers, setCollapsed } = await import('../panels');
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -85,6 +85,8 @@ async function mount() {
 const app = () => host.querySelector<HTMLDivElement>('.app')!;
 const btn = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 /** The Widen inspector button, whatever its label says now. */
+/** Whether `.app` glides now: Dock sets data-glide on it directly. */
+const gliding = () => app().hasAttribute('data-glide');
 const wbtn = () => host.querySelector<HTMLButtonElement>('button.widebtn')!;
 const sep = (label: string) => host.querySelector<HTMLDivElement>(`[role=separator][aria-label="${label}"]`)!;
 const now = (label: string) => Number(sep(label).getAttribute('aria-valuenow'));
@@ -227,9 +229,9 @@ describe('docked panels at 1080 px and wider', () => {
     expect(now('Resize inspector')).toBe(448);
     expect(wbtn().getAttribute('aria-label')).toBe('Widen inspector');
     expect(wbtn().title).toBe('Widen inspector');
-    expect(app().classList.contains('glide')).toBe(false);
+    expect(gliding()).toBe(false);
     act(() => wbtn().click());
-    expect(app().classList.contains('glide')).toBe(true);
+    expect(gliding()).toBe(true);
     expect([now('Resize project panel'), now('Resize inspector')]).toEqual([200, 1252]);
     expect(app().style.getPropertyValue('--right-w')).toBe('1252px');
     expect(wbtn().getAttribute('aria-label')).toBe('Restore inspector width');
@@ -347,26 +349,70 @@ describe('docked panels at 1080 px and wider', () => {
     const before = localStorage.getItem(LAYOUT_KEY);
     act(() => wbtn().click());
     expect(localStorage.getItem(LAYOUT_KEY)).toBe(before);
-    expect(app().classList.contains('glide')).toBe(false);
+    expect(gliding()).toBe(false);
   });
 
-  it('one glide, from the store: collapse and Widen glide and it ends; a drag, a resize or a reload never glides', async () => {
+  it('one glide, set where the widths are written: collapse and Widen glide and it ends; a drag, a resize or a no-op collapse never glides', async () => {
     await mount();
-    expect(app().classList.contains('glide')).toBe(false);
+    expect(gliding()).toBe(false);
     act(() => resize(1500));
-    expect(app().classList.contains('glide')).toBe(false);
+    expect(gliding()).toBe(false);
     act(() => btn('Hide project panel').click());
-    expect(useStore.getState().glideUntil).toBeGreaterThan(Date.now());
-    expect(app().classList.contains('glide')).toBe(true);
+    expect(gliding()).toBe(true);
+    // It ends with the grid's transition (or a timeout from the CSS duration).
+    act(() => { app().dispatchEvent(Object.assign(new Event('transitionend', { bubbles: true }), { propertyName: 'grid-template-columns' })); });
+    expect(gliding()).toBe(false);
+    // Collapsing what is already collapsed changes nothing drawn.
+    act(() => setCollapsed('files', true));
+    expect(gliding()).toBe(false);
+    act(() => btn('Files').click());
+    expect(gliding()).toBe(true);
     await act(async () => { await new Promise(r => setTimeout(r, 600)); });
-    expect(app().classList.contains('glide')).toBe(false);
+    expect(gliding()).toBe(false);
     act(() => wbtn().click());
-    expect(app().classList.contains('glide')).toBe(true);
+    expect(gliding()).toBe(true);
     // A drag drops it at once and it does not come back after.
     pointer(sep('Resize inspector'), 'pointerdown', 800);
-    expect(app().classList.contains('glide')).toBe(false);
+    expect(gliding()).toBe(false);
     pointer(sep('Resize inspector'), 'pointerup', 800);
-    expect(app().classList.contains('glide')).toBe(false);
+    expect(gliding()).toBe(false);
+    act(() => resize(1700));
+    expect(gliding()).toBe(false);
+  });
+
+  it('a peek glides: the attribute is on before the widths change', async () => {
+    resize(1920);
+    await mount();
+    act(() => wbtn().click());
+    act(() => btn('Hide inspector').click());
+    act(() => { app().removeAttribute('data-glide'); });
+    expect(app().style.getPropertyValue('--left-w')).toBe('272px');
+    const seen = new MutationObserver(() => {});
+    seen.observe(app(), { attributes: true, attributeFilter: ['data-glide', 'style'] });
+    // A file opened from anywhere (the activity feed, the socket) shows the collapsed, widened inspector.
+    act(() => useStore.getState().select('src/a.ts'));
+    const order = seen.takeRecords().map(r => r.attributeName);
+    seen.disconnect();
+    expect(app().style.getPropertyValue('--left-w')).toBe('200px');
+    expect(order[0]).toBe('data-glide');
+    expect(order).toContain('style');
+  });
+
+  it('dragging the project panel while a peeked, widened inspector shows keeps its drawn width', async () => {
+    resize(1920);
+    await mount();
+    act(() => btn('Hide inspector').click());
+    act(() => useStore.getState().select('src/a.ts'));
+    expect(app().classList.contains('right-collapsed')).toBe(false);
+    act(() => wbtn().click());
+    expect(now('Resize inspector')).toBe(1252);
+    const files = sep('Resize project panel');
+    pointer(files, 'pointerdown', 300);
+    pointer(files, 'pointermove', 310);
+    expect(now('Resize inspector')).toBe(1242);
+    pointer(files, 'pointerup', 310);
+    expect(stored().w.inspector).toBe(1252);
+    expect(stored().wide).toBeUndefined();
   });
 
   it('Widen then Restore puts back exactly the layout it replaced (files 400, inspector 600, files resized last)', async () => {
@@ -402,12 +448,12 @@ describe('docked panels at 1080 px and wider', () => {
     hello();
     resize(1920);
     await mount();
-    expect(app().classList.contains('glide')).toBe(false);
+    expect(gliding()).toBe(false);
     key(sep('Resize inspector'), 'ArrowRight', { shiftKey: true });
     expect(stored().wide).toBeUndefined();
-    expect(app().classList.contains('glide')).toBe(false);
+    expect(gliding()).toBe(false);
     act(() => wbtn().click());
-    expect(app().classList.contains('glide')).toBe(true);
+    expect(gliding()).toBe(true);
   });
 
   it('a drag that starts widened writes the new width on its first pointermove', async () => {
@@ -523,18 +569,18 @@ describe('docked panels at 1080 px and wider', () => {
   it('the drag is a state the .app class follows: it survives re-renders and stops the collapse glide', async () => {
     await mount();
     act(() => btn('Hide inspector').click());
-    expect(app().classList.contains('glide')).toBe(true);
+    expect(gliding()).toBe(true);
     const files = sep('Resize project panel');
     pointer(files, 'pointerdown', 300);
     expect(app().classList.contains('resizing')).toBe(true);
-    expect(app().classList.contains('glide')).toBe(false);
+    expect(gliding()).toBe(false);
     act(() => btn('Inspector').click());
     pointer(files, 'pointermove', 310);
     expect(app().classList.contains('resizing')).toBe(true);
-    expect(app().classList.contains('glide')).toBe(false);
+    expect(gliding()).toBe(false);
     pointer(files, 'pointerup', 310);
     expect(app().classList.contains('resizing')).toBe(false);
-    expect(app().classList.contains('glide')).toBe(false);
+    expect(gliding()).toBe(false);
   });
 
   it('the stored layout applies on first paint: no glide, the widths set, and a toggle right away sticks', () => {
@@ -543,7 +589,7 @@ describe('docked panels at 1080 px and wider', () => {
     hello();
     act(() => root.render(<Shell />));
     expect(app().classList.contains('left-collapsed')).toBe(true);
-    expect(app().classList.contains('glide')).toBe(false);
+    expect(gliding()).toBe(false);
     expect(app().style.getPropertyValue('--right-w')).toBe('500px');
     key(document.body, ']');
     expect(app().classList.contains('right-collapsed')).toBe(true);
@@ -684,7 +730,7 @@ describe('docked panels at 1080 px and wider', () => {
     peek();
     expect(hidden()).toBe(false);
     // A peek glides like an expand.
-    expect(app().classList.contains('glide')).toBe(true);
+    expect(gliding()).toBe(true);
     act(() => host.querySelector<HTMLButtonElement>('.backbtn')!.click());
     expect(hidden()).toBe(true);
 

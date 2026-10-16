@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, useReducer, useRef, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { useStore, type StoreState } from '../store';
 import { PANELS, drawn, setCollapsed, shownLayout, toggleWide } from '../panels';
-import type { Panel } from '../panelLayout';
+import type { Panel, PanelLayout } from '../panelLayout';
 import { PanelIcon, SidebarIcon, WidenIcon } from './icons';
 
 const collapsedOf = (p: Panel) => (s: StoreState) => shownLayout(s).collapsed[p];
@@ -10,34 +10,51 @@ const filesCollapsed = collapsedOf('files');
 const inspectorCollapsed = collapsedOf('inspector');
 
 /**
- * The `.app` grid. It re-renders only when a panel collapses or expands, Widen or Restore is pressed, or a drag
- * starts or ends; the column widths
- * are written onto it directly from the store, so a drag or a window resize re-renders nothing here.
+ * The `.app` grid. It re-renders only when a panel collapses or expands or a drag starts or ends; the column widths
+ * and the glide are written onto it directly from the store, so a drag or a window resize re-renders nothing here.
  */
 export function Dock({ gated, children }: { gated: boolean; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const files = useStore(filesCollapsed);
   const inspector = useStore(inspectorCollapsed);
   const dragging = useStore(s => s.dock.dragging);
-  // The columns animate only while the store says so (glideUntil: a collapse, an expand, Widen or Restore; see
-  // panels.ts), never during a drag. styles.css turns it off for reduced motion. A timer re-render drops the class.
-  const glideUntil = useStore(s => s.glideUntil);
-  const glide = !dragging && Date.now() < glideUntil;
-  const [, tick] = useReducer((n: number) => n + 1, 0);
-  useEffect(() => {
-    if (!glide) return;
-    const t = window.setTimeout(tick, glideUntil - Date.now());
-    return () => window.clearTimeout(t);
-  }, [glide, glideUntil]);
 
   // Before first paint: measure the real box (safe-area insets and gutters included; the ResizeObserver also sees
   // every window resize, since .app is inset from the window) and write the drawn widths as --left-w and --right-w,
   // then keep both current. jsdom has no layout: the box falls back to the window less its 12 px gutters.
+  //
+  // The glide is decided here too, the one place: when the shown collapsed state changes (a collapse, an expand, a
+  // peek) or Widen or Restore is pressed, `data-glide` goes on `.app` before the widths are written, in the same
+  // step, so the columns transition (styles.css; off for reduced motion). React never renders the attribute. It
+  // comes off when the grid's transition ends, or after the CSS duration. A window resize, a drag, a no-op collapse
+  // or a handle that ends the widened state changes none of that, so never glides; a drag also stops a glide.
   useLayoutEffect(() => {
     const el = ref.current!;
     let last: unknown;
+    let shape: string | undefined;
+    let prev: PanelLayout | undefined;
+    let timer = 0;
+    const stop = () => {
+      window.clearTimeout(timer);
+      el.removeAttribute('data-glide');
+    };
+    const start = () => {
+      window.clearTimeout(timer);
+      el.setAttribute('data-glide', '');
+      const v = getComputedStyle(el).getPropertyValue('--glide-dur').trim();
+      timer = window.setTimeout(stop, (parseFloat(v) || 0) * (v.endsWith('ms') ? 1 : 1000) + 100);
+    };
+    const onEnd = (e: TransitionEvent) => { if (e.target === el && e.propertyName === 'grid-template-columns') stop(); };
+    el.addEventListener('transitionend', onEnd);
     const paint = (s: StoreState) => {
-      const { fit } = drawn(s);
+      const { l, fit } = drawn(s);
+      const next = `${l.collapsed.files} ${l.collapsed.inspector}`;
+      // Widen, or Restore (which puts back the very widths Widen kept); not a handle ending the widened state.
+      const toggled = !!prev && !!prev.wide !== !!s.layout.wide && (!!s.layout.wide || s.layout.w === prev.wide!.w);
+      if (s.dock.dragging) stop();
+      else if ((shape !== undefined && next !== shape) || toggled) start();
+      shape = next;
+      prev = s.layout;
       if (fit === last) return;
       last = fit;
       el.style.setProperty('--left-w', `${fit.files}px`);
@@ -52,13 +69,15 @@ export function Dock({ gated, children }: { gated: boolean; children: ReactNode 
     return () => {
       off();
       ro?.disconnect();
+      stop();
+      el.removeEventListener('transitionend', onEnd);
     };
   }, []);
 
   return (
     <div
       ref={ref}
-      className={clsx('app', files && 'left-collapsed', inspector && 'right-collapsed', glide && 'glide', dragging && 'resizing')}
+      className={clsx('app', files && 'left-collapsed', inspector && 'right-collapsed', dragging && 'resizing')}
       {...(gated ? { inert: '', 'aria-hidden': true } : {})}
     >
       {children}
@@ -81,8 +100,8 @@ const WIDEN_SLACK = 24;
 
 /**
  * Widens the docked inspector to its reach (the project panel gives way to its minimum), or puts back the layout it
- * replaced. Disabled when there is no room to widen; hidden below 1080 px. A drag or a key on either handle ends the
- * widened state without a restore.
+ * replaced. Unavailable when there is no room to widen; hidden below 1080 px. A handle change that moves a panel ends
+ * the widened state, without a restore.
  */
 export function WidenButton() {
   const wide = useStore(s => !!s.layout.wide);

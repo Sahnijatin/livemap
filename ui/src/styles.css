@@ -939,12 +939,12 @@
   @media (min-width:1080px) { .only-narrow-scrim { display:none; } }
   /* Docked panels: widths from --left-w and --right-w (set from the store; 272/384, or 248/340 below 1280 px, by
      default), each with its gap. A collapsed panel's column (gap included) goes to 0 and the panel fades out, sliding
-     off at its outer edge at its full width, so its content never reflows. `.glide` is on while a panel collapses or expands,
-     or the inspector widens or restores. */
+     off at its outer edge at its full width, so its content never reflows. `data-glide` (set by Dock) is on while a panel collapses or
+     expands, or the inspector widens or restores. */
   .rz { display:none; }
   @media (min-width:1080px) {
-    .app { --dl:272px; --dr:384px; --lc:calc(var(--left-w,var(--dl)) + 12px); --rc:calc(var(--right-w,var(--dr)) + 12px); grid-template-columns:var(--lc) minmax(0,1fr) var(--rc); column-gap:0; }
-    .app.glide { transition:grid-template-columns .45s var(--layout-glide); }
+    .app { --dl:272px; --dr:384px; --lc:calc(var(--left-w,var(--dl)) + 12px); --rc:calc(var(--right-w,var(--dr)) + 12px); grid-template-columns:var(--lc) minmax(0,1fr) var(--rc); column-gap:0; --glide-dur:.45s; }
+    .app[data-glide] { transition:grid-template-columns var(--glide-dur) var(--layout-glide); }
     .app.left-collapsed { --lc:0px; }
     .app.right-collapsed { --rc:0px; }
     .app.resizing { cursor:col-resize; user-select:none; }

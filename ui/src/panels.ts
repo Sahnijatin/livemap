@@ -1,5 +1,4 @@
 import { useEffect } from 'react';
-import { flushSync } from 'react-dom';
 import { isGated, useStore, type StoreState } from './store';
 import { NARROW_QUERY, isNarrow, isPhone } from './media';
 import { typingIn } from './keys';
@@ -82,7 +81,6 @@ export function afterSelect(): void {
 export function setCollapsed(p: Panel, on: boolean): void {
   const active = document.activeElement;
   const lost = on && !!active && (!!host(p)?.contains(active) || active.closest('[data-handle]')?.getAttribute('data-handle') === p);
-  glide();
   useStore.getState().collapse(p, on);
   if (lost) opener(p)?.focus();
 }
@@ -136,33 +134,8 @@ export function useSlideOvers(): void {
   }, []);
 }
 
-/** How long the docked columns glide (matches `.app.glide`, .45 s, with a little slack). */
-export const GLIDE_MS = 500;
-
-/**
- * Starts the docked columns' glide (not during a drag). Rendered at once, so `.app.glide` is on before the widths
- * that follow change and the columns transition.
- */
-function glide(): void {
-  if (useStore.getState().dock.dragging) return;
-  flushSync(() => useStore.setState({ glideUntil: Date.now() + GLIDE_MS }));
-}
-
-// The one glide (glideUntil): setCollapsed and toggleWide start it; so does a peek showing or hiding a collapsed
-// inspector (the stored collapsed state unchanged). A drag starting ends it. A window resize, a reload, a reset or a
-// handle never starts one.
-useStore.subscribe((s, prev) => {
-  if (s.dock.dragging) {
-    if (s.glideUntil) useStore.setState({ glideUntil: 0 });
-    return;
-  }
-  const peeked = s.layout.collapsed === prev.layout.collapsed && shownLayout(s).collapsed.inspector !== shownLayout(prev).collapsed.inspector;
-  if (peeked && Date.now() >= s.glideUntil) useStore.setState({ glideUntil: Date.now() + GLIDE_MS });
-});
-
-/** The Widen inspector button: widens the docked inspector, or restores the layout Widen replaced. Both glide. */
+/** The Widen inspector button: widens the docked inspector, or restores the layout Widen replaced. Both glide (Dock). */
 export function toggleWide(): void {
-  glide();
   const s = useStore.getState();
   s.setLayout(s.layout.wide ? restoreWide(s.layout) : widen(s.layout));
 }

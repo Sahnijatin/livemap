@@ -269,8 +269,9 @@ test('at 1440 px dragging the sidebar handle resizes the column, and the width s
     (window as unknown as { appClasses: string[] }).appClasses = seen;
     new MutationObserver(() => {
       const app = document.querySelector('.app');
-      if (app && seen[seen.length - 1] !== app.className) seen.push(app.className);
-    }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
+      const c = app && app.className + (app.hasAttribute('data-glide') ? ' data-glide' : '');
+      if (app && seen[seen.length - 1] !== c) seen.push(c!);
+    }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'data-glide'] });
   });
   await page.reload();
   await expect(page.getByRole('status').filter({ hasText: 'Live' })).toBeAttached({ timeout: 15_000 });
