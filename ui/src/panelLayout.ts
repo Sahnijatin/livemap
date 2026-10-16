@@ -71,14 +71,9 @@ export const widen = (l: PanelLayout): PanelLayout => ({ ...l, last: 'inspector'
 
 /** Puts back the layout Widen replaced. */
 export function restoreWide(l: PanelLayout): PanelLayout {
-  const { wide, ...rest } = l;
-  if (!wide) return l;
-  const out: PanelLayout = { ...rest, w: wide.w };
-  delete out.last;
-  delete out.at;
-  if (wide.last) out.last = wide.last;
-  if (wide.at !== undefined) out.at = wide.at;
-  return out;
+  if (!l.wide) return l;
+  const { wide, last: _last, at: _at, ...rest } = l;
+  return { ...rest, ...wide };
 }
 
 /** The widest `p` can be drawn in this box: its limit, or what the center minimum and the other panel at its minimum leave. */
@@ -89,33 +84,30 @@ export function reach(l: PanelLayout, p: Panel, width: number): number {
 }
 
 const readW = (p: Panel, w: unknown): number | null => (typeof w === 'number' && Number.isFinite(w) ? limit(p, w) : null);
-const readAt = (at: unknown): number | undefined => (typeof at === 'number' && Number.isFinite(at) && at > 0 ? Math.round(at) : undefined);
+
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** Widths, the panel resized last and the box, read from a stored layout or from its Widen snapshot. */
+function readSnapshot(v: Record<string, unknown>): Snapshot {
+  const w = isRecord(v.w) ? v.w : {};
+  const out: Snapshot = { w: { files: readW('files', w.files), inspector: readW('inspector', w.inspector) } };
+  if (v.last === 'files' || v.last === 'inspector') out.last = v.last;
+  if (typeof v.at === 'number' && Number.isFinite(v.at) && v.at > 0) out.at = Math.round(v.at);
+  return out;
+}
 
 /** A stored layout; anything unreadable falls back to the defaults, widths are clamped to their limits. */
 export function parseLayout(raw: string | null): PanelLayout {
-  const l = emptyLayout();
-  let v: { w?: Record<string, unknown>; collapsed?: Record<string, unknown>; last?: unknown; wide?: unknown; at?: unknown } | null = null;
+  let v: unknown = null;
   try {
     v = raw ? JSON.parse(raw) : null;
   } catch {
-    return l;
+    return emptyLayout();
   }
-  if (!v || typeof v !== 'object') return l;
-  for (const p of ['files', 'inspector'] as const) {
-    l.w[p] = readW(p, v.w?.[p]);
-    l.collapsed[p] = v.collapsed?.[p] === true;
-  }
-  if (v.last === 'files' || v.last === 'inspector') l.last = v.last;
-  const at = readAt(v.at);
-  if (at !== undefined) l.at = at;
-  const snap = v.wide as { w?: Record<string, unknown>; last?: unknown; at?: unknown } | null | undefined;
-  if (snap && typeof snap === 'object' && !Array.isArray(snap)) {
-    const wide: Snapshot = { w: { files: readW('files', snap.w?.files), inspector: readW('inspector', snap.w?.inspector) } };
-    if (snap.last === 'files' || snap.last === 'inspector') wide.last = snap.last;
-    const sat = readAt(snap.at);
-    if (sat !== undefined) wide.at = sat;
-    l.wide = wide;
-  }
+  if (!isRecord(v)) return emptyLayout();
+  const collapsed = isRecord(v.collapsed) ? v.collapsed : {};
+  const l: PanelLayout = { ...readSnapshot(v), collapsed: { files: collapsed.files === true, inspector: collapsed.inspector === true } };
+  if (isRecord(v.wide)) l.wide = readSnapshot(v.wide);
   return l;
 }
 

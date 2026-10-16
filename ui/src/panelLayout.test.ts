@@ -176,7 +176,9 @@ describe('parseLayout', () => {
     const snap = { w: { files: 300, inspector: 500 }, last: 'files', at: 1176 };
     expect(parseLayout(JSON.stringify({ w: { inspector: 900 }, last: 'inspector', wide: snap })).wide).toEqual(snap);
     expect(parseLayout(JSON.stringify({ w: { inspector: 900 }, wide: { w: { inspector: 'x' } } })).wide).toEqual({ w: { files: null, inspector: null } });
-    for (const wide of ['yes', true, null, 3]) expect(parseLayout(JSON.stringify({ wide })).wide).toBeUndefined();
+    for (const wide of ['yes', true, null, 3, []]) expect(parseLayout(JSON.stringify({ wide })).wide).toBeUndefined();
+    // The snapshot is read like the layout itself: widths clamped, bad values dropped.
+    expect(parseLayout(JSON.stringify({ wide: { w: { files: 9000, inspector: 100 }, last: 'x', at: -1 } })).wide).toEqual({ w: { files: 520, inspector: 300 } });
     expect(parseLayout(JSON.stringify({ at: 1896 })).at).toBe(1896);
     for (const at of [-5, 'x', null, 0]) expect(parseLayout(JSON.stringify({ at })).at).toBeUndefined();
     expect(parseLayout(JSON.stringify({ last: 'center' })).last).toBeUndefined();

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { useStore, type StoreState } from '../store';
-import { GLIDE_MS, PANELS, drawn, setCollapsed, shownLayout, toggleWide } from '../panels';
+import { PANELS, drawn, setCollapsed, shownLayout, toggleWide } from '../panels';
 import type { Panel } from '../panelLayout';
 import { PanelIcon, SidebarIcon, WidenIcon } from './icons';
 
@@ -19,31 +19,20 @@ export function Dock({ gated, children }: { gated: boolean; children: ReactNode 
   const files = useStore(filesCollapsed);
   const inspector = useStore(inspectorCollapsed);
   const dragging = useStore(s => s.dock.dragging);
+  // The columns animate only while the store says so (glideUntil: a collapse, an expand, Widen or Restore; see
+  // panels.ts), never during a drag. styles.css turns it off for reduced motion. A timer re-render drops the class.
   const glideUntil = useStore(s => s.glideUntil);
-  // The columns animate only while a panel collapses or expands, or after the Widen button (glideUntil; styles.css
-  // turns this off for reduced motion): never on first paint, during a drag, on a window resize or when a handle ends
-  // the widened state. A collapse is decided during render, so the class lands in the same commit as the collapsed
-  // class and the transition starts; Widen's class is also set by the width writer below. A timer re-render drops it.
-  const shape = `${files} ${inspector}`;
-  const prev = useRef(shape);
-  const until = useRef(0);
-  if (prev.current !== shape) {
-    prev.current = shape;
-    until.current = dragging ? 0 : Date.now() + GLIDE_MS;
-  }
-  const end = Math.max(until.current, glideUntil);
-  const glide = !dragging && Date.now() < end;
+  const glide = !dragging && Date.now() < glideUntil;
   const [, tick] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
     if (!glide) return;
-    const t = window.setTimeout(tick, end - Date.now());
+    const t = window.setTimeout(tick, glideUntil - Date.now());
     return () => window.clearTimeout(t);
-  }, [glide, end]);
+  }, [glide, glideUntil]);
 
   // Before first paint: measure the real box (safe-area insets and gutters included; the ResizeObserver also sees
   // every window resize, since .app is inset from the window) and write the drawn widths as --left-w and --right-w,
   // then keep both current. jsdom has no layout: the box falls back to the window less its 12 px gutters.
-  // Widen and Restore write new widths before React renders: the class goes on first, so they glide.
   useLayoutEffect(() => {
     const el = ref.current!;
     let last: unknown;
@@ -51,7 +40,6 @@ export function Dock({ gated, children }: { gated: boolean; children: ReactNode 
       const { fit } = drawn(s);
       if (fit === last) return;
       last = fit;
-      if (!s.dock.dragging && Date.now() < s.glideUntil) el.classList.add('glide');
       el.style.setProperty('--left-w', `${fit.files}px`);
       el.style.setProperty('--right-w', `${fit.inspector}px`);
     };
@@ -101,8 +89,9 @@ export function WidenButton() {
   const full = useStore(s => { const { fit, reach } = drawn(s); return fit.inspector >= reach.inspector - WIDEN_SLACK; });
   const off = !wide && full;
   const label = wide ? 'Restore inspector width' : off ? 'No room to widen' : 'Widen inspector';
+  // aria-disabled, not disabled: a button that becomes disabled drops focus to the body.
   return (
-    <button type="button" className="iconbtn barbtn widebtn" aria-label={off ? 'Widen inspector' : label} title={label} disabled={off} onClick={toggleWide}>
+    <button type="button" className="iconbtn barbtn widebtn" aria-label={off ? 'Widen inspector' : label} title={label} aria-disabled={off || undefined} onClick={() => { if (!off) toggleWide(); }}>
       <WidenIcon on={wide} />
     </button>
   );

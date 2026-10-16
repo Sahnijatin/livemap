@@ -289,19 +289,84 @@ describe('docked panels at 1080 px and wider', () => {
     key(insp, 'ArrowRight');
     expect(now('Resize inspector')).toBe(2176 - 444 - 200 - 16);
     expect(stored().wide).toBeUndefined();
-    // End while widened: the same width, no longer widened.
-    act(() => wbtn().click());
-    key(insp, 'End');
-    expect(now('Resize inspector')).toBe(1532);
-    expect(stored().w.inspector).toBe(1532);
-    expect(stored().wide).toBeUndefined();
     // A double-click still resets to the default width, and ends the widened state.
-    key(insp, 'ArrowRight', { shiftKey: true });
     act(() => wbtn().click());
     act(() => { insp.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); });
     expect(now('Resize inspector')).toBe(384);
     expect(stored().w.inspector).toBeNull();
     expect(stored().wide).toBeUndefined();
+  });
+
+  it('an input that changes nothing drawn keeps the widened state: End or ArrowLeft at reach, a click, a 0 px drag', async () => {
+    resize(1920);
+    await mount();
+    act(() => wbtn().click());
+    const insp = sep('Resize inspector');
+    const before = localStorage.getItem(LAYOUT_KEY);
+    key(insp, 'End');
+    key(insp, 'ArrowLeft');
+    pointer(insp, 'pointerdown', 800);
+    pointer(insp, 'pointerup', 800);
+    pointer(insp, 'pointerdown', 800);
+    pointer(insp, 'pointermove', 800);
+    pointer(insp, 'pointerup', 800);
+    const files = sep('Resize project panel');
+    key(files, 'Home');
+    pointer(files, 'pointerdown', 300);
+    pointer(files, 'pointermove', 300);
+    pointer(files, 'pointerup', 300);
+    expect(now('Resize inspector')).toBe(1252);
+    expect(wbtn().getAttribute('aria-label')).toBe('Restore inspector width');
+    expect(localStorage.getItem(LAYOUT_KEY)).toBe(before);
+  });
+
+  it('dragging the project panel while a widened inspector is hidden keeps the width Widen replaced (1920 px)', async () => {
+    resize(1920);
+    await mount();
+    act(() => wbtn().click());
+    key(document.body, ']');
+    expect(app().classList.contains('right-collapsed')).toBe(true);
+    const files = sep('Resize project panel');
+    pointer(files, 'pointerdown', 300);
+    pointer(files, 'pointermove', 340);
+    pointer(files, 'pointerup', 340);
+    expect(stored().wide).toBeUndefined();
+    expect(stored().w).toEqual({ files: 312, inspector: null });
+    key(document.body, ']');
+    expect([now('Resize project panel'), now('Resize inspector')]).toEqual([312, 384]);
+  });
+
+  it('Widen with no room is aria-disabled, not disabled: focus stays on it and a click does nothing', async () => {
+    resize(1920);
+    await mount();
+    wbtn().focus();
+    act(() => useStore.getState().setLayout({ ...useStore.getState().layout, w: { files: null, inspector: 1252 }, last: 'inspector', at: 1896 }));
+    expect(wbtn().getAttribute('aria-disabled')).toBe('true');
+    expect(wbtn().disabled).toBe(false);
+    expect(document.activeElement).toBe(wbtn());
+    const before = localStorage.getItem(LAYOUT_KEY);
+    act(() => wbtn().click());
+    expect(localStorage.getItem(LAYOUT_KEY)).toBe(before);
+    expect(app().classList.contains('glide')).toBe(false);
+  });
+
+  it('one glide, from the store: collapse and Widen glide and it ends; a drag, a resize or a reload never glides', async () => {
+    await mount();
+    expect(app().classList.contains('glide')).toBe(false);
+    act(() => resize(1500));
+    expect(app().classList.contains('glide')).toBe(false);
+    act(() => btn('Hide project panel').click());
+    expect(useStore.getState().glideUntil).toBeGreaterThan(Date.now());
+    expect(app().classList.contains('glide')).toBe(true);
+    await act(async () => { await new Promise(r => setTimeout(r, 600)); });
+    expect(app().classList.contains('glide')).toBe(false);
+    act(() => wbtn().click());
+    expect(app().classList.contains('glide')).toBe(true);
+    // A drag drops it at once and it does not come back after.
+    pointer(sep('Resize inspector'), 'pointerdown', 800);
+    expect(app().classList.contains('glide')).toBe(false);
+    pointer(sep('Resize inspector'), 'pointerup', 800);
+    expect(app().classList.contains('glide')).toBe(false);
   });
 
   it('Widen then Restore puts back exactly the layout it replaced (files 400, inspector 600, files resized last)', async () => {
@@ -366,16 +431,16 @@ describe('docked panels at 1080 px and wider', () => {
     await mount();
     const insp = sep('Resize inspector');
     key(insp, 'End');
-    expect(wbtn().disabled).toBe(true);
+    expect(wbtn().getAttribute('aria-disabled')).toBe('true');
     expect(wbtn().title).toBe('No room to widen');
     const before = localStorage.getItem(LAYOUT_KEY);
     act(() => wbtn().click());
     expect(localStorage.getItem(LAYOUT_KEY)).toBe(before);
     key(insp, 'ArrowRight');
     expect(now('Resize inspector')).toBe(1236);
-    expect(wbtn().disabled).toBe(true);
+    expect(wbtn().getAttribute('aria-disabled')).toBe('true');
     key(insp, 'ArrowRight');
-    expect(wbtn().disabled).toBe(false);
+    expect(wbtn().hasAttribute('aria-disabled')).toBe(false);
     expect(wbtn().title).toBe('Widen inspector');
   });
 
@@ -469,6 +534,7 @@ describe('docked panels at 1080 px and wider', () => {
     expect(app().classList.contains('glide')).toBe(false);
     pointer(files, 'pointerup', 310);
     expect(app().classList.contains('resizing')).toBe(false);
+    expect(app().classList.contains('glide')).toBe(false);
   });
 
   it('the stored layout applies on first paint: no glide, the widths set, and a toggle right away sticks', () => {
@@ -617,6 +683,8 @@ describe('docked panels at 1080 px and wider', () => {
 
     peek();
     expect(hidden()).toBe(false);
+    // A peek glides like an expand.
+    expect(app().classList.contains('glide')).toBe(true);
     act(() => host.querySelector<HTMLButtonElement>('.backbtn')!.click());
     expect(hidden()).toBe(true);
 

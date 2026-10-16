@@ -300,18 +300,18 @@ test('at 1920 px Widen inspector glides to its reach, survives a reload and rest
   expect(b.x - (a.x + a.width)).toBeGreaterThanOrEqual(6);
   await widen.hover();
   await page.waitForTimeout(500);
-  // It glides like a collapse: on the frame after the click, the panel's width is transitioning.
+  // It glides like a collapse: the panel takes its new width at once and its grid column slides.
   const glides = await page.evaluate(async () => {
-    const insp = document.querySelector('aside.insp')!;
+    const app = document.querySelector('.app')!;
     document.querySelector<HTMLButtonElement>('button.widebtn')!.click();
     await new Promise(r => requestAnimationFrame(r));
-    return insp.getAnimations().map(a => (a as CSSTransition).transitionProperty);
+    return { columns: app.getAnimations().map(a => (a as CSSTransition).transitionProperty), panel: Math.round(document.querySelector('aside.insp')!.getBoundingClientRect().width) };
   });
-  expect(glides).toContain('width');
+  expect(glides).toEqual({ columns: ['grid-template-columns'], panel: 1252 });
   // 1896 px box - 420 center - 12 gap - (200 + 12) project panel at its minimum.
   await expect.poll(width).toBe(1252);
   expect(await files()).toBe(200);
-  expect(Math.round((await page.locator('main.center').boundingBox())!.width)).toBe(420);
+  await expect.poll(async () => Math.round((await page.locator('main.center').boundingBox())!.width)).toBe(420);
   await page.reload();
   await expect(page.getByRole('status').filter({ hasText: 'Live' })).toBeAttached({ timeout: 15_000 });
   expect(await width()).toBe(1252);
