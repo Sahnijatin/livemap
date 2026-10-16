@@ -5,9 +5,10 @@
  * - Symbols: a script include's class and methods; a business rule or client script as one symbol
  *   with signature `table.when(condition)`.
  * - Rules: business rules, client scripts, UI policies and ACLs on a table.
- * - Links: `new X()`, `gs.include('X')`, `new GlideAjax('X')` to script includes; GlideRecord tables to
- *   their schema; a portal to its home page; a page to the widgets it places; a widget to embedded
- *   widgets; a rule, ACL or UI action to its table; a table to the table it extends.
+ * - Links: `new X()` (also `new x_scope.X()`), `gs.include('X')`, `new GlideAjax('X')` to script
+ *   includes; GlideRecord tables and string literals naming a scope table to their schema; a portal to
+ *   its home page; a page to the widgets it places; a widget to embedded widgets; a rule, ACL or UI
+ *   action to its table; a table to the table it extends.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -28,8 +29,10 @@ function parse(text: string): Obj {
   try { const v = JSON.parse(text); return v && typeof v === 'object' && !Array.isArray(v) ? v as Obj : {}; } catch { return {}; }
 }
 
-/** Names in a scope's mirror, from the paths in its manifest: script includes and widgets. */
-interface ScopeIndex { scriptIncludes: Map<string, string>; widgets: Map<string, string> }
+/** Names in a scope's mirror, from the paths in its manifest: script includes, widgets and table schemas. */
+interface ScopeIndex { scriptIncludes: Map<string, string>; widgets: Map<string, string>; tables: Set<string> }
+
+const emptyIndex = (): ScopeIndex => ({ scriptIncludes: new Map(), widgets: new Map(), tables: new Set() });
 
 /** Reads `<root>/<scope>.manifest.json` files (written by writer.ts) and indexes them by scope. */
 export class MirrorIndex {
@@ -40,7 +43,19 @@ export class MirrorIndex {
   /** The index of a scope's folder name, reloaded when a manifest changed. */
   scope(ns: string): ScopeIndex {
     this.refresh();
-    return this.scopes.get(ns) ?? { scriptIncludes: new Map(), widgets: new Map() };
+    return this.scopes.get(ns) ?? emptyIndex();
+  }
+
+  /**
+   * The script include a name in scope `ns` calls. A bare name (`Utils`) is looked up in `ns`; a qualified one
+   * (`x_other.Utils`, `global.Utils`) in `ns` first, then in the mirror of the scope it names.
+   */
+  scriptInclude(ns: string, name: string): string | undefined {
+    const own = this.scope(ns).scriptIncludes.get(name);
+    const dot = name.lastIndexOf('.');
+    if (own || dot < 0) return own;
+    const other = this.scope(name.slice(0, name.indexOf('.')));
+    return other.scriptIncludes.get(name) ?? other.scriptIncludes.get(name.slice(dot + 1));
   }
 
   private refresh(): void {
@@ -53,11 +68,15 @@ export class MirrorIndex {
     for (const n of names) {
       let files: string[] = [];
       try { files = (JSON.parse(fs.readFileSync(path.join(this.root, n), 'utf8')) as { files?: string[] }).files ?? []; } catch { continue; }
-      const idx: ScopeIndex = { scriptIncludes: new Map(), widgets: new Map() };
+      const idx = emptyIndex();
       for (const p of files) {
         const parts = p.split('/');
         const ns = parts[0];
         if (!this.scopes.has(ns)) this.scopes.set(ns, idx);
+        if (parts[1] === 'schema' && parts.length === 3 && parts[2].endsWith('.sntable.json')) {
+          idx.tables.add(parts[2].slice(0, -'.sntable.json'.length));
+          continue;
+        }
         const m = SEG.exec(parts[2] ?? '');
         if (!m) continue;
         if (parts[1] === 'script_include' && parts.length === 3) {
@@ -219,10 +238,15 @@ export function serviceNowAnalyzer(root: string): Analyzer & { index: MirrorInde
     if (/\.(js|html)$/.test(base)) {
       const h = readHeader(text);
       if (h) table(str(h.table));
-      for (const m of text.matchAll(/new\s+(\w+)\s*\(/g)) add(idx().scriptIncludes.get(m[1]));
-      for (const m of text.matchAll(/gs\.include\(\s*['"]([\w.]+)['"]/g)) add(idx().scriptIncludes.get(m[1]));
-      for (const m of text.matchAll(/new\s+GlideAjax\(\s*['"]([\w.]+)['"]/g)) add(idx().scriptIncludes.get(m[1]));
+      const si = (name: string) => add(index.scriptInclude(ns, name));
+      // `new Utils()`, and scope-qualified `new x_scope.Utils()` or `new global.Utils()`.
+      for (const m of text.matchAll(/new\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\(/g)) si(m[1]);
+      for (const m of text.matchAll(/gs\.include\(\s*['"]([\w.]+)['"]/g)) si(m[1]);
+      for (const m of text.matchAll(/new\s+GlideAjax\(\s*['"]([\w.]+)['"]/g)) si(m[1]);
       for (const m of text.matchAll(/new\s+Glide(?:Record|RecordSecure|Aggregate)\(\s*['"](\w+)['"]/g)) table(m[1]);
+      // A string that names one of the scope's tables: `options.table_name || 'x_scope_table'` feeding a GlideRecord.
+      const tables = idx().tables;
+      for (const m of text.matchAll(/(['"])([a-z][\w]*)\1/g)) if (tables.has(m[2])) table(m[2]);
       for (const m of text.matchAll(/\$sp\.getWidget\(\s*['"]([\w-]+)['"]/g)) add(idx().widgets.get(m[1]));
       for (const m of text.matchAll(/<sp-widget\b[^>]*\bwidget=["']'?([\w-]+)'?["']/g)) add(idx().widgets.get(m[1]));
     }

@@ -1,7 +1,7 @@
 /**
  * The initial pull of a scope (phase 1): resolve the scope, read its `sys_metadata` inventory, then fetch
  * full records for every class in pages of 200. Credential classes are never fetched (they are mirrored by
- * name), and private system properties are read without their values. A class whose query fails keeps its
+ * name), and system properties are read without their values. A class whose query fails keeps its
  * inventory fields only, marked partial, and the pull goes on.
  */
 import { NexusToolError, type NexusClient, type SnRecord } from './nexus.js';
@@ -70,12 +70,8 @@ export async function pullScope(client: NexusClient, scope: ScopeInfo, opts: Pul
     try {
       let recs: SnRecord[];
       if (cls === 'sys_properties') {
-        // Read every property without its value, then the values of the ones that are not private.
-        const head = await count(client.query(cls, { query, fields: ['sys_id', 'sys_class_name', 'sys_name', 'name', 'type', 'is_private', 'description', 'sys_scope', 'sys_updated_on', 'sys_updated_by'], pageSize }));
-        const open = head.filter(r => r.is_private !== 'true' && !/password/i.test(r.type ?? ''));
-        const values = open.length ? await count(client.query(cls, { query: `sys_idIN${open.map(r => r.sys_id).join(',')}`, fields: ['sys_id', 'value'], pageSize })) : [];
-        const byId = new Map(values.map(v => [v.sys_id, v.value]));
-        recs = head.map(r => (byId.has(r.sys_id) ? { ...r, value: byId.get(r.sys_id)! } : r));
+        // Name, type and description only: a value can be a key or token stored as a plain string.
+        recs = await count(client.query(cls, { query, fields: ['sys_id', 'sys_class_name', 'sys_name', 'name', 'type', 'is_private', 'description', 'sys_scope', 'sys_updated_on', 'sys_updated_by'], pageSize }));
       } else {
         recs = await count(client.query(cls, { query, pageSize }));
       }

@@ -81,6 +81,26 @@ describe('NexusClient', () => {
     expect(pages.every(p => p.args.truncate_output === false && p.args.limit === 200)).toBe(true);
   });
 
+  it('stops on a short page, since nexus says has_more for every full page', async () => {
+    const m = await mock();
+    const c = client(m);
+    const fx = loadFixture();
+    // 1,683 = 3 x 561: three full pages each say has_more, so a fourth, empty page ends it.
+    expect(await c.query('sys_metadata', { query: `sys_scope=${fx.scope.sys_id}`, pageSize: 561 })).toHaveLength(1683);
+    expect(m.calls.filter(x => x.tool === 'sn_query_table').map(p => p.args.offset)).toEqual([0, 561, 1122, 1683]);
+    m.calls.length = 0;
+    // One short page: no second query.
+    expect(await c.query('sp_portal')).toHaveLength(1);
+    expect(m.calls.filter(x => x.tool === 'sn_query_table')).toHaveLength(1);
+  });
+
+  it('stops on a short page even when has_more is still true', async () => {
+    const m = await mock({ alwaysMore: true });
+    const c = client(m);
+    expect(await c.query('sp_portal')).toHaveLength(1);
+    expect(m.calls.filter(x => x.tool === 'sn_query_table')).toHaveLength(1);
+  });
+
   it('retries a failing call with backoff and then answers', async () => {
     const m = await mock({ failCalls: 2 });
     const waits: number[] = [];

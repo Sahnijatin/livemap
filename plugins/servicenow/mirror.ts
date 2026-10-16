@@ -48,10 +48,11 @@ export const WITHHELD_CLASS = /^(sys_auth_profile|oauth_entity)|^discovery_crede
 /** Fields never written, whatever the class: passwords, secrets, tokens, keys and credentials. */
 export const SECRET_FIELD = /(password|passwd|secret|token|private_?key|api_?key|credential)/i;
 
-/** A record without secret fields, keys sorted so a re-pull writes the same bytes. */
+/** A record without secret fields (and without a system property's value), keys sorted so a re-pull writes the same bytes. */
 export function clean(r: SnRecord): SnRecord {
   const out: SnRecord = {};
-  for (const k of Object.keys(r).sort()) if (!SECRET_FIELD.test(k)) out[k] = r[k];
+  const property = r.sys_class_name === 'sys_properties';
+  for (const k of Object.keys(r).sort()) if (!SECRET_FIELD.test(k) && !(property && k === 'value')) out[k] = r[k];
   return out;
 }
 

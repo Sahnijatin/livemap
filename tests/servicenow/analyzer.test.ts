@@ -155,4 +155,19 @@ describe('ServiceNow analyzer on the BharatBank mirror', () => {
       await model.update(extra, 'unlink');
     }
   });
+
+  it('links a scope-qualified new x_scope.X() and a string literal naming a scope table, and nothing else', async () => {
+    const target = paths[byClass('sys_script_include').find(s => s.name === 'BBPortalFormatUtils')!.sys_id];
+    const extra = `${NS}/script_include/Caller__${'f'.repeat(32)}.js`;
+    fs.writeFileSync(path.join(root, extra), scriptFile({ class: 'sys_script_include', name: 'Caller' },
+      "var fmt = new x_snc_cc_offering.BBPortalFormatUtils();\nvar t = options.table_name || 'x_snc_cc_offering_document';\n" +
+      "var gr = new GlideRecordSecure(t);\nvar other = new global.NotMirrored();\nvar s = 'not_a_table' + \"x_snc_cc_offering_nope\";\n"));
+    try {
+      await model.update(extra, 'add');
+      expect(file(extra).imports.local).toEqual([target, `${NS}/schema/x_snc_cc_offering_document.sntable.json`].sort());
+    } finally {
+      fs.rmSync(path.join(root, extra));
+      await model.update(extra, 'unlink');
+    }
+  });
 });

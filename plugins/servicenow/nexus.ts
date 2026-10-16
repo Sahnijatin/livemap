@@ -197,7 +197,10 @@ export class NexusClient {
     }
   }
 
-  /** Every record of a `sn_query_table` query, paged by `has_more` (nexus's `total` can read "100+"). */
+  /**
+   * Every record of a `sn_query_table` query. Paging stops on a short page or when `has_more` is false: nexus
+   * reports `has_more` whenever a page is full, even the last one, and its `total` can read "100+".
+   */
   async query(table: string, opts: QueryOptions = {}): Promise<SnRecord[]> {
     const out: SnRecord[] = [];
     for await (const page of this.pages(table, opts)) out.push(...page);
@@ -220,7 +223,7 @@ export class NexusClient {
       const records = Array.isArray(data?.records) ? data.records : [];
       if (records.length) yield records;
       offset += records.length;
-      if (!data?.has_more || records.length === 0) return;
+      if (!data?.has_more || records.length < limit) return;
     }
   }
 }

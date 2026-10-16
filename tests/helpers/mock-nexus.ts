@@ -85,6 +85,8 @@ export interface MockNexusOptions {
   failTables?: string[];
   /** Report `total` as "100+" when more than 100 records match, as nexus does. */
   plusTotals?: boolean;
+  /** has_more on every page, even a short one (the default is real nexus: has_more whenever a page is full). */
+  alwaysMore?: boolean;
 }
 
 export interface CallLog { tool: string; args: Record<string, unknown>; inner?: string }
@@ -125,7 +127,8 @@ export async function startMockNexus(opts: MockNexusOptions = {}): Promise<MockN
     const fields = Array.isArray(a.fields) ? (a.fields as string[]) : null;
     const records = fields ? page.map(r => Object.fromEntries(fields.map(f => [f, r[f] ?? '']))) : page;
     const total = opts.plusTotals && rows.length > 100 ? '100+' : rows.length;
-    return { success: true, data: { records, count: records.length, total, has_more: offset + page.length < rows.length } };
+    // Real nexus sets has_more whenever a page is full, even when no rows are left.
+    return { success: true, data: { records, count: records.length, total, has_more: opts.alwaysMore || records.length === limit } };
   };
 
   const run = (tool: string, a: Record<string, unknown>): unknown => {

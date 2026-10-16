@@ -75,7 +75,7 @@ Before it pulls, LiveMap prints the instance, the nexus transport and the scope 
 
 The mirror is written to `.livemap/sn/<scope>/` in `dir`, one folder per kind of record: `portal`, `page`, `widget`, `schema`, `business_rule`, `client_script`, `script_include`, `ui_action`, `ui_policy`, `acl`, `flow`, `rest`, `workspace`, `ai_agent` and `other`. Each record's file or folder is named `<name>__<sys_id>`, so a record keeps its identity when it is renamed (its file moves). Names are made safe for Windows, and paths stay under 240 characters. Widget instances live in their page's `layout.json`, dictionary entries in their table's `.sntable.json`, and ACL roles in their ACL.
 
-Credential records (`sys_auth_profile*`, `oauth_entity*`, `discovery_credentials`) are listed by name only, fields named like passwords, secrets, tokens or keys are never written, and private system properties are read without their values. The `.livemap` folder is readable only by you. When `dir` is inside a git repository, LiveMap adds `.livemap/` to its `.gitignore`; elsewhere it leaves `.gitignore` alone.
+Credential records (`sys_auth_profile*`, `oauth_entity*`, `discovery_credentials`) are listed by name only, fields named like passwords, secrets, tokens or keys are never written, and system properties are read without their values. The `.livemap` folder is readable only by you. When `dir` is inside a git repository, LiveMap adds `.livemap/` to its `.gitignore`; elsewhere it leaves `.gitignore` alone.
 
 A second `livemap sn` on the same folder updates the mirror in place: unchanged files are not rewritten, and files of records that are gone or renamed are removed.
 

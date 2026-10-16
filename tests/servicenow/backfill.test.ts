@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { instanceInfo, pullScope, resolveScope, ScopeNotFoundError } from '../../plugins/servicenow/backfill.js';
-import { layoutMirror, readHeader, SECRET_FIELD } from '../../plugins/servicenow/mirror.js';
+import { clean, layoutMirror, readHeader, SECRET_FIELD } from '../../plugins/servicenow/mirror.js';
 import { NexusClient } from '../../plugins/servicenow/nexus.js';
 import { ensureGitignored, readManifest, snRoot, writeMirror } from '../../plugins/servicenow/writer.js';
 import { PATH_MAX } from '../../plugins/servicenow/paths.js';
@@ -176,12 +176,14 @@ describe('secrets and partial records', () => {
     for (const text of files.values()) for (const k of Object.keys(safeParse(text))) expect(SECRET_FIELD.test(k), k).toBe(false);
   });
 
-  it('reads system properties without the values of private ones', async () => {
+  it('never reads or writes a system property value', async () => {
     const { c, m } = await setup();
     const scope = await resolveScope(c, 'x_snc_cc_offering');
     await pullScope(c, scope);
     const props = m.calls.filter(x => x.args.table === 'sys_properties');
-    expect(props[0].args.fields).not.toContain('value');
+    expect(props.length).toBeGreaterThan(0);
+    for (const p of props) expect(p.args.fields).not.toContain('value');
+    expect(clean({ sys_class_name: 'sys_properties', name: 'x.key', value: 'abc' })).toEqual({ name: 'x.key', sys_class_name: 'sys_properties' });
   });
 
   it('keeps inventory fields, marked partial, for a class whose query fails', async () => {
