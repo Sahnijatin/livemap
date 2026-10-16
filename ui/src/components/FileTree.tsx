@@ -9,7 +9,7 @@ import { LAYERS } from '../layers';
 import { latestChange, type SymbolTag } from '../changes';
 import { useLiveRecent } from '../recent';
 import {
-  BIG_PROJECT, DIR_BATCH, ancestors, editSet as edit, buildTree, cachedTags, chainOpen, closedAbove, dirActivity, dirKey, loadTreeState, moreKey,
+  BIG_PROJECT, DIR_BATCH, NO_PATHS, ancestors, editSet as edit, buildTree, cachedTags, chainOpen, closedAbove, dirActivity, dirKey, loadTreeState, moreKey,
   saveTreeState, visibleItems, type Activity, type DirState, type Item, type Row,
 } from '../treeModel';
 import { FileRow, MidName } from './FileRow';
@@ -29,7 +29,6 @@ const REVEAL_WAIT_MS = 10_000;
 const SAVE_MS = 300;
 const EMPTY_TAGS = new Map<string, SymbolTag>();
 const NO_LIMITS: ReadonlyMap<string, number> = new Map();
-const NO_DIRS: ReadonlySet<string> = new Set();
 /** A closed folder's activity dot label; its title reads "A file in this folder is <label>". */
 const ACTIVITY: Record<Activity, string> = { now: 'being written', edited: 'edited', new: 'new' };
 /**
@@ -90,8 +89,7 @@ export function FileTree() {
     let f = refs.current.get(k);
     if (!f) {
       f = el => {
-        if (el) rowEls.current.set(k, el);
-        else { rowEls.current.delete(k); refs.current.delete(k); }
+        if (el) rowEls.current.set(k, el); else rowEls.current.delete(k);
       };
       refs.current.set(k, f);
     }
@@ -102,9 +100,9 @@ export function FileTree() {
   // Folders the user opened or closed, by full path, remembered per project. Folders without an entry follow the defaults.
   const [dirs, setDirs] = useState<DirState>(() => loadTreeState(projectRoot));
   const loaded = useRef(dirs);
-  const [session, setSession] = useState<Session>({ picked: NO_DIRS, closed: NO_DIRS, agentAt: null });
+  const [session, setSession] = useState<Session>({ picked: NO_PATHS, closed: NO_PATHS, agentAt: null });
   /** Folders closed while a filter is on; forgotten with the filter. */
-  const [filterClosed, setFilterClosed] = useState<{ q: string; dirs: ReadonlySet<string> }>({ q: '', dirs: NO_DIRS });
+  const [filterClosed, setFilterClosed] = useState<{ q: string; dirs: ReadonlySet<string> }>({ q: '', dirs: NO_PATHS });
   const reduced = usePrefersReducedMotion();
   /** Folders mid-animation: a folding one keeps its rows (inert) until its fold ends. */
   const [moving, setMoving] = useState<ReadonlyMap<string, Moving>>(() => new Map());
@@ -112,7 +110,7 @@ export function FileTree() {
 
   const q = filter.trim().toLowerCase();
   const dirLimit = limits.q === q ? limits.byDir : NO_LIMITS;
-  const closedNow = filterClosed.q === q ? filterClosed.dirs : NO_DIRS;
+  const closedNow = filterClosed.q === q ? filterClosed.dirs : NO_PATHS;
   const { root: tree, layers } = useMemo(() => buildTree(files, q), [files, q]);
   const fileCount = useMemo(() => Object.keys(files).length, [files]);
   // When each file arrived: 0 for files there at the hello (or when the tree mounted), else when it first showed up.
@@ -122,7 +120,9 @@ export function FileTree() {
   if (arrived.current.files !== files) {
     const first = arrived.current.files === null;
     const t = Date.now();
-    for (const p in files) if (!arrived.current.at.has(p)) arrived.current.at.set(p, first || helloFiles.has(p) || t < helloAt + 1000 ? 0 : t);
+    const at = arrived.current.at;
+    for (const p of at.keys()) if (!(p in files)) at.delete(p); // a removed file that comes back pops again
+    for (const p in files) if (!at.has(p)) at.set(p, first || helloFiles.has(p) || t < helloAt + 1000 ? 0 : t);
     arrived.current.files = files;
   }
   // Big or not: taken from the first files seen, held while indexing, decided once more when the index finishes.
@@ -155,8 +155,8 @@ export function FileTree() {
   const agentDirs = useMemo(() => {
     const at = session.agentAt;
     // Nothing opens under a folder the user closed this session.
-    if (at === null || at === session.blocked || ancestors(at).some(a => session.closed.has(a))) return NO_DIRS;
-    return edit(NO_DIRS, closedAbove(at, dirs, big, session.picked));
+    if (at === null || at === session.blocked || ancestors(at).some(a => session.closed.has(a))) return NO_PATHS;
+    return edit(NO_PATHS, closedAbove(at, dirs, big, session.picked));
   }, [session, dirs, big]);
   const revealed = useMemo(() => (agentDirs.size ? edit(session.picked, [...agentDirs]) : session.picked), [session.picked, agentDirs]);
 
@@ -164,7 +164,7 @@ export function FileTree() {
   const selectedDirs = useMemo(() => new Set(selected === null ? [] : ancestors(selected)), [selected]);
   const dirOpen = useCallback((paths: string[]): boolean => {
     // A filter shows every folder above a match, except those closed during it.
-    if (q) return !closedNow.has(paths[paths.length - 1]);
+    if (q) return !paths.some(p => closedNow.has(p));
     return chainOpen(paths, dirs, big, revealed);
   }, [q, closedNow, dirs, big, revealed]);
 
@@ -214,6 +214,8 @@ export function FileTree() {
     () => visibleItems(tree, dirOpen, rowOpen, dirLimit, pins),
     [tree, dirOpen, rowOpen, dirLimit, pins],
   );
+  // Ref callbacks of rows no longer rendered are dropped after each commit (see refFor).
+  useEffect(() => { for (const k of refs.current.keys()) if (!rowEls.current.has(k)) refs.current.delete(k); });
   const dirItems = useMemo(() => {
     const byDir = new Map<string, Extract<Item, { kind: 'dir' }>>();
     for (const it of openItems) if (it.kind === 'dir') byDir.set(it.node.path, it);
@@ -307,6 +309,7 @@ export function FileTree() {
     setMoving,
     big,
     dirs,
+    indexing,
     focus: k => rowEls.current.get(k)?.focus(),
     toggle: el => (el.dataset.dir !== undefined ? toggleDir(el.dataset.dir) : onToggle(el.dataset.file!)),
   };

@@ -477,7 +477,7 @@ export const useStore = create<StoreState>()((set, get) => ({
       }
       case 'fileSummary': {
         const prev = get().summaries;
-        set({ summaries: { ...prev, files: dict(withFileSummary(prev.files, msg)) } });
+        set({ summaries: { ...prev, files: withFileSummary(prev.files, msg) } });
         return;
       }
       case 'summaryStatus':

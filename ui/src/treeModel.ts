@@ -113,6 +113,9 @@ export function chainOf(node: DirNode): DirNode[] {
   return chain;
 }
 
+/** The shared empty set of paths. */
+export const NO_PATHS: ReadonlySet<string> = new Set();
+
 /** `set` with `add` added and `del` removed, as a new set. */
 export function editSet(set: ReadonlySet<string>, add: readonly string[], del: readonly string[] = []): ReadonlySet<string> {
   const next = new Set(set);
@@ -277,7 +280,8 @@ function splitWord(name: string): [string, string] {
     const a = name[i - 1];
     if ('-_. '.includes(a) || (LOWER.test(a) && UPPER.test(name[i]))) return [name.slice(0, i), name.slice(i)];
   }
-  // No word to keep: the last 10 characters, counted in code points so a character is never cut in two.
+  // No word to keep: the last 10 code points, so a surrogate pair is never cut in two (a character made of several
+  // code points, like a flag or a joined emoji, can still be).
   const chars = Array.from(name);
   return [chars.slice(0, -10).join(''), chars.slice(-10).join('')];
 }

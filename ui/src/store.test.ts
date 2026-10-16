@@ -680,5 +680,9 @@ describe('routes by file', () => {
     useStore.getState().apply({ type: 'hello', root: '/p', name: 'p', files: [], changes: [], usedBy: [], domain: emptyDomain(), indexing: false, events: [], sessions: [], control: { paused: false, flags: [] }, summaries: JSON.parse('{"status":{"state":"off"},"files":{}}') });
     expect(useStore.getState().summaries.files['constructor']).toBeUndefined();
     expect(useStore.getState().routesByFile['constructor']).toBeUndefined();
+    useStore.getState().apply({ type: 'fileSummary', path: 'constructor', hash: 'h', summary: 'S' });
+    expect(Object.getPrototypeOf(useStore.getState().summaries.files)).toBeNull();
+    expect(useStore.getState().summaries.files['constructor']).toEqual({ hash: 'h', summary: 'S' });
+    expect(useStore.getState().summaries.files['toString']).toBeUndefined();
   });
 });

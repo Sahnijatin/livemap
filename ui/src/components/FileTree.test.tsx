@@ -1061,6 +1061,54 @@ describe('FileTree round 7', () => {
   });
 });
 
+describe('FileTree round 8', () => {
+  const dir = (path: string) => byData('dir', path);
+  beforeEach(() => { (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView = vi.fn(); });
+  afterEach(() => { delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView; });
+
+  it('a choice made while indexing holds when the index ends big', () => {
+    const first = Array.from({ length: 300 }, (_, i) => file(`d${i % 3}/f${i}.ts`));
+    useStore.getState().apply({ ...hello(first), indexing: true });
+    mount();
+    act(() => dir('d0')!.click()); // close
+    act(() => dir('d0')!.click()); // open again: the default for now, but stored while indexing
+    const all = first.concat(Array.from({ length: 20_000 }, (_, i) => file(`d${i % 3}/g${i}.ts`)));
+    act(() => useStore.getState().apply(hello(all))); // indexing done: big
+    expect(dir('d0')!.getAttribute('aria-expanded')).toBe('true');
+    expect(dir('d1')!.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('a re-created file pops again', () => {
+    useStore.getState().apply(hello([file('src/a.ts')]));
+    mount();
+    act(() => useStore.getState().apply({ type: 'files', files: [file('src/new.ts')], removed: [] }));
+    expect(byData('file', 'src/new.ts')!.classList.contains('pop')).toBe(true);
+    act(() => useStore.getState().apply({ type: 'files', files: [], removed: ['src/new.ts'] }));
+    act(() => { vi.advanceTimersByTime(5000); });
+    act(() => useStore.getState().apply({ type: 'files', files: [file('src/new.ts')], removed: [] }));
+    expect(byData('file', 'src/new.ts')!.classList.contains('pop')).toBe(true);
+  });
+
+  it('under a filter, a compact row stays closed if any folder in it was closed', () => {
+    useStore.getState().apply(hello([file('a/b/x.ts'), file('a/c/x2.ts'), file('z/y.ts')]));
+    mount();
+    act(() => useStore.getState().setFilter('x'));
+    act(() => dir('a')!.click());
+    act(() => { vi.advanceTimersByTime(400); });
+    act(() => useStore.getState().apply({ type: 'files', files: [], removed: ['a/c/x2.ts'] })); // a joins a/b in one row
+    expect(dir('a/b')!.getAttribute('aria-expanded')).toBe('false');
+    expect(byData('file', 'a/b/x.ts')).toBeNull();
+  });
+
+  it('typeahead takes AltGr characters', () => {
+    useStore.getState().apply(hello([file('@types/x.d.ts'), file('src/a.ts')]));
+    mount();
+    act(() => byData('file', 'src/a.ts')!.focus());
+    act(() => { (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: '@', ctrlKey: true, altKey: true, bubbles: true, cancelable: true })); });
+    expect((document.activeElement as HTMLElement).dataset.nav).toBe(dirKey('@types'));
+  });
+});
+
 describe('FileTree lazy keys', () => {
   let real: typeof treeKeysLoader.load;
   beforeEach(() => { real = treeKeysLoader.load; });

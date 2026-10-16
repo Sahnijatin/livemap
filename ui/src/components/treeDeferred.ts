@@ -3,12 +3,11 @@
  * handling, and opening and closing folders.
  */
 import type { Dispatch, SetStateAction } from 'react';
-import { MAX_STORED, ancestors, closedAbove, dirKey, editSet as edit, type DirState, type Item } from '../treeModel';
+import { MAX_STORED, NO_PATHS, ancestors, closedAbove, dirKey, editSet as edit, type DirState, type Item } from '../treeModel';
 import type { Moving, Session } from './FileTree';
 
 /** Folder unfold and fold (height and fade), matching `.dgroup.unfold/.fold` in styles.css. */
 const FOLD_MS = 360;
-const NONE: ReadonlySet<string> = new Set();
 
 /** Typed letters within this long of each other search as one prefix. */
 const TYPEAHEAD_MS = 700;
@@ -25,6 +24,8 @@ export interface TreeContext {
   reduced: boolean;
   big: boolean;
   dirs: DirState;
+  /** The first index is still running: the default may change when it ends, so every choice is stored. */
+  indexing: boolean;
   setFilterClosed: Set_<{ q: string; dirs: ReadonlySet<string> }>;
   setDirs: Set_<DirState>;
   setSession: Set_<Session>;
@@ -87,9 +88,10 @@ export function treeKeyDown(e: KeyPress, c: TreeContext): void {
       else return;
       break;
     default: {
-      // Typeahead: a printable character with no modifier. Space presses the row, and `[` and `]` toggle the panels,
-      // so those are left alone, as is a key that matches no row.
-      if (e.key.length !== 1 || ' []'.includes(e.key) || e.metaKey || e.ctrlKey || e.altKey) return;
+      // Typeahead: a printable character with no modifier, or typed with AltGr (Ctrl and Alt together, as panels.ts
+      // allows). Space presses the row, and `[` and `]` toggle the panels, so those are left alone, as is a key that
+      // matches no row.
+      if (e.key.length !== 1 || ' []'.includes(e.key) || e.metaKey || e.ctrlKey !== e.altKey) return;
       const now = Date.now();
       const t = typed;
       t.text = now - t.at < TYPEAHEAD_MS ? t.text + e.key.toLowerCase() : e.key.toLowerCase();
@@ -116,15 +118,16 @@ export function toggleDir(dir: string, c: TreeContext): void {
   const { q } = c;
   if (q) {
     c.setFilterClosed(f => {
-      const was = f.q === q ? f.dirs : NONE;
+      const was = f.q === q ? f.dirs : NO_PATHS;
       return { q, dirs: open ? edit(was, [dir]) : edit(was, [], [dir]) };
     });
   } else {
     // A chain opens and closes as a whole, so each of its folders keeps the state when the chain splits.
-    // A folder set back to its default (open below BIG_PROJECT files) is not stored; the oldest go past the cap.
+    // A folder set back to its default (open below BIG_PROJECT files) is not stored, except while indexing; the
+    // oldest go past the cap.
     c.setDirs(d => {
       const next = new Map(d);
-      for (const p of chain) { next.delete(p); if (open !== c.big) next.set(p, !open); } // re-added last: the newest choices are kept longest
+      for (const p of chain) { next.delete(p); if (c.indexing || open !== c.big) next.set(p, !open); } // re-added last: the newest choices are kept longest
       for (const k of next.keys()) { if (next.size <= MAX_STORED) break; next.delete(k); }
       return next;
     });
