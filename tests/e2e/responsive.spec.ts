@@ -356,7 +356,16 @@ async function centerHeadFits(page: Page) {
   return r.center;
 }
 
-test('the center tabs and Map tools fit a 420 px center: icon and count, the label as tooltip and name', async ({ page }) => {
+/** Wider text than this container's Inter: DejaVu Sans (as on Linux CI runners), spaced out a little more. */
+async function wideFont(page: Page) {
+  await page.addInitScript(() => {
+    const css = ':root { --sans: "DejaVu Sans", Verdana, sans-serif !important; --display: "DejaVu Sans", Verdana, sans-serif !important; } body { letter-spacing: .3em; }';
+    document.addEventListener('DOMContentLoaded', () => { const st = document.createElement('style'); st.textContent = css; document.head.append(st); });
+  });
+}
+
+for (const font of ['default', 'wide'] as const) test(`the center tabs and Map tools fit a 420 px center (${font} font): icon and count, the label as tooltip and name`, async ({ page }) => {
+  if (font === 'wide') await wideFont(page);
   await page.setViewportSize({ width: 1920, height: 1080 });
   await open(page);
   const labels = page.locator('.tabs [role=tab] .tl');
@@ -368,6 +377,21 @@ test('the center tabs and Map tools fit a 420 px center: icon and count, the lab
     expect(await centerHeadFits(page)).toBe(420);
     await expect(tab(page, t)).toBeInViewport({ ratio: 1 });
   }
+  // The selected tab's knob never sticks out of the strip, not even while it springs from one end to the other.
+  const overflow = await page.evaluate(async () => {
+    const tabs = document.querySelector('.tabs')!;
+    let most = 0;
+    for (const t of ['activity', 'stack', 'activity', 'stack']) {
+      document.querySelector<HTMLElement>(`[data-tab="${t}"]`)!.click();
+      const t0 = performance.now();
+      while (performance.now() - t0 < 700) {
+        await new Promise(r => requestAnimationFrame(r));
+        most = Math.max(most, tabs.scrollWidth - tabs.clientWidth);
+      }
+    }
+    return most;
+  });
+  expect(overflow).toBe(0);
   // Labels are hidden but still name each tab, and show as a tooltip.
   await expect(tab(page, 'schema').locator('.tl')).toBeHidden();
   await expect(tab(page, 'schema')).toHaveAttribute('title', 'Schema');

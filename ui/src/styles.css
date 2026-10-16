@@ -354,6 +354,7 @@
      beside wide panels) shows tabs as icon and count, the label as tooltip; the Map's tools wrap to a row of their own. */
   .c-head { display:flex; align-items:center; flex-wrap:wrap; gap:10px; padding:10px 12px; border-bottom:1px solid var(--hair); min-height:50px; container:c-head / inline-size; }
   .tabs { position:relative; display:flex; background:var(--hair); border-radius:12px; padding:3px; max-width:100%; }
+  .tabs .knob-track { position:absolute; inset:0; overflow-x:clip; border-radius:inherit; pointer-events:none; }
   .tabs .knob { position:absolute; top:3px; bottom:3px; left:3px; width:0; border-radius:9px; background:var(--card); box-shadow:0 1px 2px rgba(0,0,0,.08),0 3px 10px rgba(0,0,0,.06); }
   .tabs.ready .knob { transition:left .5s var(--spring),width .5s var(--spring); }
   .tabs [role=tab] { position:relative; z-index:1; border:0; background:none; padding:6px 12px; border-radius:9px; font-size:13px; font-weight:500; color:var(--ink2); cursor:pointer; display:flex; align-items:center; gap:7px; white-space:nowrap; transition:color .25s; }
@@ -811,7 +812,8 @@
   @keyframes lvlfade { from { opacity:0; } }
   .map-note { position:absolute; left:12px; top:12px; z-index:5; max-width:calc(100% - 24px); padding:7px 13px; border-radius:999px; font-size:12.5px; color:var(--ink2); box-shadow:var(--shadow); animation:fin .45s var(--ease) both; }
   .zoomctl .zfit { width:40px; font-size:12px; font-weight:600; }
-  .c-tools { margin-left:auto; display:flex; align-items:center; gap:8px; min-width:0; }
+  /* Wraps instead of overflowing when the text is wider (other fonts) or the center is narrow. */
+  .c-tools { margin-left:auto; display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:8px; min-width:0; max-width:100%; }
   .c-tools:empty { display:none; }
   .mini-seg { position:relative; display:flex; background:var(--hair); border-radius:10px; padding:3px; }
   .mini-seg .knob { position:absolute; top:3px; bottom:3px; border-radius:7px; background:var(--card); box-shadow:0 1px 2px rgba(0,0,0,.08); }
