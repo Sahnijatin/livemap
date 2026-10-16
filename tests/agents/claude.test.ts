@@ -148,7 +148,8 @@ describe('ClaudeTailer', () => {
     const open = vi.spyOn(fs.promises, 'open');
     const stat = vi.spyOn(fs.promises, 'stat');
     try {
-      tailer = new ClaudeTailer(file, ROOT, { pollMs: 10, idleAfterMs: 100, idlePollMs: 250 });
+      // 13 ms: distinct from the 10 ms waitFor step, so the pace can be read from the scheduled delays.
+      tailer = new ClaudeTailer(file, ROOT, { pollMs: 13, idleAfterMs: 100, idlePollMs: 250 });
       tailer.on('events', (e: RawAgentEvent[]) => got.push(...e));
       const t0 = tailer;
       t0.start();
@@ -165,11 +166,16 @@ describe('ClaudeTailer', () => {
       fs.appendFileSync(file, fixture()[0] + '\n');
       await waitFor(() => got.length === 2, 1000);
       expect(t0.lastActiveAt).toBeGreaterThan(active);
-      // Growth reset the pace: the next 150 ms polls at about 10 ms, not once at the 250 ms idle pace.
-      // Counting polls, not timing one read, keeps this true on a slow runner.
-      const s0 = stat.mock.calls.length;
-      await sleep(150);
-      expect(stat.mock.calls.length - s0).toBeGreaterThanOrEqual(4);
+      // Growth reset the pace: the tailer schedules its next poll at pollMs, not the idle pace.
+      // Reading the scheduled delay, not wall-clock poll counts, keeps this true on a loaded runner.
+      const timers = vi.spyOn(globalThis, 'setTimeout');
+      try {
+        fs.appendFileSync(file, fixture()[0] + '\n');
+        await waitFor(() => got.length === 3, 1000);
+        await waitFor(() => timers.mock.calls.some((c) => c[1] === 13), 1000);
+      } finally {
+        timers.mockRestore();
+      }
     } finally {
       open.mockRestore();
       stat.mockRestore();
