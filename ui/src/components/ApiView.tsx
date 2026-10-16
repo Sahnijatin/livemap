@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import clsx from 'clsx';
 import type { ApiRoute, DomainIndex } from '@shared/domain.js';
 import { routeBaseKey, useStore } from '../store';
@@ -24,8 +24,10 @@ const GROUP_GAP = 14;
 const STACK_BELOW = 600;
 /** Side padding of the scroll area (matches .ap-scroll and its narrower variant). */
 const padFor = (width: number): number => (width < 900 ? 16 : 24);
-/** Characters of a file path that fit in a route card of this width (11px mono). */
-const fileChars = (width: number): number => Math.max(12, Math.floor((width - 26) / 6.7));
+/** The route file's font size (.ap-file reads it as --ap-file), and the characters that fit in a card this wide:
+ * monospace glyphs advance a little over 0.6em, after the card's padding and border. */
+const FILE_PX = 10.5;
+const fileChars = (width: number): number => Math.max(12, Math.floor((width - 26) / (FILE_PX * 0.61)));
 const LANES: [LaneKind, string][] = [['route', 'Routes'], ['handler', 'Handlers'], ['service', 'Services'], ['table', 'Tables']];
 
 const FRAMEWORKS: Record<string, string> = {
@@ -50,9 +52,10 @@ const byPath = (a: Flow, b: Flow): number =>
   a.route.fullPath < b.route.fullPath ? -1 : a.route.fullPath > b.route.fullPath ? 1 : a.route.method.localeCompare(b.route.method) || a.route.line - b.route.line;
 
 const matches = (q: string, ...parts: string[]): boolean => !q || parts.join(' ').toLowerCase().includes(q);
+const flowMatches = (q: string, f: Flow): boolean => matches(q, f.route.method, f.route.fullPath, f.route.file);
 
 /** A card's label, subtitle, icon and what clicking it opens; everything a lane card shows. */
-interface CardData { key: string; kind: LaneKind; label: string; sub?: string; title: string; icon: ReactNode; go: () => void; isNew: boolean; enter: boolean; route?: ApiRoute }
+interface CardData { key: string; kind: LaneKind; label: string; sub?: string; title: string; icon: ReactNode; go: () => void; isNew: boolean; enter: boolean }
 
 const TableGlyph = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="3" /><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3" /></svg>
@@ -71,8 +74,8 @@ function cardData(flows: Flow[], domain: DomainIndex, base: Set<string>): Map<st
       const isNew = !base.has(bk);
       if (!firstShown.has(bk)) firstShown.set(bk, now);
       out.set(rk, {
-        key: rk, kind: 'route', label: r.fullPath, title: `${r.method} ${r.fullPath}\n${r.file}:${r.line}${r.mountedVia?.length ? `\nMounted via ${r.mountedVia.join(', ')}` : ''}`,
-        icon: <MethodPill method={r.method} />, go: () => open(r.file, r.line), isNew, enter: isNew && now - firstShown.get(bk)! < 1000, route: r,
+        key: rk, kind: 'route', label: r.fullPath, sub: r.file, title: `${r.method} ${r.fullPath}\n${r.file}:${r.line}${r.mountedVia?.length ? `\nMounted via ${r.mountedVia.join(', ')}` : ''}`,
+        icon: <MethodPill method={r.method} />, go: () => open(r.file, r.line), isNew, enter: isNew && now - firstShown.get(bk)! < 1000,
       });
     }
     const h = f.handler;
@@ -130,11 +133,10 @@ const Card = memo(function Card({ d, focus, style, onHot }: { d: CardData; focus
   );
 });
 
-/** A route row: picking it (click, Enter) traces its flow; the file under the path opens in the inspector. */
+/** A route row: picking it (click, Enter) traces its flow; its file (`sub`) under the path opens in the inspector. */
 const RouteCard = memo(function RouteCard({ d, focus, picked, chars, style, onHot, onPick }: {
   d: CardData; focus: Focus; picked: boolean; chars: number; style?: CSSProperties; onHot: (k: string | null) => void; onPick: (k: string) => void;
 }) {
-  const r = d.route!;
   return (
     <div
       className={clsx('ap', 'ap-route', focus, picked && 'picked', d.isNew && 'isnew', d.enter && 'enter')}
@@ -153,14 +155,14 @@ const RouteCard = memo(function RouteCard({ d, focus, picked, chars, style, onHo
         <span className="ap-t">{d.label}</span>
         {d.isNew && <i className="newtag">NEW</i>}
       </button>
-      <button type="button" className="ap-file" title={`Open ${r.file}:${r.line}`} onClick={e => { e.stopPropagation(); open(r.file, r.line); }}>
-        {midTrunc(r.file, chars)}
+      <button type="button" className="ap-file" title={d.title} onClick={e => { e.stopPropagation(); d.go(); }}>
+        {midTrunc(d.sub!, chars)}
       </button>
     </div>
   );
 });
 
-/** A route group: what it shows and whether it is open. */
+/** A route group: the routes drawn (none when collapsed or past the cap), how many match, whether it is open. */
 interface GroupRow { key: string; flows: Flow[]; count: number; open: boolean }
 
 function GroupHead({ row, style, onToggle }: { row: GroupRow; style?: CSSProperties; onToggle: (k: string) => void }) {
@@ -275,16 +277,18 @@ function Lanes({ g, groups, cards, hot, picked, onHot, onPick, onToggle, width }
             return <path key={e.key} className="e flow" d={`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`} />;
           })}
         </svg>
-        {groups.map(row => [
-          <GroupHead key={`g:${row.key}`} row={row} style={styles.get(`g:${row.key}`)} onToggle={onToggle} />,
-          ...(row.open ? row.flows : []).map(f => {
-            const k = routeKey(f);
-            return <RouteCard key={k} d={cards.get(k)!} focus={focusOf(k)} picked={picked === k} chars={chars} onHot={onHot} onPick={onPick} style={styles.get(k)} />;
-          }),
-        ])}
-        {LANE_KINDS.slice(1).map((_, li) => g.lanes[li + 1].map(n => (
+        {groups.map(row => (
+          <Fragment key={row.key}>
+            <GroupHead row={row} style={styles.get(`g:${row.key}`)} onToggle={onToggle} />
+            {row.flows.map(f => {
+              const k = routeKey(f);
+              return <RouteCard key={k} d={cards.get(k)!} focus={focusOf(k)} picked={picked === k} chars={chars} onHot={onHot} onPick={onPick} style={styles.get(k)} />;
+            })}
+          </Fragment>
+        ))}
+        {g.lanes.slice(1).flat().map(n => (
           <Card key={n.key} d={cards.get(n.key)!} focus={focusOf(n.key)} onHot={onHot} style={styles.get(n.key)} />
-        )))}
+        ))}
       </div>
     </div>
   );
@@ -298,7 +302,7 @@ function Chains({ groups, cards, picked, onHot, onPick, onToggle, width }: ViewP
       {groups.map(row => (
         <div className="ap-grp" key={row.key}>
           <GroupHead row={row} onToggle={onToggle} />
-          {row.open && row.flows.map(f => {
+          {row.flows.map(f => {
             const k = routeKey(f);
             const keys = k === picked ? [f.handler && handlerKey(f.handler), ...f.services.map(s => serviceKey(s.file)), ...f.tables.map(tableKey)].filter((x): x is string => !!x) : [];
             return (
@@ -343,13 +347,20 @@ function Flows({ domain }: { domain: DomainIndex }) {
   const [all, setAll] = useState(false);
   const [hot, setHot] = useState<string | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
+  const pickedRef = useRef(picked);
+  pickedRef.current = picked;
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const scroller = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const width = useWidth(scroller);
   const stacked = width > 0 && width < STACK_BELOW;
   const onHot = useCallback((k: string | null) => setHot(k), []);
-  const onPick = useCallback((k: string) => setPicked(p => (p === k ? null : k)), []);
+  // Un-picking also clears the hover trace, so the row stays quiet until the next enter or focus.
+  const unpick = useCallback(() => { setPicked(null); setHot(null); }, []);
+  const onPick = useCallback((k: string) => {
+    if (pickedRef.current === k) unpick();
+    else setPicked(k);
+  }, [unpick]);
   const onToggle = useCallback((k: string) => setCollapsed(c => {
     const n = new Set(c);
     if (!n.delete(k)) n.add(k);
@@ -360,20 +371,29 @@ function Flows({ domain }: { domain: DomainIndex }) {
   // Groups come from every route, so a filter narrows a group without regrouping.
   const allGroups = useMemo(() => groupFlows(sorted), [sorted]);
   const needle = q.trim().toLowerCase();
-  const filtered = useMemo(() => sorted.filter(f => matches(needle, f.route.method, f.route.fullPath, f.route.file)), [sorted, needle]);
-  const groups = useMemo((): GroupRow[] => {
-    const keep = new Set((all ? filtered : filtered.slice(0, CAP)).map(f => f.route.id));
-    return allGroups
-      .map(gr => ({ key: gr.key, flows: gr.flows.filter(f => keep.has(f.route.id)), open: !collapsed.has(gr.key) }))
-      .filter(gr => gr.flows.length)
-      .map(gr => ({ ...gr, count: gr.flows.length }));
-  }, [allGroups, filtered, all, collapsed]);
-  const shown = useMemo(() => groups.flatMap(gr => (gr.open ? gr.flows : [])), [groups]);
+  const filtered = useMemo(() => allGroups.map(gr => ({ key: gr.key, flows: gr.flows.filter(f => flowMatches(needle, f)) })).filter(gr => gr.flows.length), [allGroups, needle]);
+  const matched = useMemo(() => filtered.reduce((n, gr) => n + gr.flows.length, 0), [filtered]);
+  // The cap counts only routes in open groups; an open group entirely past it is left out with the rest.
+  const { groups, drawable } = useMemo(() => {
+    let room = all ? Infinity : CAP;
+    let drawable = 0;
+    const groups: GroupRow[] = [];
+    for (const gr of filtered) {
+      const open = !collapsed.has(gr.key);
+      const flows = open ? gr.flows.slice(0, room) : [];
+      if (open) { room -= flows.length; drawable += gr.flows.length; }
+      if (!open || flows.length) groups.push({ key: gr.key, flows, count: gr.flows.length, open });
+    }
+    return { groups, drawable };
+  }, [filtered, all, collapsed]);
+  const shown = useMemo(() => groups.flatMap(gr => gr.flows), [groups]);
   const g = useMemo(() => flowGraph(shown, domain.dataRefs), [shown, domain.dataRefs]);
   const cards = useMemo(() => cardData(shown, domain, base), [shown, domain, base]);
   // A card that left (filter, collapse, domain update) cannot stay hot.
   const liveHot = hot && g.nodes.has(hot) ? hot : null;
   useEffect(() => { if (hot && !liveHot) setHot(null); }, [hot, liveHot]);
+  // Nor stay picked: a pick hidden by the search or a collapse is dropped, never brought back later.
+  useEffect(() => { if (picked && !g.nodes.has(picked)) setPicked(null); }, [picked, g]);
   const pages = useMemo(() => domain.routes.filter(r => r.kind === 'page' && matches(needle, r.fullPath, r.framework)).sort((a, b) => a.fullPath.localeCompare(b.fullPath)), [domain.routes, needle]);
   const screens = useMemo(() => domain.routes.filter(r => r.kind === 'screen' && matches(needle, r.fullPath, r.framework)).sort((a, b) => a.fullPath.localeCompare(b.fullPath)), [domain.routes, needle]);
   const total = sorted.length;
@@ -392,9 +412,18 @@ function Flows({ domain }: { domain: DomainIndex }) {
         const passes = r.kind === 'api' ? matches(needle, r.method, r.fullPath, r.file) : matches(needle, r.fullPath, r.framework);
         if (!passes) setQ('');
         if (r.kind === 'api') {
-          if (!all && (passes ? filtered : sorted).findIndex(f => f.route.id === r.id) >= CAP) setAll(true);
-          const gk = allGroups.find(gr => gr.flows.some(f => f.route.id === r.id))?.key;
-          if (gk && collapsed.has(gk)) onToggle(gk);
+          // Its place among the routes that will be drawn: open groups (its own opens) under the search that stays.
+          const q2 = passes ? needle : '';
+          let at = 0;
+          for (const gr of allGroups) {
+            const own = gr.flows.some(f => f.route.id === r.id);
+            if (own && collapsed.has(gr.key)) onToggle(gr.key);
+            if (!own && collapsed.has(gr.key)) continue;
+            const i = gr.flows.filter(f => flowMatches(q2, f)).findIndex(f => f.route.id === r.id);
+            if (i >= 0) { at += i; break; }
+            at += gr.flows.filter(f => flowMatches(q2, f)).length;
+          }
+          if (!all && at >= CAP) setAll(true);
         }
       }
     }
@@ -409,14 +438,15 @@ function Flows({ domain }: { domain: DomainIndex }) {
     if (g.nodes.has(key)) setPicked(key);
     const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
     el.scrollIntoView?.({ block: 'center', inline: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
-  }, [routeTrace, domain.routes, needle, all, filtered, sorted, allGroups, collapsed, onToggle, g]);
+  }, [routeTrace, domain.routes, needle, all, allGroups, collapsed, onToggle, g]);
 
-  // Esc clears the search, then the pick; the arrow keys walk the search box, group headers and route rows.
+  // Esc clears the search, then the pick, and is left to the panels when neither is there; the arrow keys walk
+  // the search box, group headers and route rows.
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const t = e.target as HTMLElement;
     if (e.key === 'Escape') {
-      if (t === input.current && q) setQ('');
-      else if (picked) setPicked(null);
+      if (q) setQ('');
+      else if (picked) unpick();
       else return;
       e.preventDefault();
       return;
@@ -431,7 +461,7 @@ function Flows({ domain }: { domain: DomainIndex }) {
 
   const view: ViewProps = { g, groups, cards, hot: liveHot, picked, onHot, onPick, onToggle, width: width || 1000 };
   return (
-    <div className={clsx('apiv', stacked && 'stacked', !stacked && width > 0 && width < 900 && 'tight')} onKeyDown={onKey}>
+    <div className={clsx('apiv', stacked && 'stacked', !stacked && width > 0 && width < 900 && 'tight')} style={{ '--ap-file': `${FILE_PX}px` } as CSSProperties} onKeyDown={onKey}>
       <div className="ap-scroll" ref={scroller}>
         <div className="ap-bar">
           <label className="ap-filter glass">
@@ -439,16 +469,16 @@ function Flows({ domain }: { domain: DomainIndex }) {
             <input ref={input} type="search" placeholder="Filter by method, path or file" aria-label="Filter routes" value={q} onChange={e => setQ(e.target.value)} />
           </label>
           <span className="ap-count">
-            {needle ? `${filtered.length.toLocaleString()} of ${total.toLocaleString()}` : total.toLocaleString()} {total === 1 ? 'endpoint' : 'endpoints'}
+            {needle ? `${matched.toLocaleString()} of ${total.toLocaleString()}` : total.toLocaleString()} {total === 1 ? 'endpoint' : 'endpoints'}
           </span>
           {total > 0 && <p className="ap-hint">{stacked ? 'Tap a route to see its flow. Links are approximate.' : 'Hover or select a route to trace it. Links are approximate.'}</p>}
         </div>
-        {total > 0 && filtered.length === 0 && <p className="ap-none">No routes match “{q.trim()}”.</p>}
+        {total > 0 && matched === 0 && <p className="ap-none">No routes match “{q.trim()}”.</p>}
         {groups.length > 0 && (stacked ? <Chains {...view} /> : <Lanes {...view} />)}
-        {filtered.length > CAP && (
+        {drawable > CAP && (
           <div className="ap-cap glass">
-            <span>{all ? `All ${filtered.length.toLocaleString()} routes` : `First ${CAP} of ${filtered.length.toLocaleString()} routes, by path`}</span>
-            <button type="button" onClick={() => setAll(a => !a)}>{all ? `Show first ${CAP}` : `Show all ${filtered.length.toLocaleString()}`}</button>
+            <span>{all ? `All ${drawable.toLocaleString()} routes` : `First ${CAP} of ${drawable.toLocaleString()} routes, by path`}</span>
+            <button type="button" onClick={() => setAll(a => !a)}>{all ? `Show first ${CAP}` : `Show all ${drawable.toLocaleString()}`}</button>
           </div>
         )}
         {pages.length > 0 && <PageList title="Pages" routes={pages} />}

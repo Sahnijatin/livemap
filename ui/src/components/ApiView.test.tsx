@@ -89,7 +89,12 @@ const card = (kind: string, text: string) => cards(kind).find(c => c.querySelect
 const enter = (el: Element) => act(() => { el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body })); });
 const leave = (el: Element) => act(() => { el.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body })); });
 const pick = (el: Element) => act(() => el.querySelector<HTMLButtonElement>('.ap-pick')!.click());
-const key = (el: Element, k: string) => act(() => { el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true })); });
+/** Presses a key on an element; returns whether the view left the event alone (not default-prevented). */
+const key = (el: Element, k: string): boolean => {
+  let free = true;
+  act(() => { free = el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })); });
+  return free;
+};
 const filter = () => host.querySelector<HTMLInputElement>('input[aria-label="Filter routes"]')!;
 const type = (v: string) => act(() => {
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(filter(), v);
@@ -156,6 +161,74 @@ describe('ApiView', () => {
     key(host.querySelector('.apiv')!, 'Escape');
     expect(host.querySelectorAll('.ap.on, .ap.dim, .ap.picked').length).toBe(0);
     expect(edges()).toBe(0);
+  });
+
+  it('un-picking clears the trace even while the row keeps focus or hover', () => {
+    mount();
+    // Keyboard: Tab to the row (focus), Enter (click), Esc.
+    const get = routeCard('GET', '/api/orders');
+    const btn = get.querySelector<HTMLButtonElement>('.ap-pick')!;
+    act(() => btn.focus());
+    act(() => btn.click());
+    expect(get.classList.contains('picked')).toBe(true);
+    expect(key(btn, 'Escape')).toBe(false);
+    expect(host.querySelectorAll('.ap.on, .ap.dim, .ap.picked').length).toBe(0);
+    expect(edges()).toBe(0);
+    act(() => btn.blur());
+    // Mouse: hover, click, click again.
+    enter(get);
+    pick(get);
+    pick(get);
+    expect(host.querySelectorAll('.ap.on, .ap.dim, .ap.picked').length).toBe(0);
+    expect(edges()).toBe(0);
+    // The next hover draws again.
+    leave(get);
+    enter(get);
+    expect(edges()).toBe(3);
+  });
+
+  it('a pick hidden by a collapse is dropped, and Esc then falls through', () => {
+    mount();
+    pick(routeCard('GET', '/api/orders'));
+    const g = groups().find(x => x.querySelector('.ap-gk')?.textContent === '/api/orders')!;
+    act(() => g.click());
+    act(() => g.click());
+    expect(routeCard('GET', '/api/orders').classList.contains('picked')).toBe(false);
+    expect(host.querySelectorAll('.ap.on, .ap.dim').length).toBe(0);
+    expect(key(host.querySelector('.apiv')!, 'Escape')).toBe(true);
+  });
+
+  it('a pick hidden by the search is dropped too', () => {
+    mount();
+    pick(routeCard('GET', '/api/users'));
+    type('orders');
+    type('');
+    expect(host.querySelectorAll('.ap.picked').length).toBe(0);
+  });
+
+  it('Esc anywhere in the view clears a search first, then the pick', () => {
+    mount();
+    const get = routeCard('GET', '/api/orders');
+    pick(get);
+    type('orders');
+    const btn = get.querySelector<HTMLButtonElement>('.ap-pick')!;
+    expect(key(btn, 'Escape')).toBe(false);
+    expect(filter().value).toBe('');
+    expect(get.classList.contains('picked')).toBe(true);
+    expect(key(btn, 'Escape')).toBe(false);
+    expect(get.classList.contains('picked')).toBe(false);
+    expect(key(btn, 'Escape')).toBe(true);
+  });
+
+  it('a focused row keeps focus when an earlier group empties', () => {
+    mount();
+    const btn = routeCard('GET', '/api/orders').querySelector<HTMLButtonElement>('.ap-pick')!;
+    act(() => btn.focus());
+    // The /api group (the users route) empties; /api/orders follows it.
+    type('orders');
+    expect(groups().map(x => x.querySelector('.ap-gk')?.textContent)).toEqual(['/api/orders']);
+    expect(btn.isConnected).toBe(true);
+    expect(document.activeElement).toBe(btn);
   });
 
   it('arrow keys walk from the search box through group headers and route rows, Enter picks', () => {
@@ -327,6 +400,22 @@ describe('ApiView', () => {
     expect(btn).toBeTruthy();
     act(() => btn.click());
     expect(cards('route')).toHaveLength(CAP + 1);
+  });
+
+  it(`group counts are the real size, and collapsed groups do not use up the ${CAP} cap`, () => {
+    const a = Array.from({ length: CAP + 1 }, (_, i) => api('GET', `/api/a/r${String(i).padStart(4, '0')}`, 'getOrders', 18));
+    const b = Array.from({ length: 3 }, (_, i) => api('GET', `/api/b/r${i}`, 'getOrders', 18));
+    const d = domain();
+    d.routes = [...a, ...b];
+    mount(d);
+    const head = (k: string) => groups().find(x => x.querySelector('.ap-gk')?.textContent === k)!;
+    expect(head('/api/a').querySelector('.ap-gn')?.textContent).toBe((CAP + 1).toLocaleString());
+    expect(cards('route')).toHaveLength(CAP);
+    expect(host.textContent).toContain(`Show all ${(CAP + 4).toLocaleString()}`);
+    act(() => head('/api/a').click());
+    expect(cards('route').map(c => c.querySelector('.ap-t')?.textContent)).toEqual(['/api/b/r0', '/api/b/r1', '/api/b/r2']);
+    expect(head('/api/b').querySelector('.ap-gn')?.textContent).toBe('3');
+    expect(host.querySelector('.ap-cap')).toBeNull();
   });
 
   it('shows the empty state with the supported frameworks', () => {
