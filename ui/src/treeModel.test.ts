@@ -240,6 +240,9 @@ describe('splitName', () => {
     expect(splitName('.agents/skills/supabase-row-level-security', 'dir')).toEqual(['.agents/skills/supabase-row-', 'level-security']);
     expect(splitName('supabase-auth-integration', 'dir')).toEqual(['supabase-auth-', 'integration']);
     expect(splitName('a/averyveryverylongfoldername', 'dir')).toEqual(['a/averyveryverylong', 'foldername']);
+    // A single folder follows the same rule as a chain's last one: up to 16 characters stay whole.
+    expect(splitName('componentsLarge1', 'dir')).toEqual(['componentsLarge1', '']);
+    expect(splitName('src/componentsLarge1', 'dir')).toEqual(['src/', 'componentsLarge1']);
   });
 
   it('never cuts inside a character', () => {

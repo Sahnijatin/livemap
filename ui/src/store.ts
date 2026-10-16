@@ -271,15 +271,15 @@ function routesByFileOf(domain: DomainIndex): Record<string, ApiRoute[]> {
 const freshDomain = () => ({ domain: emptyDomainIndex(), domainBase: baseOf(emptyDomainIndex()), routesByFile: dict<ApiRoute[]>() });
 
 /**
- * Files after upserting and removing; clears the selection if its file is gone. A live deletion of the selected file
- * also ends its peek, so the file coming back does not reopen the inspector; a played (historical) one does not.
- */
-/**
  * When each file arrived after the hello (path to time): files the live project gains, recorded as they come so the
  * file tree can pop just those rows. A hello or past state starts it over; a removed file is forgotten.
  */
 export const arrivals = new Map<string, number>();
 
+/**
+ * Files after upserting and removing; clears the selection if its file is gone. A live deletion of the selected file
+ * also ends its peek, so the file coming back does not reopen the inspector; a played (historical) one does not.
+ */
 function upsertFiles(st: StoreState, upserts: FileModel[], removed: string[]): Pick<StoreState, 'files' | 'selected' | 'peek'> {
   const files = dict(st.files);
   const now = Date.now();

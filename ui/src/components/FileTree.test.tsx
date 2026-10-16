@@ -727,16 +727,6 @@ describe('FileTree round 3', () => {
     expect(host.querySelectorAll('[data-file^="big/"]')).toHaveLength(200);
   });
 
-  it('decides big or not when the first index finishes, not at the first files', () => {
-    useStore.getState().apply({ ...hello([file('a/x.ts'), file('b/y.ts')]), indexing: true });
-    mount();
-    const more = Array.from({ length: 2050 }, (_, i) => file(`a/gen/f${i}.ts`));
-    act(() => useStore.getState().apply({ type: 'files', files: more, removed: [] }));
-    act(() => useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts'), ...more]))); // indexing done
-    expect(dir('a')!.getAttribute('aria-expanded')).toBe('false');
-    expect(dir('b')!.getAttribute('aria-expanded')).toBe('false');
-  });
-
   it('closes the folders only the agent opened when it goes idle', () => {
     const many = Array.from({ length: 2100 }, (_, i) => file(`d${i % 3}/s/f${i}.ts`));
     useStore.getState().apply(hello(many));
@@ -918,18 +908,6 @@ describe('FileTree round 5', () => {
     expect(scrollSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps big or not fixed while indexing, deciding again only when it ends', () => {
-    useStore.getState().apply({ ...hello([file('a/x.ts'), file('b/y.ts')]), indexing: true });
-    mount();
-    const more = Array.from({ length: 2050 }, (_, i) => file(`a/gen/f${i}.ts`));
-    act(() => useStore.getState().apply({ type: 'files', files: more, removed: [] }));
-    expect(open('a')).toBe('true'); // no collapse mid-index
-    act(() => useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts'), ...more])));
-    expect(open('a')).toBe('false');
-    act(() => useStore.getState().apply({ type: 'files', files: [], removed: more.map(f => f.path) }));
-    expect(open('a')).toBe('false'); // never again
-  });
-
   it('a folder folding inside a closing parent draws closed, without its rows', () => {
     useStore.getState().apply(hello([file('a/b/x.ts'), file('a/y.ts')]));
     mount();
@@ -1069,30 +1047,12 @@ describe('FileTree round 7', () => {
     expect(byData('file', 'a/x.ts')).not.toBeNull();
   });
 
-  it('while indexing, big or not follows the index total the engine reports', () => {
-    useStore.getState().apply({ type: 'indexing', done: 0, total: 20_000 });
-    useStore.getState().apply({ ...hello([file('a/x.ts'), file('b/y.ts')]), indexing: true });
-    mount();
-    expect(dir('a')!.getAttribute('aria-expanded')).toBe('false');
-  });
 });
 
 describe('FileTree round 8', () => {
   const dir = (path: string) => byData('dir', path);
   beforeEach(() => { (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView = vi.fn(); });
   afterEach(() => { delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView; });
-
-  it('a choice made while indexing holds when the index ends big', () => {
-    const first = Array.from({ length: 300 }, (_, i) => file(`d${i % 3}/f${i}.ts`));
-    useStore.getState().apply({ ...hello(first), indexing: true });
-    mount();
-    act(() => dir('d0')!.click()); // close
-    act(() => dir('d0')!.click()); // open again: the default for now, but stored while indexing
-    const all = first.concat(Array.from({ length: 20_000 }, (_, i) => file(`d${i % 3}/g${i}.ts`)));
-    act(() => useStore.getState().apply(hello(all))); // indexing done: big
-    expect(dir('d0')!.getAttribute('aria-expanded')).toBe('true');
-    expect(dir('d1')!.getAttribute('aria-expanded')).toBe('false');
-  });
 
   it('a re-created file pops again', () => {
     useStore.getState().apply(hello([file('src/a.ts')]));
@@ -1129,6 +1089,40 @@ describe('FileTree round 8', () => {
     act(() => { notPrevented = (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: 'l', bubbles: true, cancelable: true })); });
     expect(notPrevented).toBe(false); // "l", not "xl"
     expect((document.activeElement as HTMLElement).dataset.nav).toBe(dirKey('lib'));
+  });
+
+  it('decides big or not once, at the first files, even while indexing', () => {
+    useStore.getState().apply({ type: 'indexing', done: 0, total: 20_000 });
+    useStore.getState().apply({ ...hello([file('a/x.ts'), file('b/y.ts')]), indexing: true });
+    mount();
+    const more = Array.from({ length: 2050 }, (_, i) => file(`a/gen/f${i}.ts`));
+    act(() => useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts'), ...more]))); // indexing done, now big
+    expect(byData('dir', 'a')!.getAttribute('aria-expanded')).toBe('true');
+    expect(byData('dir', 'b')!.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('under a filter, opening a compact row opens every folder in it', () => {
+    useStore.getState().apply(hello([file('a/b/x.ts'), file('a/c/x2.ts'), file('z/y.ts')]));
+    mount();
+    act(() => useStore.getState().setFilter('x'));
+    act(() => byData('dir', 'a')!.click());
+    act(() => { vi.advanceTimersByTime(400); });
+    act(() => useStore.getState().apply({ type: 'files', files: [], removed: ['a/c/x2.ts'] })); // a joins a/b
+    act(() => byData('dir', 'a/b')!.click());
+    expect(byData('dir', 'a/b')!.getAttribute('aria-expanded')).toBe('true');
+    expect(byData('file', 'a/b/x.ts')).not.toBeNull();
+  });
+
+  it('typing the same letter again moves to the next row that starts with it', () => {
+    useStore.getState().apply(hello([file('scripts/a.ts'), file('server/b.ts'), file('src/c.ts'), file('lib/d.ts')]));
+    mount();
+    act(() => byData('dir', 'lib')!.focus());
+    const seen: (string | undefined)[] = [];
+    for (let n = 0; n < 4; n++) {
+      act(() => { (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: 's', bubbles: true, cancelable: true })); });
+      seen.push((document.activeElement as HTMLElement).dataset.nav);
+    }
+    expect(seen).toEqual([dirKey('scripts'), dirKey('server'), dirKey('src'), dirKey('scripts')]);
   });
 
   it('typeahead takes AltGr characters', () => {

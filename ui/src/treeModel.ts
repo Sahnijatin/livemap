@@ -261,7 +261,8 @@ const UPPER = /\p{Lu}/u;
  * A name split for middle truncation into a start (which ellipsizes) and an end (which always shows). A file keeps
  * its last word and extension: the longest end of at most 14 chars that starts after `-`, `_`, `.`, a space or a
  * lower-to-upper case change, else its last 10 chars. A folder row keeps its last folder when that is at most 16
- * chars, else splits the last folder the same way. A short name comes back whole, with an empty end.
+ * chars, else splits the last folder the same way; a single folder of at most 16 chars stays whole. A short name
+ * comes back whole, with an empty end.
  */
 export function splitName(name: string, kind: 'file' | 'dir' = 'file'): [string, string] {
   const slash = kind === 'dir' ? name.lastIndexOf('/') : -1;
@@ -271,6 +272,8 @@ export function splitName(name: string, kind: 'file' | 'dir' = 'file'): [string,
     const [head, tail] = splitWord(last);
     return [name.slice(0, slash + 1) + head, tail];
   }
+  // A single folder: kept whole up to the same length as a chain's last folder.
+  if (kind === 'dir' && name.length <= SEGMENT_MAX) return [name, ''];
   return splitWord(name);
 }
 

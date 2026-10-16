@@ -92,11 +92,13 @@ export function treeKeyDown(e: KeyPress, c: TreeContext): void {
       t.text = now - t.at < TYPEAHEAD_MS ? t.text + e.key.toLowerCase() : e.key.toLowerCase();
       t.at = now;
       const names = namesFor(c.items);
-      const from = t.text.length > 1 ? i : i + 1;
+      // The same letter again cycles through the rows that start with it; a longer prefix stays on a match.
+      const text = [...t.text].every(ch => ch === t.text[0]) ? t.text[0] : t.text;
+      const from = text.length > 1 ? i : i + 1;
       let hit = -1;
       for (let n = 0; n < navKeys.length && hit < 0; n++) {
         const j = (from + n) % navKeys.length;
-        if (names.get(navKeys[j])?.some(name => name.startsWith(t.text))) hit = j;
+        if (names.get(navKeys[j])?.some(name => name.startsWith(text))) hit = j;
       }
       if (hit < 0) return;
       focusAt(hit);
@@ -112,9 +114,10 @@ export function toggleDir(dir: string, c: TreeContext): void {
   const { open, chain } = item;
   const { q } = c;
   if (q) {
+    // Like a stored choice, a compact row acts as a whole: closing marks it, opening clears every folder in it.
     c.setFilterClosed(f => {
       const was = f.q === q ? f.dirs : NO_PATHS;
-      return { q, dirs: open ? edit(was, [dir]) : edit(was, [], [dir]) };
+      return { q, dirs: open ? edit(was, [dir]) : edit(was, [], chain) };
     });
   } else {
     // A chain opens and closes as a whole, so each of its folders keeps the state when the chain splits.

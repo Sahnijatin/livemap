@@ -99,14 +99,10 @@ export function FileTree() {
   const closedNow = filterClosed.q === q ? filterClosed.dirs : NO_PATHS;
   const { root: tree, layers } = useMemo(() => buildTree(files, q), [files, q]);
   const fileCount = useMemo(() => Object.keys(files).length, [files]);
-  // Big or not: taken from the first state seen (the index total while indexing), held while indexing, and decided
-  // once more when the index finishes.
-  const indexing = useStore(s => s.indexing !== null);
-  // The engine reports how many files the running index will hold; without it, the files seen so far count.
-  const indexTotal = useStore(s => s.indexing?.total ?? 0);
-  const [bigAt, setBigAt] = useState<{ big: boolean; final: boolean } | null>(null);
-  if (!bigAt?.final && fileCount > 0 && (!indexing || !bigAt)) setBigAt({ big: (indexing && indexTotal > 0 ? indexTotal : fileCount) >= BIG_PROJECT, final: !indexing });
-  const big = bigAt ? bigAt.big : fileCount >= BIG_PROJECT;
+  // Big or not is decided once, at the first render with files (App keys the tree by project, so once per project).
+  const [bigAt, setBigAt] = useState<boolean | null>(null);
+  if (bigAt === null && fileCount > 0) setBigAt(fileCount >= BIG_PROJECT);
+  const big = bigAt ?? fileCount >= BIG_PROJECT;
 
   const pending = useRef<DirState | null>(null);
   const flush = useCallback(() => {
