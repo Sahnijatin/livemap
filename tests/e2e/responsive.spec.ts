@@ -284,6 +284,28 @@ test('at 1440 px dragging the sidebar handle resizes the column, and the width s
   expect(Math.round((await page.locator('main.center').boundingBox())!.x)).toBe(12);
 });
 
+test('at 1920 px Widen inspector fills the room beside the center, survives a reload and restores the width', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await open(page);
+  const insp = page.locator('aside.insp');
+  const width = async () => Math.round((await insp.boundingBox())!.width);
+  const wide = page.getByRole('button', { name: 'Widen inspector' });
+  expect(await width()).toBe(384);
+  await wide.click();
+  await expect(wide).toHaveAttribute('aria-pressed', 'true');
+  // 1896 px box - 420 center - 12 gap - (272 + 12) project panel.
+  await expect.poll(width).toBe(1180);
+  expect(Math.round((await page.locator('main.center').boundingBox())!.width)).toBe(420);
+  await page.reload();
+  await expect(page.getByRole('status').filter({ hasText: 'Live' })).toBeAttached({ timeout: 15_000 });
+  expect(await width()).toBe(1180);
+  await wide.click();
+  await expect(wide).toHaveAttribute('aria-pressed', 'false');
+  await expect.poll(width).toBe(384);
+  await page.setViewportSize({ width: 900, height: 900 });
+  await expect(wide).toHaveCount(0);
+});
+
 test('phone toolbar: condensed, and the Map tools live in the options menu', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 780 });
   await open(page);

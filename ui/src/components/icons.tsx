@@ -77,6 +77,11 @@ export const PanelIcon = ({ on }: { on?: boolean }) => (
   <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" />{on && <path d="M15 4h3a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3h-3z" fill="currentColor" />}<path d="M15 4v16" /></svg>
 );
 
+/** Two arrows pointing apart (widen), or `on`, pointing together at a bar (restore). */
+export const WidenIcon = ({ on }: { on?: boolean }) => (
+  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true">{on ? <path d="M12 5v14M3 12h6M6 9l3 3-3 3M21 12h-6M18 9l-3 3 3 3" /> : <path d="M3 12h18M7 8l-4 4 4 4M17 8l4 4-4 4" />}</svg>
+);
+
 /** A window with its left sidebar; `on` fills the sidebar. */
 export const SidebarIcon = ({ on }: { on?: boolean }) => (
   <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" />{on && <path d="M9 4H6a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h3z" fill="currentColor" />}<path d="M9 4v16" /></svg>

@@ -11,7 +11,7 @@ const center = (width: number, l: PanelLayout, fit = fitLayout(l, width, width +
 describe('constants', () => {
   it('name each panel, its shortcut and its element once', () => {
     expect(PANELS).toEqual({ files: { name: 'project panel', key: '[', id: 'sidebar' }, inspector: { name: 'inspector', key: ']', id: 'inspector' } });
-    expect(LIMITS).toEqual({ files: [200, 520], inspector: [300, 720] });
+    expect(LIMITS).toEqual({ files: [200, 520], inspector: [300, Infinity] });
     expect([CENTER_MIN, GAP]).toEqual([420, 12]);
   });
 });
@@ -32,7 +32,9 @@ describe('fitLayout', () => {
 
   it('keeps chosen widths that fit and clamps those out of range', () => {
     expect(fitLayout(layout({ w: { files: 300, inspector: 600 } }), 1576, 1600)).toEqual({ files: 300, inspector: 600 });
-    expect(fitLayout(layout({ w: { files: 10, inspector: 9000 } }), 2536, 2560)).toEqual({ files: 200, inspector: 720 });
+    expect(fitLayout(layout({ w: { files: 10, inspector: 9000 } }), 2536, 2560)).toEqual({ files: 200, inspector: 2536 - 420 - 24 - 200 });
+    // No fixed maximum for the inspector: a set width that fits is drawn.
+    expect(fitLayout(layout({ w: { files: 300, inspector: 1100 } }), 1896, 1920)).toEqual({ files: 300, inspector: 1100 });
   });
 
   it('fits the .app box it is given, not the viewport (safe-area insets, other gutters)', () => {
@@ -72,13 +74,55 @@ describe('which panel gives way', () => {
   });
 
   it('reach: the widest a panel draws, with the other at its minimum (or collapsed) and the center at CENTER_MIN', () => {
-    expect(reach(layout(), 'files', 1176)).toBe(1176 - 420 - 12 - 312);
-    expect(reach(layout(), 'inspector', 1176)).toBe(1176 - 420 - 12 - 212);
-    expect(reach(layout(), 'files', 2400)).toBe(520);
-    expect(reach(layout({ collapsed: { files: false, inspector: true } }), 'files', 900)).toBe(468);
+    expect(reach(layout(), 'files', 1176, 1200)).toBe(1176 - 420 - 12 - 312);
+    expect(reach(layout(), 'files', 2400, 2424)).toBe(520);
+    expect(reach(layout({ collapsed: { files: false, inspector: true } }), 'files', 900, 1080)).toBe(468);
     // A width within reach, set by the panel resized last, is drawn exactly.
-    const l = layout({ w: { files: reach(layout(), 'files', 1176), inspector: 720 }, last: 'files' });
+    const l = layout({ w: { files: reach(layout(), 'files', 1176, 1200), inspector: 720 }, last: 'files' });
     expect(fitLayout(l, 1176, 1200).files).toBe(432);
+  });
+});
+
+describe('the inspector has no fixed maximum', () => {
+  it('reaches what leaves the center at CENTER_MIN beside the project panel as drawn (or nothing when it is collapsed)', () => {
+    expect(reach(layout(), 'inspector', 1176, 1200)).toBe(1176 - 420 - 12 - (248 + 12));
+    expect(reach(layout(), 'inspector', 1896, 1920)).toBe(1896 - 420 - 12 - (272 + 12));
+    expect(reach(layout({ w: { files: 400, inspector: null } }), 'inspector', 1896, 1920)).toBe(1896 - 420 - 12 - (400 + 12));
+    expect(reach(layout({ collapsed: { files: true, inspector: false } }), 'inspector', 1896, 1920)).toBe(1896 - 420 - 12);
+    // Never below its minimum.
+    expect(reach(layout(), 'inspector', 900, 1080)).toBe(300);
+    // That width, stored by the inspector resized last, is drawn exactly and the project panel keeps its width.
+    const l = layout({ w: { files: 400, inspector: 1896 - 444 - 400 }, last: 'inspector' });
+    expect(fitLayout(l, 1896, 1920)).toEqual({ files: 400, inspector: 1052 });
+  });
+
+  it('a stored width wider than the box gives way, the panel not resized last first', () => {
+    const w = { files: 400, inspector: 1500 };
+    expect(fitLayout(layout({ w, last: 'inspector' }), 1416, 1440)).toEqual({ files: 200, inspector: 1416 - 444 - 200 });
+    expect(fitLayout(layout({ w, last: 'files' }), 1416, 1440)).toEqual({ files: 400, inspector: 1416 - 444 - 400 });
+    expect(fitLayout(layout({ w, last: 'inspector' }), 2536, 2560)).toEqual({ files: 400, inspector: 1500 });
+  });
+});
+
+describe('a widened inspector', () => {
+  it('fills the room the center and the project panel leave, following the box', () => {
+    const l = layout({ w: { files: 300, inspector: 400 }, wide: true });
+    expect(fitLayout(l, 1576, 1600)).toEqual({ files: 300, inspector: 1576 - 444 - 300 });
+    expect(fitLayout(l, 1896, 1920)).toEqual({ files: 300, inspector: 1896 - 444 - 300 });
+    expect(fitLayout({ ...l, collapsed: { files: true, inspector: false } }, 1896, 1920).inspector).toBe(1896 - 432);
+    expect(fitLayout(l, 1896, 1920).inspector).toBe(reach(l, 'inspector', 1896, 1920));
+  });
+
+  it('gives way first in a narrow box, down to its minimum, then the project panel', () => {
+    const l = layout({ w: { files: 300, inspector: 400 }, wide: true, last: 'inspector' });
+    expect(fitLayout(l, 1056, 1080)).toEqual({ files: 300, inspector: 312 });
+    expect(fitLayout(l, 900, 1080)).toEqual({ files: 200, inspector: 300 });
+  });
+
+  it('does not change the project panel while the inspector is collapsed, and restores the width set before', () => {
+    const l = layout({ w: { files: 300, inspector: 500 }, wide: true, collapsed: { files: false, inspector: true } });
+    expect(fitLayout(l, 1896, 1920).files).toBe(300);
+    expect(fitLayout({ ...l, wide: false, collapsed: { files: false, inspector: false } }, 1896, 1920)).toEqual({ files: 300, inspector: 500 });
   });
 });
 
@@ -99,7 +143,9 @@ describe('shownLayout', () => {
 describe('parseLayout', () => {
   it('reads a stored layout and clamps its widths', () => {
     expect(parseLayout(JSON.stringify({ w: { files: 300, inspector: 9999 }, collapsed: { files: true, inspector: false }, last: 'files' })))
-      .toEqual(layout({ w: { files: 300, inspector: 720 }, collapsed: { files: true, inspector: false }, last: 'files' }));
+      .toEqual(layout({ w: { files: 300, inspector: 9999 }, collapsed: { files: true, inspector: false }, last: 'files' }));
+    expect(parseLayout(JSON.stringify({ w: { inspector: 500 }, wide: true }))).toEqual(layout({ w: { files: null, inspector: 500 }, wide: true }));
+    expect(parseLayout(JSON.stringify({ wide: 'yes' })).wide).toBeUndefined();
     expect(parseLayout(JSON.stringify({ last: 'center' })).last).toBeUndefined();
   });
 
@@ -117,7 +163,7 @@ describe('loadLayout and saveLayout', () => {
   it('round-trip through localStorage under one key', () => {
     const store = new Map<string, string>();
     vi.stubGlobal('localStorage', { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => store.set(k, v) });
-    const l = layout({ w: { files: 320, inspector: null }, collapsed: { files: false, inspector: true } });
+    const l = layout({ w: { files: 320, inspector: 450 }, collapsed: { files: false, inspector: true }, wide: true });
     saveLayout(l);
     expect([...store.keys()]).toEqual([LAYOUT_KEY]);
     expect(LAYOUT_KEY).toBe('livemap:layout');

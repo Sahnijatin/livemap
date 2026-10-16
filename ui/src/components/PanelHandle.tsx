@@ -6,6 +6,7 @@ import { LIMITS, saveLayout, type Panel, type PanelLayout } from '../panelLayout
 /**
  * The drag handle on a docked panel's inner edge (1080 px and wider): drag or arrow keys resize (Shift: 64 px), Home
  * and End go to the minimum and to the widest the box allows, Enter collapses, a double-click restores the default.
+ * On the inspector, a resize or a reset ends the widened state (see WidenButton).
  * What the user sees is what is stored: the panel's drawn width, and it becomes the panel the other gives way to.
  * A drag saves once, when it ends; a lost pointer capture or a window blur ends it too.
  */
@@ -20,7 +21,8 @@ export function PanelHandle({ panel }: { panel: Panel }) {
 
   const set = (w: number | null, save = true) => {
     const s = useStore.getState();
-    s.setLayout({ ...s.layout, w: { ...s.layout.w, [panel]: w }, last: panel }, save);
+    // Resizing the inspector ends its widened state: the new width is the one kept.
+    s.setLayout({ ...s.layout, w: { ...s.layout.w, [panel]: w }, last: panel, ...(panel === 'inspector' && { wide: false }) }, save);
   };
   /** Draws the panel at `d`, within reach; nothing happens (or is saved) when that is the width drawn now. */
   const draw = (d: number, save = true) => {

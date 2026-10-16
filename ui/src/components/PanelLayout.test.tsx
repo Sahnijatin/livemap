@@ -206,6 +206,81 @@ describe('docked panels at 1080 px and wider', () => {
     expect(document.activeElement).toBe(btn('Inspector'));
   });
 
+  it('End on the inspector handle goes to the widest the box allows beside the project panel, with no fixed maximum', async () => {
+    resize(1920);
+    await mount();
+    const insp = sep('Resize inspector');
+    key(insp, 'End');
+    expect(now('Resize inspector')).toBe(1896 - 420 - 12 - (272 + 12));
+    expect(now('Resize project panel')).toBe(272);
+    expect(stored().w.inspector).toBe(1180);
+    expect(insp.getAttribute('aria-valuemax')).toBe('1180');
+  });
+
+  it('Widen inspector expands it to its widest and restores the width it had, in both views', async () => {
+    resize(1920);
+    await mount();
+    const insp = sep('Resize inspector');
+    key(insp, 'ArrowLeft', { shiftKey: true });
+    expect(now('Resize inspector')).toBe(448);
+    const wide = btn('Widen inspector');
+    expect(wide.getAttribute('aria-pressed')).toBe('false');
+    expect(wide.title).toBe('Widen inspector');
+    act(() => wide.click());
+    expect(now('Resize inspector')).toBe(1180);
+    expect(app().style.getPropertyValue('--right-w')).toBe('1180px');
+    expect(btn('Widen inspector').getAttribute('aria-pressed')).toBe('true');
+    expect(btn('Widen inspector').title).toBe('Restore width');
+    expect(stored()).toMatchObject({ w: { inspector: 448 }, wide: true });
+    // It follows the window while widened.
+    act(() => resize(1440));
+    expect(now('Resize inspector')).toBe(700);
+    // In the file view too.
+    act(() => useStore.getState().select('src/a.ts'));
+    expect(btn('Widen inspector').getAttribute('aria-pressed')).toBe('true');
+    act(() => btn('Widen inspector').click());
+    expect(now('Resize inspector')).toBe(448);
+    expect(btn('Widen inspector').getAttribute('aria-pressed')).toBe('false');
+    expect(stored()).toMatchObject({ w: { inspector: 448 }, wide: false });
+  });
+
+  it('a reload keeps the widened state and the width to restore', async () => {
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify({ w: { inspector: 500 }, wide: true }));
+    useStore.getState().reset();
+    hello();
+    resize(1920);
+    await mount();
+    expect(now('Resize inspector')).toBe(1180);
+    expect(btn('Widen inspector').getAttribute('aria-pressed')).toBe('true');
+    act(() => btn('Widen inspector').click());
+    expect(now('Resize inspector')).toBe(500);
+  });
+
+  it('dragging or resizing with keys while widened ends the widened state: the new width is kept', async () => {
+    resize(1920);
+    await mount();
+    act(() => btn('Widen inspector').click());
+    const insp = sep('Resize inspector');
+    pointer(insp, 'pointerdown', 800);
+    pointer(insp, 'pointermove', 1000);
+    pointer(insp, 'pointerup', 1000);
+    expect(now('Resize inspector')).toBe(980);
+    expect(btn('Widen inspector').getAttribute('aria-pressed')).toBe('false');
+    expect(stored()).toMatchObject({ w: { inspector: 980 }, wide: false });
+    act(() => resize(2200));
+    expect(now('Resize inspector')).toBe(980);
+
+    act(() => btn('Widen inspector').click());
+    key(insp, 'ArrowRight');
+    expect(now('Resize inspector')).toBe(2176 - 444 - 272 - 16);
+    expect(btn('Widen inspector').getAttribute('aria-pressed')).toBe('false');
+    // A double-click still resets to the default width, and ends the widened state.
+    act(() => btn('Widen inspector').click());
+    act(() => { insp.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); });
+    expect(now('Resize inspector')).toBe(384);
+    expect(stored()).toMatchObject({ w: { inspector: null }, wide: false });
+  });
+
   it('keeps the center at least 420 px wide, with the panels and the window', async () => {
     await mount();
     const center = (w: number) => w - (now('Resize project panel') + 12) - (now('Resize inspector') + 12);
@@ -214,7 +289,7 @@ describe('docked panels at 1080 px and wider', () => {
     expect(center(1416)).toBeLessThanOrEqual(421);
     act(() => btn('Hide project panel').click());
     key(sep('Resize inspector'), 'End');
-    expect(now('Resize inspector')).toBe(720);
+    expect(now('Resize inspector')).toBe(1416 - 420 - 12);
     act(() => btn('Files').click());
     expect(center(1416)).toBeGreaterThanOrEqual(420);
     act(() => resize(1100));
@@ -363,14 +438,15 @@ describe('docked panels at 1080 px and wider', () => {
 
   it('fits the measured .app box, not the viewport', async () => {
     await mount();
-    // 1416 - 420 center - 12 gap - (200 + 12) sidebar at its minimum = 772, over the 720 limit.
-    expect(sep('Resize inspector').getAttribute('aria-valuemax')).toBe('720');
+    // 1416 - 420 center - 12 gap - (272 + 12) for the project panel as drawn.
+    expect(sep('Resize inspector').getAttribute('aria-valuemax')).toBe('700');
     // Safe-area insets or a larger gutter: the box is narrower than the viewport minus 24.
     Object.defineProperty(app(), 'clientWidth', { configurable: true, value: 1200 });
     act(() => observers.forEach(fn => fn([])));
-    expect(sep('Resize inspector').getAttribute('aria-valuemax')).toBe(String(1200 - 420 - 12 - 212));
+    expect(sep('Resize inspector').getAttribute('aria-valuemax')).toBe(String(1200 - 420 - 12 - 284));
     key(sep('Resize inspector'), 'End');
-    expect(now('Resize inspector')).toBe(556);
+    expect(now('Resize inspector')).toBe(484);
+    expect(now('Resize project panel')).toBe(272);
     expect(1200 - (now('Resize project panel') + 12) - (now('Resize inspector') + 12)).toBe(420);
   });
 
@@ -622,6 +698,17 @@ describe('below 1080 px', () => {
     key(document.body, ']');
     expect(useStore.getState().panel).toBeNull();
     expect(useStore.getState().layout.collapsed.inspector).toBe(false);
+  });
+
+  it('has no Widen inspector button: the inspector is a slide-over', async () => {
+    await mount();
+    expect(btn('Widen inspector')).not.toBeNull();
+    act(() => resize(900));
+    expect(btn('Widen inspector')).toBeNull();
+    act(() => useStore.getState().select('src/a.ts'));
+    expect(btn('Widen inspector')).toBeNull();
+    act(() => resize(1440));
+    expect(btn('Widen inspector')).not.toBeNull();
   });
 
   it('selecting a file does not touch the stored docked state', async () => {

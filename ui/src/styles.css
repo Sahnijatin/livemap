@@ -190,10 +190,12 @@
 
   /* inspector */
   .insp { position:relative; border-radius:20px; display:flex; flex-direction:column; min-height:0; box-shadow:var(--shadow); overflow:hidden; }
-  /* The inspector's bar: the view's header (Live session, or a file's back link) and the hide button, above the scrolling view. */
+  /* The inspector's bar: the view's header (Live session, or a file's back link) and the widen and hide buttons, above the scrolling view. */
   .ins-bar { display:flex; align-items:center; gap:8px; min-height:26px; padding:14px 10px 0 16px; }
   .ins-bar .live-h { flex:1; min-width:0; }
   .ins-bar .hidebtn { margin:-4px -6px -4px auto; }
+  .ins-bar .widebtn { margin-right:-6px; }
+  .ins-bar .widebtn + .hidebtn { margin-left:0; }
   .ins-body { position:relative; flex:1; min-height:0; display:flex; flex-direction:column; }
   .ins-scroll { flex:1; overflow:auto; padding:16px; display:flex; flex-direction:column; gap:16px; }
   /* Content cross-fade (180 ms): the new page fades in while the old one, on top, fades out a little faster, then unmounts. */

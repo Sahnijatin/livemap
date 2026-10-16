@@ -3,7 +3,7 @@ import clsx from 'clsx';
 import { useStore, type StoreState } from '../store';
 import { PANELS, drawn, setCollapsed, shownLayout } from '../panels';
 import type { Panel } from '../panelLayout';
-import { PanelIcon, SidebarIcon } from './icons';
+import { PanelIcon, SidebarIcon, WidenIcon } from './icons';
 
 const collapsedOf = (p: Panel) => (s: StoreState) => shownLayout(s).collapsed[p];
 const filesCollapsed = collapsedOf('files');
@@ -78,6 +78,23 @@ export function CollapseButton({ panel }: { panel: Panel }) {
   return (
     <button type="button" className={clsx('iconbtn hidebtn', `hide-${panel}`)} aria-label={`Hide ${name}`} aria-keyshortcuts={key} title={`Hide ${name} (${key})`} onClick={() => setCollapsed(panel, true)}>
       {panel === 'files' ? <SidebarIcon /> : <PanelIcon />}
+    </button>
+  );
+}
+
+/**
+ * Widens the docked inspector to the most the box allows beside the center and the project panel, or restores the
+ * width it had (hidden below 1080 px). A drag or a key on its handle ends the widened state.
+ */
+export function WidenButton() {
+  const wide = useStore(s => !!s.layout.wide);
+  const toggle = () => {
+    const s = useStore.getState();
+    s.setLayout({ ...s.layout, wide: !wide });
+  };
+  return (
+    <button type="button" className="iconbtn hidebtn widebtn" aria-label="Widen inspector" aria-pressed={wide} title={wide ? 'Restore width' : 'Widen inspector'} onClick={toggle}>
+      <WidenIcon on={wide} />
     </button>
   );
 }
