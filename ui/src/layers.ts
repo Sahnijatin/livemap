@@ -39,10 +39,14 @@ const SN_KIND_LAYER: Record<string, Layer> = {
 };
 const SN_SCOPE = /^(x_[a-z0-9_]+|sn_[a-z0-9_]+|global)$/i;
 
-/** The layer of a ServiceNow mirror path, or null for any other path. */
-export function serviceNowLayer(path: string): Layer | null {
-  const [scope, kind] = path.split('/', 3);
-  return scope && kind && SN_SCOPE.test(scope) && kind in SN_KIND_LAYER && path.split('/').length > 2 ? SN_KIND_LAYER[kind] : null;
+/**
+ * The layer of a ServiceNow mirror path, or null for any other path. Runs for every file the UI indexes, so it
+ * checks the cheap parts (depth, kind) before the scope pattern.
+ */
+export function serviceNowLayer(path: string, segs: string[] = path.split('/')): Layer | null {
+  if (segs.length < 3) return null;
+  const layer = Object.hasOwn(SN_KIND_LAYER, segs[1]) ? SN_KIND_LAYER[segs[1]] : undefined;
+  return layer && SN_SCOPE.test(segs[0]) ? layer : null;
 }
 
 const SEGMENT_LAYER: [RegExp, Layer][] = [
@@ -67,7 +71,7 @@ export function layerOf(path: string, file: FileModel): Layer {
   const base = segs[segs.length - 1];
   const dirs = segs.slice(0, -1);
   const stem = base.replace(/\.[^.]+$/, '').replace(/\.[^.]+$/, '');
-  const sn = serviceNowLayer(path);
+  const sn = serviceNowLayer(path, segs);
   if (sn) return sn;
 
   if (dirs.some(s => TEST_SEG.test(s)) || /\.(test|spec)\./.test(base)) return 'test';
