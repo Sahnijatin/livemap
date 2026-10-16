@@ -138,7 +138,9 @@ describe('a widened inspector', () => {
     const before = layout({ w: { files: 400, inspector: 600 }, last: 'files', at: 1176 });
     expect(fitLayout(before, 1176, 1200)).toEqual({ files: 400, inspector: 332 });
     const wide = widen(before);
-    expect(wide.wide).toEqual({ w: { files: 400, inspector: 600 }, last: 'files', at: 1176 });
+    // Only the panel resized last is kept: widths and box are not touched.
+    expect(wide.wide).toEqual({ last: 'files' });
+    expect([wide.w, wide.at]).toEqual([before.w, 1176]);
     expect(fitLayout(wide, 1176, 1200)).toEqual({ files: 200, inspector: 532 });
     const back = restoreWide(wide);
     expect(back).toEqual(before);
@@ -173,12 +175,13 @@ describe('parseLayout', () => {
   it('reads a stored layout and clamps its widths', () => {
     expect(parseLayout(JSON.stringify({ w: { files: 300, inspector: 9999 }, collapsed: { files: true, inspector: false }, last: 'files' })))
       .toEqual(layout({ w: { files: 300, inspector: 9999 }, collapsed: { files: true, inspector: false }, last: 'files' }));
-    const snap = { w: { files: 300, inspector: 500 }, last: 'files', at: 1176 };
-    expect(parseLayout(JSON.stringify({ w: { inspector: 900 }, last: 'inspector', wide: snap })).wide).toEqual(snap);
-    expect(parseLayout(JSON.stringify({ w: { inspector: 900 }, wide: { w: { inspector: 'x' } } })).wide).toEqual({ w: { files: null, inspector: null } });
+    expect(parseLayout(JSON.stringify({ w: { inspector: 900 }, last: 'inspector', wide: { last: 'files' } })).wide).toEqual({ last: 'files' });
+    expect(parseLayout(JSON.stringify({ wide: {} })).wide).toEqual({});
+    expect(parseLayout(JSON.stringify({ wide: { last: 'x' } })).wide).toEqual({});
     for (const wide of ['yes', true, null, 3, []]) expect(parseLayout(JSON.stringify({ wide })).wide).toBeUndefined();
-    // The snapshot is read like the layout itself: widths clamped, bad values dropped.
-    expect(parseLayout(JSON.stringify({ wide: { w: { files: 9000, inspector: 100 }, last: 'x', at: -1 } })).wide).toEqual({ w: { files: 520, inspector: 300 } });
+    // The older snapshot shape: widened, with its last; the rest is ignored.
+    expect(parseLayout(JSON.stringify({ w: { inspector: 900 }, wide: { w: { files: 300, inspector: 500 }, last: 'files', at: 1176 } })))
+      .toEqual(layout({ w: { files: null, inspector: 900 }, wide: { last: 'files' } }));
     expect(parseLayout(JSON.stringify({ at: 1896 })).at).toBe(1896);
     for (const at of [-5, 'x', null, 0]) expect(parseLayout(JSON.stringify({ at })).at).toBeUndefined();
     expect(parseLayout(JSON.stringify({ last: 'center' })).last).toBeUndefined();
@@ -198,7 +201,7 @@ describe('loadLayout and saveLayout', () => {
   it('round-trip through localStorage under one key', () => {
     const store = new Map<string, string>();
     vi.stubGlobal('localStorage', { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => store.set(k, v) });
-    const l = layout({ w: { files: 320, inspector: 450 }, collapsed: { files: false, inspector: true }, wide: { w: { files: 320, inspector: 450 }, last: 'files' }, at: 1416 });
+    const l = layout({ w: { files: 320, inspector: 450 }, collapsed: { files: false, inspector: true }, wide: { last: 'files' }, at: 1416 });
     saveLayout(l);
     expect([...store.keys()]).toEqual([LAYOUT_KEY]);
     expect(LAYOUT_KEY).toBe('livemap:layout');

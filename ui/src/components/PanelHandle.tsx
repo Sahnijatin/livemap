@@ -1,7 +1,7 @@
 import { useEffect, useRef, type KeyboardEvent, type PointerEvent } from 'react';
 import { useStore } from '../store';
-import { PANELS, drawn, setCollapsed, shownLayout } from '../panels';
-import { LIMITS, saveLayout, type Panel, type PanelLayout } from '../panelLayout';
+import { PANELS, drawn, setCollapsed } from '../panels';
+import { LIMITS, defaultWidth, saveLayout, type Panel, type PanelLayout } from '../panelLayout';
 
 /**
  * The drag handle on a docked panel's inner edge (1080 px and wider): drag or arrow keys resize (Shift: 64 px), Home
@@ -21,11 +21,12 @@ export function PanelHandle({ panel }: { panel: Panel }) {
 
   const set = (w: number | null, save = true) => {
     const s = useStore.getState();
-    // A handle change that moves a panel ends the widened state, without a restore: the inspector keeps the width it
-    // is drawn at, or while it is hidden (not peeked) the width Widen replaced. The box is remembered: in a smaller
-    // one the inspector gives way first (fitLayout).
+    // A handle change that moves a panel ends the widened state, without a restore: a widened inspector on screen
+    // keeps the width it is drawn at; hidden, or shown by a peek (at its normal width), it keeps its own. The box is
+    // remembered: in a smaller one the inspector gives way first (fitLayout).
     const { wide, ...l } = s.layout;
-    const base = wide ? { ...l.w, inspector: shownLayout(s).collapsed.inspector ? wide.w.inspector : drawn(s).fit.inspector } : l.w;
+    const { l: shown, fit } = drawn(s);
+    const base = wide && shown.wide && !shown.collapsed.inspector ? { ...l.w, inspector: fit.inspector } : l.w;
     s.setLayout({ ...l, w: { ...base, [panel]: w }, last: panel, at: s.dock.width }, save);
   };
   /** Draws the panel at `d`, within reach; nothing happens (or is saved) when that is the width drawn now. */
@@ -90,7 +91,12 @@ export function PanelHandle({ panel }: { panel: Panel }) {
       onPointerUp={end}
       onPointerCancel={end}
       onLostPointerCapture={end}
-      onDoubleClick={() => set(null)}
+      onDoubleClick={() => {
+        // The default width, within reach: like a drag, only a width that changes is set (and ends the widened state).
+        const s = useStore.getState();
+        const { fit: f, reach: r } = drawn(s);
+        if (Math.max(min, Math.min(r[panel], defaultWidth(panel, s.dock.vw))) !== f[panel]) set(null);
+      }}
     />
   );
 }

@@ -383,6 +383,19 @@ test('the center tabs and Map tools fit a 420 px center: icon and count, the lab
   await centerHeadFits(page);
 });
 
+test('with the default panel widths every center tab keeps its label, from 1080 px up', async ({ page }) => {
+  for (const width of [1080, 1100, 1200, 1280]) {
+    await page.setViewportSize({ width, height: 800 });
+    await open(page);
+    for (const t of ['activity', 'map']) {
+      await showTab(page, t);
+      await centerHeadFits(page);
+      const shown = await page.locator('.tabs [role=tab] .tl').evaluateAll(els => els.map(el => (el as HTMLElement).offsetWidth > 0 && el.scrollWidth <= (el as HTMLElement).offsetWidth + 1));
+      expect(shown, `${width} px, ${t}`).toEqual([true, true, true, true, true]);
+    }
+  }
+});
+
 test('phone toolbar: condensed, and the Map tools live in the options menu', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 780 });
   await open(page);

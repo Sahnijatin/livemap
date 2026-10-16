@@ -363,8 +363,10 @@
   /* Never clipped: past the breakpoints below, a label shortens with an ellipsis before a tab leaves the strip. */
   .tabs [role=tab] { min-width:0; }
   .tabs .tl { min-width:0; overflow:hidden; text-overflow:ellipsis; }
-  /* Full labels need about 500 px: below 540 only the selected tab keeps its label, below 380 none does. */
-  @container c-head (max-width:539.98px) {
+  /* Full labels need about 500 px of head; tighter tabs fit them in 414 (the default widths at 1080 px leave 418).
+     Below that (a center near its 420 px minimum) only the selected tab keeps its label; below 380 none does. */
+  @container c-head (max-width:539.98px) { .tabs [role=tab] { padding:6px; gap:4px; } }
+  @container c-head (max-width:413.98px) {
     .tabs [role=tab] { padding:6px 10px; gap:6px; }
     .tabs [role=tab]:not([aria-selected="true"]) .tl { display:none; }
   }

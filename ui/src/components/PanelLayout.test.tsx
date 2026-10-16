@@ -236,14 +236,17 @@ describe('docked panels at 1080 px and wider', () => {
     expect(app().style.getPropertyValue('--right-w')).toBe('1252px');
     expect(wbtn().getAttribute('aria-label')).toBe('Restore inspector width');
     expect(wbtn().title).toBe('Restore inspector width');
-    expect(stored()).toMatchObject({ w: { files: null, inspector: 448 }, wide: { w: { files: null, inspector: 448 }, last: 'inspector' } });
+    expect(stored()).toMatchObject({ w: { files: null, inspector: 448 }, last: 'inspector', wide: { last: 'inspector' } });
     // It follows the window while widened.
     act(() => resize(1440));
     expect(now('Resize inspector')).toBe(1416 - 444 - 200);
     // In the file view too.
     act(() => useStore.getState().select('src/a.ts'));
     expect(wbtn().getAttribute('aria-label')).toBe('Restore inspector width');
+    act(() => { app().removeAttribute('data-glide'); });
     act(() => wbtn().click());
+    // Restore glides too.
+    expect(gliding()).toBe(true);
     expect([now('Resize project panel'), now('Resize inspector')]).toEqual([272, 448]);
     expect(wbtn().getAttribute('aria-label')).toBe('Widen inspector');
     expect(stored().w.inspector).toBe(448);
@@ -251,7 +254,7 @@ describe('docked panels at 1080 px and wider', () => {
   });
 
   it('a reload keeps the widened state and the width to restore', async () => {
-    localStorage.setItem(LAYOUT_KEY, JSON.stringify({ w: { inspector: 500 }, last: 'inspector', wide: { w: { files: null, inspector: 500 } } }));
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify({ w: { inspector: 500 }, last: 'inspector', wide: {} }));
     useStore.getState().reset();
     hello();
     resize(1920);
@@ -386,14 +389,16 @@ describe('docked panels at 1080 px and wider', () => {
     act(() => wbtn().click());
     act(() => btn('Hide inspector').click());
     act(() => { app().removeAttribute('data-glide'); });
-    expect(app().style.getPropertyValue('--left-w')).toBe('272px');
+    expect(app().style.getPropertyValue('--right-w')).toBe('1252px');
     const seen = new MutationObserver(() => {});
     seen.observe(app(), { attributes: true, attributeFilter: ['data-glide', 'style'] });
     // A file opened from anywhere (the activity feed, the socket) shows the collapsed, widened inspector.
     act(() => useStore.getState().select('src/a.ts'));
     const order = seen.takeRecords().map(r => r.attributeName);
     seen.disconnect();
-    expect(app().style.getPropertyValue('--left-w')).toBe('200px');
+    // Shown by a peek, it draws at its normal width.
+    expect(app().style.getPropertyValue('--right-w')).toBe('384px');
+    expect(app().style.getPropertyValue('--left-w')).toBe('272px');
     expect(order[0]).toBe('data-glide');
     expect(order).toContain('style');
   });
@@ -404,7 +409,9 @@ describe('docked panels at 1080 px and wider', () => {
     act(() => btn('Hide inspector').click());
     act(() => useStore.getState().select('src/a.ts'));
     expect(app().classList.contains('right-collapsed')).toBe(false);
+    // Widen during a peek shows the inspector for good, widened.
     act(() => wbtn().click());
+    expect(stored().collapsed.inspector).toBe(false);
     expect(now('Resize inspector')).toBe(1252);
     const files = sep('Resize project panel');
     pointer(files, 'pointerdown', 300);
@@ -413,6 +420,34 @@ describe('docked panels at 1080 px and wider', () => {
     pointer(files, 'pointerup', 310);
     expect(stored().w.inspector).toBe(1252);
     expect(stored().wide).toBeUndefined();
+  });
+
+  it('a hidden, widened inspector shown by a peek draws at its normal width: picking a file never squeezes the tree', async () => {
+    resize(1920);
+    await mount();
+    act(() => wbtn().click());
+    key(document.body, ']');
+    act(() => host.querySelector<HTMLButtonElement>('[data-file="src/a.ts"]')!.click());
+    expect(app().classList.contains('right-collapsed')).toBe(false);
+    expect([now('Resize project panel'), now('Resize inspector')]).toEqual([272, 384]);
+    const files = sep('Resize project panel');
+    pointer(files, 'pointerdown', 300);
+    pointer(files, 'pointermove', 340);
+    pointer(files, 'pointerup', 340);
+    expect([now('Resize project panel'), now('Resize inspector')]).toEqual([312, 384]);
+    expect(stored().wide).toBeUndefined();
+    expect(stored().w).toEqual({ files: 312, inspector: null });
+    key(document.body, ']');
+    key(document.body, ']');
+    expect(now('Resize inspector')).toBe(384);
+  });
+
+  it('a double-click that changes no width saves nothing', async () => {
+    await mount();
+    const before = localStorage.getItem(LAYOUT_KEY);
+    act(() => { sep('Resize inspector').dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); });
+    act(() => { sep('Resize project panel').dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); });
+    expect(localStorage.getItem(LAYOUT_KEY)).toBe(before);
   });
 
   it('Widen then Restore puts back exactly the layout it replaced (files 400, inspector 600, files resized last)', async () => {
@@ -443,7 +478,7 @@ describe('docked panels at 1080 px and wider', () => {
   });
 
   it('only the Widen button glides: a key or drag that ends the widened state does not', async () => {
-    localStorage.setItem(LAYOUT_KEY, JSON.stringify({ last: 'inspector', wide: { w: { files: null, inspector: null } } }));
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify({ last: 'inspector', wide: {} }));
     useStore.getState().reset();
     hello();
     resize(1920);
@@ -479,6 +514,7 @@ describe('docked panels at 1080 px and wider', () => {
     key(insp, 'End');
     expect(wbtn().getAttribute('aria-disabled')).toBe('true');
     expect(wbtn().title).toBe('No room to widen');
+    expect(wbtn().getAttribute('aria-label')).toBe('No room to widen');
     const before = localStorage.getItem(LAYOUT_KEY);
     act(() => wbtn().click());
     expect(localStorage.getItem(LAYOUT_KEY)).toBe(before);

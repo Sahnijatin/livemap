@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { isGated, useStore, type StoreState } from './store';
 import { NARROW_QUERY, isNarrow, isPhone } from './media';
 import { typingIn } from './keys';
-import { fitLayout, reach, restoreWide, widen, type Panel as Side, type PanelLayout } from './panelLayout';
+import { fitLayout, reach, type Panel as Side, type PanelLayout } from './panelLayout';
 
 type Panel = NonNullable<StoreState['panel']>;
 
@@ -16,9 +16,15 @@ type Shown = Pick<StoreState, 'layout' | 'peek' | 'selected' | 'files'>;
 /** A selection shows a collapsed inspector while the peeked file is the selected one and exists. */
 const peeking = (s: Shown): boolean => s.peek !== null && s.peek === s.selected && !!s.files[s.selected];
 
-/** The docked layout as drawn: the user's, with a collapsed inspector shown while peeking. Nothing here is stored. */
-export const shownLayout = (s: Shown): PanelLayout =>
-  peeking(s) && s.layout.collapsed.inspector ? { ...s.layout, collapsed: { ...s.layout.collapsed, inspector: false } } : s.layout;
+/**
+ * The docked layout as drawn: the user's, with a collapsed inspector shown while peeking, at its normal width (a
+ * widened one too: picking a file never squeezes the project panel). Nothing here is stored.
+ */
+export function shownLayout(s: Shown): PanelLayout {
+  if (!peeking(s) || !s.layout.collapsed.inspector) return s.layout;
+  const { wide: _wide, ...l } = s.layout;
+  return { ...l, collapsed: { ...l.collapsed, inspector: false } };
+}
 
 export interface Drawn { l: PanelLayout; fit: Record<Side, number>; reach: Record<Side, number> }
 let memo: { layout: PanelLayout; peek: boolean; dock: StoreState['dock']; v: Drawn } | undefined;
@@ -132,10 +138,4 @@ export function useSlideOvers(): void {
       mq?.removeEventListener?.('change', onChange);
     };
   }, []);
-}
-
-/** The Widen inspector button: widens the docked inspector, or restores the layout Widen replaced. Both glide (Dock). */
-export function toggleWide(): void {
-  const s = useStore.getState();
-  s.setLayout(s.layout.wide ? restoreWide(s.layout) : widen(s.layout));
 }

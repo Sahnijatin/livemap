@@ -1,13 +1,19 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { useStore, type StoreState } from '../store';
-import { PANELS, drawn, setCollapsed, shownLayout, toggleWide } from '../panels';
-import type { Panel, PanelLayout } from '../panelLayout';
+import { PANELS, drawn, setCollapsed, shownLayout } from '../panels';
+import { restoreWide, widen, type Panel } from '../panelLayout';
 import { PanelIcon, SidebarIcon, WidenIcon } from './icons';
 
 const collapsedOf = (p: Panel) => (s: StoreState) => shownLayout(s).collapsed[p];
 const filesCollapsed = collapsedOf('files');
 const inspectorCollapsed = collapsedOf('inspector');
+
+let glideAsked = false;
+/** Widen and Restore: the next widths written glide. */
+export function requestGlide(): void {
+  glideAsked = true;
+}
 
 /**
  * The `.app` grid. It re-renders only when a panel collapses or expands or a drag starts or ends; the column widths
@@ -24,16 +30,17 @@ export function Dock({ gated, children }: { gated: boolean; children: ReactNode 
   // then keep both current. jsdom has no layout: the box falls back to the window less its 12 px gutters.
   //
   // The glide is decided here too, the one place: when the shown collapsed state changes (a collapse, an expand, a
-  // peek) or Widen or Restore is pressed, `data-glide` goes on `.app` before the widths are written, in the same
-  // step, so the columns transition (styles.css; off for reduced motion). React never renders the attribute. It
-  // comes off when the grid's transition ends, or after the CSS duration. A window resize, a drag, a no-op collapse
-  // or a handle that ends the widened state changes none of that, so never glides; a drag also stops a glide.
+  // peek) or Widen or Restore asked for it (requestGlide), `data-glide` goes on `.app` before the widths are written,
+  // in the same step, so the columns transition (styles.css; off for reduced motion). React never renders the
+  // attribute. It comes off when the grid's transition ends, or after the CSS duration. A window resize, a drag, a
+  // no-op collapse or a handle that ends the widened state does neither, so never glides; a drag also stops one.
   useLayoutEffect(() => {
     const el = ref.current!;
     let last: unknown;
     let shape: string | undefined;
-    let prev: PanelLayout | undefined;
     let timer = 0;
+    const dur = getComputedStyle(el).getPropertyValue('--glide-dur').trim();
+    const ms = (parseFloat(dur) || 0) * (dur.endsWith('ms') ? 1 : 1000) + 100;
     const stop = () => {
       window.clearTimeout(timer);
       el.removeAttribute('data-glide');
@@ -41,20 +48,17 @@ export function Dock({ gated, children }: { gated: boolean; children: ReactNode 
     const start = () => {
       window.clearTimeout(timer);
       el.setAttribute('data-glide', '');
-      const v = getComputedStyle(el).getPropertyValue('--glide-dur').trim();
-      timer = window.setTimeout(stop, (parseFloat(v) || 0) * (v.endsWith('ms') ? 1 : 1000) + 100);
+      timer = window.setTimeout(stop, ms);
     };
     const onEnd = (e: TransitionEvent) => { if (e.target === el && e.propertyName === 'grid-template-columns') stop(); };
     el.addEventListener('transitionend', onEnd);
     const paint = (s: StoreState) => {
       const { l, fit } = drawn(s);
       const next = `${l.collapsed.files} ${l.collapsed.inspector}`;
-      // Widen, or Restore (which puts back the very widths Widen kept); not a handle ending the widened state.
-      const toggled = !!prev && !!prev.wide !== !!s.layout.wide && (!!s.layout.wide || s.layout.w === prev.wide!.w);
       if (s.dock.dragging) stop();
-      else if ((shape !== undefined && next !== shape) || toggled) start();
+      else if ((shape !== undefined && next !== shape) || glideAsked) start();
       shape = next;
-      prev = s.layout;
+      glideAsked = false;
       if (fit === last) return;
       last = fit;
       el.style.setProperty('--left-w', `${fit.files}px`);
@@ -95,6 +99,14 @@ export function CollapseButton({ panel }: { panel: Panel }) {
   );
 }
 
+/** The Widen inspector button: widens the docked inspector, or restores what Widen replaced. Both ask to glide. */
+export function toggleWide(): void {
+  const s = useStore.getState();
+  requestGlide();
+  // Widen during a peek shows the inspector for good (its widened width would squeeze the tree only while peeking).
+  s.setLayout(s.layout.wide ? restoreWide(s.layout) : widen({ ...s.layout, collapsed: shownLayout(s).collapsed }));
+}
+
 /** How close to its reach the inspector may be for Widen to still do something. */
 const WIDEN_SLACK = 24;
 
@@ -110,7 +122,7 @@ export function WidenButton() {
   const label = wide ? 'Restore inspector width' : off ? 'No room to widen' : 'Widen inspector';
   // aria-disabled, not disabled: a button that becomes disabled drops focus to the body.
   return (
-    <button type="button" className="iconbtn barbtn widebtn" aria-label={off ? 'Widen inspector' : label} title={label} aria-disabled={off || undefined} onClick={() => { if (!off) toggleWide(); }}>
+    <button type="button" className="iconbtn barbtn widebtn" aria-label={label} title={label} aria-disabled={off || undefined} onClick={() => { if (!off) toggleWide(); }}>
       <WidenIcon on={wide} />
     </button>
   );

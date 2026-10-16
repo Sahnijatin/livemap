@@ -8,14 +8,11 @@ export interface PanelLayout {
   collapsed: Record<Panel, boolean>;
   /** The panel the user resized last: when the box is too narrow, the other one gives way first. */
   last?: Panel;
-  /** The inspector is widened (drawn at its reach): what Widen replaced, which Restore puts back. */
-  wide?: Snapshot;
+  /** The inspector is widened (drawn at its reach): the panel resized last before Widen, which Restore puts back. */
+  wide?: { last?: Panel };
   /** The `.app` box width when a handle last set a width: in a smaller box the inspector gives way first. */
   at?: number;
 }
-
-/** The part of a layout Widen replaces and Restore puts back. */
-export type Snapshot = Pick<PanelLayout, 'w' | 'last' | 'at'>;
 
 export const LAYOUT_KEY = 'livemap:layout';
 /** The inspector has no fixed maximum: it reaches as far as the center minimum and the project panel's minimum allow. */
@@ -67,13 +64,13 @@ export function fitLayout(l: PanelLayout, width: number, vw: number): Record<Pan
 }
 
 /** Widens the inspector: the handle in use wins, so the project panel gives way. Remembers what Restore puts back. */
-export const widen = (l: PanelLayout): PanelLayout => ({ ...l, last: 'inspector', wide: { w: l.w, last: l.last, at: l.at } });
+export const widen = (l: PanelLayout): PanelLayout => ({ ...l, last: 'inspector', wide: { last: l.last } });
 
-/** Puts back the layout Widen replaced. */
+/** Puts back the layout Widen replaced (widths and box are never changed by it). */
 export function restoreWide(l: PanelLayout): PanelLayout {
   if (!l.wide) return l;
-  const { wide, last: _last, at: _at, ...rest } = l;
-  return { ...rest, ...wide };
+  const { wide, last: _last, ...rest } = l;
+  return wide.last ? { ...rest, last: wide.last } : rest;
 }
 
 /** The widest `p` can be drawn in this box: its limit, or what the center minimum and the other panel at its minimum leave. */
@@ -87,14 +84,7 @@ const readW = (p: Panel, w: unknown): number | null => (typeof w === 'number' &&
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
-/** Widths, the panel resized last and the box, read from a stored layout or from its Widen snapshot. */
-function readSnapshot(v: Record<string, unknown>): Snapshot {
-  const w = isRecord(v.w) ? v.w : {};
-  const out: Snapshot = { w: { files: readW('files', w.files), inspector: readW('inspector', w.inspector) } };
-  if (v.last === 'files' || v.last === 'inspector') out.last = v.last;
-  if (typeof v.at === 'number' && Number.isFinite(v.at) && v.at > 0) out.at = Math.round(v.at);
-  return out;
-}
+const readLast = (v: unknown): Panel | undefined => (v === 'files' || v === 'inspector' ? v : undefined);
 
 /** A stored layout; anything unreadable falls back to the defaults, widths are clamped to their limits. */
 export function parseLayout(raw: string | null): PanelLayout {
@@ -105,9 +95,17 @@ export function parseLayout(raw: string | null): PanelLayout {
     return emptyLayout();
   }
   if (!isRecord(v)) return emptyLayout();
+  const w = isRecord(v.w) ? v.w : {};
   const collapsed = isRecord(v.collapsed) ? v.collapsed : {};
-  const l: PanelLayout = { ...readSnapshot(v), collapsed: { files: collapsed.files === true, inspector: collapsed.inspector === true } };
-  if (isRecord(v.wide)) l.wide = readSnapshot(v.wide);
+  const l: PanelLayout = { w: { files: readW('files', w.files), inspector: readW('inspector', w.inspector) }, collapsed: { files: collapsed.files === true, inspector: collapsed.inspector === true } };
+  const last = readLast(v.last);
+  if (last) l.last = last;
+  if (typeof v.at === 'number' && Number.isFinite(v.at) && v.at > 0) l.at = Math.round(v.at);
+  // An older saved shape also held widths and a box: only its `last` is read.
+  if (isRecord(v.wide)) {
+    const before = readLast(v.wide.last);
+    l.wide = before ? { last: before } : {};
+  }
   return l;
 }
 
