@@ -6,6 +6,7 @@ import { LIMITS, saveLayout, type Panel, type PanelLayout } from '../panelLayout
 /**
  * The drag handle on a docked panel's inner edge (1080 px and wider): drag or arrow keys resize (Shift: 64 px), Home
  * and End go to the minimum and to the widest the box allows, Enter collapses, a double-click restores the default.
+ * A handle change that moves a panel ends the widened state (see WidenButton); an input that moves nothing keeps it.
  * What the user sees is what is stored: the panel's drawn width, and it becomes the panel the other gives way to.
  * A drag saves once, when it ends; a lost pointer capture or a window blur ends it too.
  */
@@ -20,7 +21,13 @@ export function PanelHandle({ panel }: { panel: Panel }) {
 
   const set = (w: number | null, save = true) => {
     const s = useStore.getState();
-    s.setLayout({ ...s.layout, w: { ...s.layout.w, [panel]: w }, last: panel }, save);
+    // A handle change that moves a panel ends the widened state, without a restore: a widened inspector on screen
+    // keeps the width it is drawn at; hidden, or shown by a peek (at its normal width), it keeps its own. The box is
+    // remembered: in a smaller one the inspector gives way first (fitLayout).
+    const { wide, ...l } = s.layout;
+    const { l: shown, fit } = drawn(s);
+    const base = wide && shown.wide && !shown.collapsed.inspector ? { ...l.w, inspector: fit.inspector } : l.w;
+    s.setLayout({ ...l, w: { ...base, [panel]: w }, last: panel, at: s.dock.width }, save);
   };
   /** Draws the panel at `d`, within reach; nothing happens (or is saved) when that is the width drawn now. */
   const draw = (d: number, save = true) => {
@@ -84,7 +91,8 @@ export function PanelHandle({ panel }: { panel: Panel }) {
       onPointerUp={end}
       onPointerCancel={end}
       onLostPointerCapture={end}
-      onDoubleClick={() => set(null)}
+      // Back to the default width when a width is stored (which also ends the widened state); nothing otherwise.
+      onDoubleClick={() => { if (useStore.getState().layout.w[panel] !== null) set(null); }}
     />
   );
 }

@@ -55,6 +55,8 @@ describe('CenterTabs', () => {
     mount();
     const tabs = [...host.querySelectorAll('[role=tablist] [role=tab]')].map(t => t.getAttribute('aria-label'));
     expect(tabs).toEqual(['Activity', 'Map, 2', 'Schema, 2', 'API, 3', 'Stack']);
+    // A narrow center shows icons and counts only: each label stays as the tooltip.
+    expect([...host.querySelectorAll('[role=tablist] [role=tab]')].map(t => t.getAttribute('title'))).toEqual(['Activity', 'Map', 'Schema', 'API', 'Stack']);
     expect(tab('map').querySelector('.cnt')!.textContent).toBe('2');
     expect(tab('activity').getAttribute('aria-selected')).toBe('true');
     expect(host.querySelector('[role=tabpanel]')?.getAttribute('aria-labelledby')).toBe(tab('activity').id);
