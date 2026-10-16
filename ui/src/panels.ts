@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { isGated, useStore, type StoreState } from './store';
 import { NARROW_QUERY, isNarrow, isPhone } from './media';
 import { typingIn } from './keys';
-import { fitLayout, reach, type Panel as Side, type PanelLayout } from './panelLayout';
+import { fitLayout, reach, restoreWide, type Panel as Side, type PanelLayout } from './panelLayout';
 
 type Panel = NonNullable<StoreState['panel']>;
 
@@ -18,11 +18,11 @@ const peeking = (s: Shown): boolean => s.peek !== null && s.peek === s.selected 
 
 /**
  * The docked layout as drawn: the user's, with a collapsed inspector shown while peeking, at its normal width (a
- * widened one too: picking a file never squeezes the project panel). Nothing here is stored.
+ * widened one too, drawn as before Widen: picking a file never squeezes the project panel). Nothing here is stored.
  */
 export function shownLayout(s: Shown): PanelLayout {
   if (!peeking(s) || !s.layout.collapsed.inspector) return s.layout;
-  const { wide: _wide, ...l } = s.layout;
+  const l = restoreWide(s.layout);
   return { ...l, collapsed: { ...l.collapsed, inspector: false } };
 }
 

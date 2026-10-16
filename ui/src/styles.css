@@ -20,6 +20,8 @@
        damping 32: about 1% overshoot) over .4s; --layout-glide samples LAYOUT (critically damped) over .45s. */
     --spring-gentle:linear(0, .061, .198, .359, .515, .651, .761, .846, .908, .95, .978, .996, 1.005, 1.01, 1.011, 1.01, 1.009, 1.007, 1.005, 1.004, 1);
     --layout-glide:linear(0, .08, .24, .408, .557, .677, .769, .837, .887, .922, .947, .964, .976, .984, .989, .993, .995, .997, 1);
+    /* The docked columns' glide (Dock reads it once at mount, at any width). */
+    --glide-dur:.45s;
     /* Code colors (Shiki css-variables theme) mapped onto the prototype palette. */
     --shiki-foreground:var(--ink); --shiki-background:transparent;
     --shiki-token-keyword:var(--pink); --shiki-token-function:var(--blue); --shiki-token-string:var(--green);
@@ -945,7 +947,7 @@
      expands, or the inspector widens or restores. */
   .rz { display:none; }
   @media (min-width:1080px) {
-    .app { --dl:272px; --dr:384px; --lc:calc(var(--left-w,var(--dl)) + 12px); --rc:calc(var(--right-w,var(--dr)) + 12px); grid-template-columns:var(--lc) minmax(0,1fr) var(--rc); column-gap:0; --glide-dur:.45s; }
+    .app { --dl:272px; --dr:384px; --lc:calc(var(--left-w,var(--dl)) + 12px); --rc:calc(var(--right-w,var(--dr)) + 12px); grid-template-columns:var(--lc) minmax(0,1fr) var(--rc); column-gap:0; }
     .app[data-glide] { transition:grid-template-columns var(--glide-dur) var(--layout-glide); }
     .app.left-collapsed { --lc:0px; }
     .app.right-collapsed { --rc:0px; }

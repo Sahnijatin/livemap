@@ -396,6 +396,21 @@ test('with the default panel widths every center tab keeps its label, from 1080 
   }
 });
 
+test('loaded at 900 px and widened to 1400, a collapse glides for the full CSS duration', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 800 });
+  await open(page);
+  await page.setViewportSize({ width: 1400, height: 800 });
+  await expect(page.getByRole('button', { name: 'Hide project panel' })).toBeVisible();
+  await page.waitForTimeout(300);
+  const glide = await page.evaluate(async () => {
+    const app = document.querySelector('.app')!;
+    document.querySelector<HTMLButtonElement>('button[aria-label="Hide project panel"]')!.click();
+    await new Promise(r => setTimeout(r, 250));
+    return { on: app.hasAttribute('data-glide'), dur: getComputedStyle(app).getPropertyValue('--glide-dur').trim() };
+  });
+  expect(glide).toEqual({ on: true, dur: '.45s' });
+});
+
 test('phone toolbar: condensed, and the Map tools live in the options menu', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 780 });
   await open(page);

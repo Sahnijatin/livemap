@@ -1,7 +1,7 @@
 import { useEffect, useRef, type KeyboardEvent, type PointerEvent } from 'react';
 import { useStore } from '../store';
 import { PANELS, drawn, setCollapsed } from '../panels';
-import { LIMITS, defaultWidth, saveLayout, type Panel, type PanelLayout } from '../panelLayout';
+import { LIMITS, saveLayout, type Panel, type PanelLayout } from '../panelLayout';
 
 /**
  * The drag handle on a docked panel's inner edge (1080 px and wider): drag or arrow keys resize (Shift: 64 px), Home
@@ -91,12 +91,8 @@ export function PanelHandle({ panel }: { panel: Panel }) {
       onPointerUp={end}
       onPointerCancel={end}
       onLostPointerCapture={end}
-      onDoubleClick={() => {
-        // The default width, within reach: like a drag, only a width that changes is set (and ends the widened state).
-        const s = useStore.getState();
-        const { fit: f, reach: r } = drawn(s);
-        if (Math.max(min, Math.min(r[panel], defaultWidth(panel, s.dock.vw))) !== f[panel]) set(null);
-      }}
+      // Back to the default width when a width is stored (which also ends the widened state); nothing otherwise.
+      onDoubleClick={() => { if (useStore.getState().layout.w[panel] !== null) set(null); }}
     />
   );
 }

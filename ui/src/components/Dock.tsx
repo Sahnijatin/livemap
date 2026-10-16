@@ -9,10 +9,12 @@ const collapsedOf = (p: Panel) => (s: StoreState) => shownLayout(s).collapsed[p]
 const filesCollapsed = collapsedOf('files');
 const inspectorCollapsed = collapsedOf('inspector');
 
-let glideAsked = false;
-/** Widen and Restore: the next widths written glide. */
+/** When Widen or Restore asked for a glide: valid for the widths written within a frame or so. */
+let glideAsked = -Infinity;
+const ASK_MS = 50;
+/** Widen and Restore: the widths written next (within about a frame) glide. */
 export function requestGlide(): void {
-  glideAsked = true;
+  glideAsked = performance.now();
 }
 
 /**
@@ -52,13 +54,19 @@ export function Dock({ gated, children }: { gated: boolean; children: ReactNode 
     };
     const onEnd = (e: TransitionEvent) => { if (e.target === el && e.propertyName === 'grid-template-columns') stop(); };
     el.addEventListener('transitionend', onEnd);
+    let seen: unknown[] = [];
     const paint = (s: StoreState) => {
+      // Only what the drawn layout depends on (see drawn); any other store change returns here.
+      const deps = [s.layout, s.peek, s.selected, s.dock, s.selected !== null && !!s.files[s.selected]];
+      if (deps.every((d, i) => d === seen[i])) return;
+      seen = deps;
       const { l, fit } = drawn(s);
       const next = `${l.collapsed.files} ${l.collapsed.inspector}`;
+      const asked = performance.now() - glideAsked < ASK_MS;
       if (s.dock.dragging) stop();
-      else if ((shape !== undefined && next !== shape) || glideAsked) start();
+      else if ((shape !== undefined && next !== shape) || asked) start();
       shape = next;
-      glideAsked = false;
+      if (asked) glideAsked = -Infinity;
       if (fit === last) return;
       last = fit;
       el.style.setProperty('--left-w', `${fit.files}px`);
@@ -103,8 +111,10 @@ export function CollapseButton({ panel }: { panel: Panel }) {
 export function toggleWide(): void {
   const s = useStore.getState();
   requestGlide();
-  // Widen during a peek shows the inspector for good (its widened width would squeeze the tree only while peeking).
-  s.setLayout(s.layout.wide ? restoreWide(s.layout) : widen({ ...s.layout, collapsed: shownLayout(s).collapsed }));
+  // What is drawn decides: a peek of a hidden, widened inspector draws it as before Widen, so this widens it again
+  // and shows it for good (its widened width would otherwise squeeze the tree only while peeking).
+  const shown = drawn(s).l;
+  s.setLayout(shown.wide ? restoreWide(s.layout) : widen({ ...restoreWide(s.layout), collapsed: shown.collapsed }));
 }
 
 /** How close to its reach the inspector may be for Widen to still do something. */
@@ -116,7 +126,7 @@ const WIDEN_SLACK = 24;
  * the widened state, without a restore.
  */
 export function WidenButton() {
-  const wide = useStore(s => !!s.layout.wide);
+  const wide = useStore(s => !!drawn(s).l.wide);
   const full = useStore(s => { const { fit, reach } = drawn(s); return fit.inspector >= reach.inspector - WIDEN_SLACK; });
   const off = !wide && full;
   const label = wide ? 'Restore inspector width' : off ? 'No room to widen' : 'Widen inspector';
