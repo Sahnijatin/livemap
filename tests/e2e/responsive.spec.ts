@@ -306,6 +306,55 @@ test('at 1920 px Widen inspector fills the room beside the center, survives a re
   await expect(wide).toHaveCount(0);
 });
 
+/** Every center tab and Map tool lies whole inside the center column and its head, with nothing scrolled or clipped. */
+async function centerHeadFits(page: Page) {
+  const r = await page.evaluate(() => {
+    const box = (el: Element) => el.getBoundingClientRect();
+    const center = box(document.querySelector('main.center')!);
+    const head = document.querySelector('.c-head')!;
+    const tabs = document.querySelector('.tabs')!;
+    const inside = (el: Element) => { const b = box(el); return b.width > 0 && b.left >= center.left - 0.5 && b.right <= center.right + 0.5 && b.left >= box(head).left - 0.5 && b.right <= box(head).right + 0.5; };
+    const items = [...document.querySelectorAll('.tabs [role=tab], .c-tools > *')];
+    return {
+      outside: items.filter(el => !inside(el)).map(el => el.getAttribute('aria-label') ?? el.className),
+      tabsInside: [...tabs.querySelectorAll('[role=tab]')].every(el => box(el).left >= box(tabs).left - 0.5 && box(el).right <= box(tabs).right + 0.5),
+      scrolled: [head, tabs].some(el => el.scrollWidth > el.clientWidth + 1),
+      center: Math.round(center.width),
+    };
+  });
+  expect(r.outside).toEqual([]);
+  expect(r.tabsInside).toBe(true);
+  expect(r.scrolled).toBe(false);
+  return r.center;
+}
+
+test('the center tabs and Map tools fit a 420 px center: icon and count, the label as tooltip and name', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await open(page);
+  const labels = page.locator('.tabs [role=tab] .tl');
+  await expect(labels.first()).toBeVisible();
+  await page.getByRole('button', { name: 'Widen inspector' }).click();
+  await expect.poll(async () => Math.round((await page.locator('main.center').boundingBox())!.width)).toBe(420);
+  for (const t of ['activity', 'map', 'schema', 'api', 'stack']) {
+    await showTab(page, t);
+    expect(await centerHeadFits(page)).toBe(420);
+    await expect(tab(page, t)).toBeInViewport({ ratio: 1 });
+  }
+  // Labels are hidden but still name each tab, and show as a tooltip.
+  await expect(tab(page, 'schema').locator('.tl')).toBeHidden();
+  await expect(tab(page, 'schema')).toHaveAttribute('title', 'Schema');
+  await expect(tab(page, 'api')).toHaveAccessibleName(/^API, \d+/);
+  // At 1080 px with the default widths the center is 444 px: the same holds.
+  await page.getByRole('button', { name: 'Widen inspector' }).click();
+  await page.setViewportSize({ width: 1080, height: 800 });
+  await showTab(page, 'map');
+  expect(await centerHeadFits(page)).toBe(444);
+  // At 1440 px every label shows again.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect.poll(() => labels.evaluateAll(els => els.every(el => (el as HTMLElement).offsetWidth > 0))).toBe(true);
+  await centerHeadFits(page);
+});
+
 test('phone toolbar: condensed, and the Map tools live in the options menu', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 780 });
   await open(page);

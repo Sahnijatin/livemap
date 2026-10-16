@@ -138,6 +138,7 @@ export function CenterTabs() {
               id={`tab-${t}`}
               data-tab={t}
               aria-label={badge[t] !== undefined ? `${META[t].label}, ${badge[t]!.toLocaleString()}` : META[t].label}
+              title={META[t].label}
               aria-selected={t === tab}
               aria-controls="center-panel"
               tabIndex={t === tab ? 0 : -1}
