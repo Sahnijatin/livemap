@@ -37,9 +37,13 @@ export function cachedTags(file: FileModel, change: ChangeSummary): Map<string, 
   return tags;
 }
 
-export const symKey = (path: string, s: CodeSymbol): string => `${path}#${s.qname}:${s.line}`;
-export const dirKey = (dir: string): string => `dir:${dir}`;
-export const moreKey = (dir: string): string => `more:${dir}`;
+/**
+ * Row ids for keyboard focus. A file's id is its path; folder, "Show more" and symbol ids carry a NUL, which no POSIX
+ * path can hold, so no file name can collide with them.
+ */
+export const symKey = (path: string, s: CodeSymbol): string => `${path}\0s\0${s.qname}:${s.line}`;
+export const dirKey = (dir: string): string => `\0d\0${dir}`;
+export const moreKey = (dir: string): string => `\0m\0${dir}`;
 
 const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 /** Case-insensitive natural order (item2 before item10); names that differ only by case keep a fixed order. */
@@ -166,7 +170,7 @@ export function visibleItems(
   rowOpen: (row: Row) => boolean,
   dirLimit: ReadonlyMap<string, number>,
   pins: Iterable<string> = [],
-): { items: Item[]; navKeys: string[]; rendered: number } {
+): { items: Item[]; navKeys: string[] } {
   const pinned = new Set(pins);
   const pinnedDirs = new Set<string>();
   for (const p of pinned) for (const d of ancestors(p)) pinnedDirs.add(d);
@@ -199,7 +203,6 @@ export function visibleItems(
   // Pass 2, depth first: the rows in display order.
   const items: Item[] = [];
   const navKeys: string[] = [];
-  let rendered = 0;
   const walk = (node: DirNode, level: number, up: string | null) => {
     const { dirsShown, filesShown, subs } = plans.get(node)!;
     let extra = 0;
@@ -222,7 +225,6 @@ export function visibleItems(
       navKeys.push(row.file.path);
       if (ro) for (const { sym } of row.symbols) navKeys.push(symKey(row.file.path, sym));
     }
-    rendered += filesShown + extraFiles;
     const shown = dirsShown + filesShown;
     const total = node.dirs.length + node.rows.length;
     if (shown + extra + extraFiles < total) {
@@ -231,7 +233,7 @@ export function visibleItems(
     }
   };
   walk(root, 1, null);
-  return { items, navKeys, rendered };
+  return { items, navKeys };
 }
 
 /** Names up to this long are not split; a split end is at most this long. */

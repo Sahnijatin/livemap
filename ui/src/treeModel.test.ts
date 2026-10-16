@@ -3,7 +3,7 @@ import type { FileModel } from '@shared/types.js';
 import { file, sym } from './fixtures';
 import {
   ROW_BUDGET, DIR_BATCH, ancestors, buildTree, chainOf, closedAbove, chainOpen, compareNames, dirActivity, loadTreeState, parseTreeState,
-  saveTreeState, serializeTreeState, splitName, treeKey, visibleItems, type DirNode, type Item,
+  saveTreeState, serializeTreeState, dirKey, moreKey, symKey, splitName, treeKey, visibleItems, type DirNode, type Item,
 } from './treeModel';
 
 /** Slower CI runners scale wall-clock budgets (LIVEMAP_TIME_SCALE, set by CI on macOS and Windows). */
@@ -152,9 +152,19 @@ describe('visibleItems', () => {
     const { root } = tree(['a/b/c.ts', 'a/d.ts', 'e.ts']);
     const { items: list, navKeys } = visibleItems(root, allOpen, () => false, new Map());
     expect(list.map(i => [label(i).trim(), i.level, i.kind === 'more' ? null : i.up])).toEqual([
-      ['a/', 1, null], ['b/', 2, 'dir:a'], ['a/b/c.ts', 3, 'dir:a/b'], ['a/d.ts', 2, 'dir:a'], ['e.ts', 1, null],
+      ['a/', 1, null], ['b/', 2, dirKey('a')], ['a/b/c.ts', 3, dirKey('a/b')], ['a/d.ts', 2, dirKey('a')], ['e.ts', 1, null],
     ]);
-    expect(navKeys).toEqual(['dir:a', 'dir:a/b', 'a/b/c.ts', 'a/d.ts', 'e.ts']);
+    expect(navKeys).toEqual([dirKey('a'), dirKey('a/b'), 'a/b/c.ts', 'a/d.ts', 'e.ts']);
+  });
+
+  it('keeps folder, more and symbol ids apart from any file path', () => {
+    // A NUL cannot appear in a POSIX path, so no file can be named like an id.
+    for (const k of [dirKey('src'), moreKey('src'), symKey('src/a.ts', sym('f'))]) expect(k).toContain('\0');
+    expect(dirKey('src')).not.toBe(moreKey('src'));
+    const { root } = tree(['dir:src', 'more:src', 'src/a.ts']);
+    const { navKeys } = visibleItems(root, allOpen, () => false, new Map());
+    expect(new Set(navKeys).size).toBe(navKeys.length);
+    expect(Object.keys(visibleItems(root, allOpen, () => false, new Map())).sort()).toEqual(['items', 'navKeys']);
   });
 });
 

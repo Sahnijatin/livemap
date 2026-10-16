@@ -13,6 +13,7 @@ import {
   saveTreeState, visibleItems, type Activity, type DirState, type Item, type Row,
 } from '../treeModel';
 import { FileRow, MidName } from './FileRow';
+import type { KeyPress, TreeKeyContext } from './treeKeys';
 import { CollapseButton } from './Dock';
 import { usePrefersReducedMotion } from '../motion';
 import { Chevron, SearchIcon } from './icons';
@@ -36,28 +37,33 @@ const edit = (set: ReadonlySet<string>, add: readonly string[], del: readonly st
   for (const d of del) next.delete(d);
   return next;
 };
-/** Folder state read from storage, which needs no write back. */
-const fromStorage = new WeakSet<object>();
 /** Own keys only: a file named `constructor` is not a stored entry. */
 const own = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
-const loadDirs = (root: string): DirState => {
-  const open = loadTreeState(root);
-  fromStorage.add(open);
-  return open;
-};
 /** A closed folder's activity dot: its label, and the title as "A file in this folder <title>". */
 const ACTIVITY: Record<Activity, [string, string]> = { now: ['being written', 'is being written'], edited: ['edited', 'was edited'], new: ['new', 'is new'] };
 /**
  * This session's folder overrides, never saved: `picked` folders opened to show a file the user selected,
  * `closed` folders the user closed (the agent's reveals leave them shut), and `agentAt` the agent file being shown.
  */
-type Session = { root: string; picked: ReadonlySet<string>; closed: ReadonlySet<string>; agentAt: string | null };
-const newSession = (root: string): Session => ({ root, picked: NO_DIRS, closed: NO_DIRS, agentAt: null });
+type Session = { picked: ReadonlySet<string>; closed: ReadonlySet<string>; agentAt: string | null };
 type Moving = { kind: 'fold' | 'unfold'; until: number; rows: Item[] };
 
-/** The tree's key handling, a chunk of its own that loads after first paint. Tests await it. */
-let keys: typeof import('./treeKeys') | null = null;
-export const loadTreeKeys = (): Promise<unknown> => import('./treeKeys').then(m => { keys = m; });
+type KeysModule = typeof import('./treeKeys');
+/** The tree's key handling, a chunk of its own that loads after first paint. */
+let keys: KeysModule | null = null;
+let loading: Promise<KeysModule | null> | null = null;
+/** How the key chunk is fetched (tests swap it), and `reset` to forget it. */
+export const treeKeysLoader = {
+  load: (): Promise<KeysModule> => import('./treeKeys'),
+  reset(): void { keys = null; loading = null; },
+};
+/** The key handler, loading it once; a failed load resolves null and the next call tries again. */
+export function loadTreeKeys(): Promise<KeysModule | null> {
+  if (keys) return Promise.resolve(keys);
+  return (loading ??= treeKeysLoader.load().then(m => (keys = m), () => { loading = null; return null; }));
+}
+/** Keys pressed while the handler loads, replayed in order once it has. */
+const MAX_QUEUED = 20;
 
 /** A string as a quoted CSS attribute value; any path (newlines included) yields a valid selector. */
 const attr = (s: string): string => (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&').replace(/\n/g, '\\a '));
@@ -84,15 +90,12 @@ export function FileTree() {
   const [reveal, setReveal] = useState<string | null>(null);
   const treeRef = useRef<HTMLDivElement>(null);
   const born = useRef(new Map<string, number>());
-  const typed = useRef({ text: '', at: 0 });
   const [focused, setFocused] = useState<string | null>(null);
+  // App keys this component by project, so every piece of state here belongs to one project.
   // Folders the user opened or closed, by full path, remembered per project. Folders without an entry follow the defaults.
-  const [dirs, setDirs] = useState(() => ({ root: projectRoot, open: loadDirs(projectRoot) }));
-  const [session, setSession] = useState(() => newSession(projectRoot));
-  if (dirs.root !== projectRoot) {
-    setDirs({ root: projectRoot, open: loadDirs(projectRoot) });
-    setSession(newSession(projectRoot));
-  }
+  const [dirs, setDirs] = useState<DirState>(() => loadTreeState(projectRoot));
+  const loaded = useRef(dirs);
+  const [session, setSession] = useState<Session>({ picked: NO_DIRS, closed: NO_DIRS, agentAt: null });
   /** Folders closed while a filter is on; forgotten with the filter. */
   const [filterClosed, setFilterClosed] = useState<{ q: string; dirs: ReadonlySet<string> }>({ q: '', dirs: NO_DIRS });
   const reduced = usePrefersReducedMotion();
@@ -105,21 +108,22 @@ export function FileTree() {
   const closedNow = filterClosed.q === q ? filterClosed.dirs : NO_DIRS;
   const { root: tree, layers } = useMemo(() => buildTree(files, q), [files, q]);
   const fileCount = useMemo(() => Object.keys(files).length, [files]);
-  // Big or not is decided once per project, so crossing 2,000 files mid-session leaves the folders alone.
-  const [bigFor, setBigFor] = useState<{ root: string; big: boolean } | null>(null);
-  if (fileCount > 0 && bigFor?.root !== projectRoot) setBigFor({ root: projectRoot, big: fileCount >= BIG_PROJECT });
-  const big = bigFor?.root === projectRoot ? bigFor.big : fileCount >= BIG_PROJECT;
-  const state = dirs.open;
+  // Big or not is decided once, when the first index has finished, so later growth leaves the folders alone.
+  const indexing = useStore(s => s.indexing !== null);
+  const [bigAt, setBigAt] = useState<boolean | null>(null);
+  if (bigAt === null && !indexing && fileCount > 0) setBigAt(fileCount >= BIG_PROJECT);
+  const big = bigAt ?? fileCount >= BIG_PROJECT;
+  const state = dirs;
 
-  const pending = useRef<{ root: string; open: DirState } | null>(null);
+  const pending = useRef<DirState | null>(null);
   const flush = useCallback(() => {
     const p = pending.current;
     pending.current = null;
-    if (p) saveTreeState(p.root, p.open);
-  }, []);
+    if (p) saveTreeState(projectRoot, p);
+  }, [projectRoot]);
   useEffect(() => {
-    if (fromStorage.has(dirs.open)) { flush(); return; } // another project loaded: save the last one's choices now
-    pending.current = { root: dirs.root, open: dirs.open };
+    if (dirs === loaded.current) return; // as read from storage: nothing to write back
+    pending.current = dirs;
     const t = window.setTimeout(flush, SAVE_MS);
     return () => window.clearTimeout(t);
   }, [dirs, flush]);
@@ -127,8 +131,8 @@ export function FileTree() {
     window.addEventListener('pagehide', flush);
     return () => { window.removeEventListener('pagehide', flush); flush(); };
   }, [flush]);
-  const latest = useRef({ state, big });
-  latest.current = { state, big };
+  const latest = useRef({ state, big, closed: session.closed });
+  latest.current = { state, big, closed: session.closed };
   /** Shows a file the user selected: opens the closed folders above it for this session, even ones they closed. */
   const showPicked = useCallback((path: string) => {
     const above = ancestors(path);
@@ -142,10 +146,10 @@ export function FileTree() {
   }, []);
   // The agent's file shows its folders until the agent moves on; folders the user closed this session stay shut.
   const agentDirs = useMemo(() => {
-    const at = session.root === projectRoot ? session.agentAt : null;
+    const at = session.agentAt;
     if (at === null) return NO_DIRS;
     return edit(NO_DIRS, closedAbove(at, state, big, session.picked).filter(a => !session.closed.has(a)));
-  }, [session, projectRoot, state, big]);
+  }, [session, state, big]);
   const revealed = useMemo(() => (agentDirs.size ? edit(session.picked, [...agentDirs]) : session.picked), [session.picked, agentDirs]);
 
   const activity = useMemo(() => dirActivity(live, targetPath), [live, targetPath]);
@@ -160,21 +164,25 @@ export function FileTree() {
   // During the hold after a user scroll the latest target waits, and is revealed when the hold ends.
   const [holdEnded, setHoldEnded] = useState(0);
   useEffect(() => {
-    if (targetPath === null) return;
+    // An idle agent shows nothing: the folders only it opened close, as when it moves on.
+    if (targetPath === null) { setSession(s => (s.agentAt === null ? s : { ...s, agentAt: null })); return; }
     const wait = userScrolledAt.current + USER_SCROLL_HOLD_MS - Date.now();
     if (wait > 0) {
       const t = window.setTimeout(() => setHoldEnded(n => n + 1), wait);
       return () => window.clearTimeout(t);
     }
     setSession(s => (s.agentAt === targetPath ? s : { ...s, agentAt: targetPath }));
-    setReveal(targetPath);
+    // No scroll to a file inside a folder the user closed: its row stays hidden.
+    if (!ancestors(targetPath).some(a => latest.current.closed.has(a))) setReveal(targetPath);
   }, [targetPath, holdEnded]);
-  // A file selected anywhere (Map, palette, Activity, inspector) is revealed here too.
+  // Each selection (Map, palette, Activity, inspector, or this tree) is revealed, the same file again included.
+  const selects = useStore(s => s.selects);
   useEffect(() => {
-    if (selected === null) return;
-    showPicked(selected);
-    setReveal(selected);
-  }, [selected, showPicked]);
+    const path = useStore.getState().selected;
+    if (path === null) return;
+    showPicked(path);
+    setReveal(path);
+  }, [selects, showPicked]);
   const rowOpen = useCallback((row: Row) => row.forceOpen || (own(expanded, row.file.path) && expanded[row.file.path]), [expanded]);
   const pins = useMemo(() => {
     const out = Object.keys(live);
@@ -219,8 +227,8 @@ export function FileTree() {
   useEffect(() => {
     if (reveal === null) return;
     const el = treeRef.current?.querySelector<HTMLElement>(`[data-file="${attr(reveal)}"]`);
-    if (!el) { if (q) setReveal(null); return; } // a filter that hides the row cancels the reveal
-    setReveal(null);
+    setReveal(null); // a row that did not show (hidden by a filter, or not in the tree) is not waited for
+    if (!el) return;
     selfScrollUntil.current = Date.now() + SELF_SCROLL_MS;
     el.scrollIntoView?.({ block: 'nearest', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   }, [reveal, items, q]);
@@ -264,9 +272,9 @@ export function FileTree() {
     } else {
       // A chain opens and closes as a whole, so each of its folders keeps the state when the chain splits.
       setDirs(d => {
-        const next = new Map(d.open);
+        const next = new Map(d);
         for (const p of chain) { next.delete(p); next.set(p, !open); } // re-added last: the newest choices are kept longest
-        return { root: d.root, open: next };
+        return next;
       });
       // The user's choice replaces a reveal, and a close holds against the agent for the session.
       setSession(s => ({
@@ -285,14 +293,27 @@ export function FileTree() {
   };
 
   useEffect(() => { void loadTreeKeys(); }, []);
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => keys?.treeKeyDown(e, {
+  const keyCtx = useRef<TreeKeyContext | null>(null);
+  keyCtx.current = {
     navKeys,
     navSet,
     items: openItems,
-    focus: k => treeRef.current?.querySelector<HTMLElement>(`[data-nav="${attr(k)}"]`)?.focus(),
+    // Ids hold a NUL, which a CSS selector cannot match, so rows are found by comparing.
+    focus: k => [...(treeRef.current?.querySelectorAll<HTMLElement>('[data-nav]') ?? [])].find(e => e.dataset.nav === k)?.focus(),
     toggle: el => (el.dataset.dir !== undefined ? toggleDir(el.dataset.dir) : onToggle(el.dataset.file!)),
-    typed: typed.current,
-  });
+  };
+  const queued = useRef<KeyPress[]>([]);
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (keys) return keys.treeKeyDown(e, keyCtx.current!);
+    // Not loaded yet (or it failed: this retries): keep the key, and keep arrows from scrolling meanwhile.
+    if (queued.current.push({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, preventDefault() {} }) > MAX_QUEUED) queued.current.shift();
+    if (/^(Arrow|Home$|End$)/.test(e.key)) e.preventDefault();
+    void loadTreeKeys().then(m => {
+      const replay = queued.current.splice(0);
+      // Replayed only while focus is still in the tree.
+      if (m) for (const k of replay) if (treeRef.current?.contains(document.activeElement)) m.treeKeyDown(k, keyCtx.current!);
+    });
+  };
 
   const animateFrom = helloAt + 1000;
   const now = Date.now();
@@ -364,7 +385,7 @@ export function FileTree() {
         target={path === targetPath}
         pop={now - born.current.get(path)! < POP_MS}
         tags={change ? cachedTags(row.file, change) : EMPTY_TAGS}
-        activeKey={active !== null && (active === path || active.startsWith(`${path}#`)) ? active : null}
+        activeKey={active !== null && (active === path || active.startsWith(`${path}\0`)) ? active : null}
         onSelect={onSelect}
         onToggle={onToggle}
         onSymbol={onSymbol}

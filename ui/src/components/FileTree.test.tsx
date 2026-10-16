@@ -4,9 +4,9 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../store';
 import { file, sym, change, emptyDomain, event, session } from '../fixtures';
-import { FileTree, loadTreeKeys } from './FileTree';
+import { FileTree, loadTreeKeys, treeKeysLoader } from './FileTree';
 import { rowRenderProbe } from './FileRow';
-import { DIR_BATCH, ROW_BUDGET } from '../treeModel';
+import { DIR_BATCH, ROW_BUDGET, dirKey, moreKey } from '../treeModel';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -18,6 +18,8 @@ const hello = (files: ReturnType<typeof file>[]) => ({
   type: 'hello' as const, root: '/p/shop', name: 'shop', files, changes: [], usedBy: [], domain: emptyDomain(), indexing: false, events: [], sessions: [], control: { paused: false, flags: [] },
 });
 const rows = () => host.querySelectorAll('.frow').length;
+/** The row with this nav key (keys can hold characters a CSS selector cannot). */
+const navEl = (k: string) => [...host.querySelectorAll<HTMLElement>('[data-nav]')].find(e => e.dataset.nav === k) ?? null;
 
 function mount() {
   act(() => root.render(<FileTree />));
@@ -109,7 +111,7 @@ describe('FileTree render cap', () => {
     act(() => host.querySelector<HTMLElement>('[data-dir="big"]')!.click());
     expect(DIR_BATCH).toBe(200);
     expect(rows()).toBe(200);
-    const more = () => host.querySelector<HTMLElement>('[data-nav="more:big"]');
+    const more = () => navEl(moreKey('big'));
     expect(more()!.textContent).toBe('Show 200 more (1,000 hidden)');
     for (let i = 0; i < 4; i++) act(() => more()!.click());
     expect(rows()).toBe(1000);
@@ -128,8 +130,8 @@ describe('FileTree render cap', () => {
     expect(ROW_BUDGET).toBe(1000);
     expect(rows() + 7).toBe(ROW_BUDGET); // the 7 folder rows count against the budget too
     expect(host.querySelectorAll('.dir')).toHaveLength(7);
-    expect(host.querySelector('[data-nav="more:d6"]')!.textContent).toBe('Show 200 more (300 hidden)');
-    act(() => host.querySelector<HTMLElement>('[data-nav="more:d6"]')!.click());
+    expect(navEl(moreKey('d6'))!.textContent).toBe('Show 200 more (300 hidden)');
+    act(() => navEl(moreKey('d6'))!.click());
     expect(host.querySelectorAll('[data-file^="d6/"]')).toHaveLength(200);
   });
 
@@ -362,7 +364,7 @@ describe('FileTree folders', () => {
     mount();
     const tree = host.querySelector('[role=tree]')!;
     const top = [...tree.querySelectorAll<HTMLElement>('[role=treeitem][aria-level="1"]')].map(e => e.dataset.nav);
-    expect(top).toEqual(['dir:.agents/skills', 'dir:Web', 'README.md']);
+    expect(top).toEqual([dirKey('.agents/skills'), dirKey('Web'), 'README.md']);
     expect(dir('.agents/skills')!.querySelector('.fn')!.textContent).toBe('.agents/skills');
     expect(dir('.agents/skills')!.getAttribute('title')).toBe('.agents/skills · 2 files');
     expect(dir('Web')!.querySelector('b')!.textContent).toBe('2');
@@ -378,7 +380,7 @@ describe('FileTree folders', () => {
     for (let i = 0; i < 2000; i++) files.push(file(`d${i % 4}/sub/f${i}.ts`));
     useStore.getState().apply(hello(files));
     mount();
-    expect([...host.querySelectorAll<HTMLElement>('[role=treeitem]')].map(e => e.dataset.nav)).toEqual(['dir:d0/sub', 'dir:d1/sub', 'dir:d2/sub', 'dir:d3/sub']);
+    expect([...host.querySelectorAll<HTMLElement>('[role=treeitem]')].map(e => e.dataset.nav)).toEqual([dirKey('d0/sub'), dirKey('d1/sub'), dirKey('d2/sub'), dirKey('d3/sub')]);
   });
 
   it('decides the default once per project: crossing 2,000 files mid-session keeps folders as they are', () => {
@@ -398,7 +400,7 @@ describe('FileTree folders', () => {
     act(() => dir('lib')!.focus());
     key('a');
     key('p');
-    expect(focused()).toBe('dir:src/app');
+    expect(focused()).toBe(dirKey('src/app'));
   });
 
   it('keeps other folders still while a closing folder folds', () => {
@@ -480,24 +482,24 @@ describe('FileTree folders', () => {
     const a = dir('a')!;
     act(() => a.focus());
     key('ArrowDown');
-    expect(focused()).toBe('dir:a/b');
+    expect(focused()).toBe(dirKey('a/b'));
     key('ArrowRight');
     expect(dir('a/b')!.getAttribute('aria-expanded')).toBe('true');
-    expect(focused()).toBe('dir:a/b');
+    expect(focused()).toBe(dirKey('a/b'));
     key('ArrowRight');
     expect(focused()).toBe('a/b/x.ts');
     key('ArrowLeft');
-    expect(focused()).toBe('dir:a/b');
+    expect(focused()).toBe(dirKey('a/b'));
     key('ArrowLeft');
     expect(dir('a/b')!.getAttribute('aria-expanded')).toBe('false');
     key('ArrowLeft');
-    expect(focused()).toBe('dir:a');
+    expect(focused()).toBe(dirKey('a'));
     key('End');
     expect(focused()).toBe('z.ts');
     key('ArrowLeft'); // a root file has no parent: focus stays
     expect(focused()).toBe('z.ts');
     key('Home');
-    expect(focused()).toBe('dir:a');
+    expect(focused()).toBe(dirKey('a'));
     key('y'); // typeahead
     expect(focused()).toBe('a/y.ts');
     expect(host.querySelectorAll('[role=treeitem][tabindex="0"]')).toHaveLength(1);
@@ -689,5 +691,161 @@ describe('FileTree folder state', () => {
     expect(stored()).toBeNull();
     act(() => { window.dispatchEvent(new Event('pagehide')); });
     expect(stored()).toEqual([['a', false], ['b', false]]);
+  });
+});
+
+describe('FileTree round 3', () => {
+  const dir = (path: string) => byData('dir', path);
+  const focused = () => (document.activeElement as HTMLElement).dataset.nav;
+  const press = (k: string) => act(() => { (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })); });
+  const scrollSpy = vi.fn();
+  const working = (status: 'working' | 'idle' = 'working') => session({ id: 's1', status, lastAt: Date.now() });
+  let tool = 100;
+  const target = (path: string) => {
+    act(() => useStore.getState().apply({ type: 'session', session: working() }));
+    act(() => useStore.getState().apply({ type: 'agentEvent', event: event({ sessionId: 's1', type: 'tool_start', at: Date.now(), tool: { id: `r${++tool}`, name: 'Edit', label: 'Edit', paths: [path] } }) }));
+  };
+  const idle = () => act(() => useStore.getState().apply({ type: 'session', session: working('idle') }));
+  beforeEach(() => { scrollSpy.mockClear(); (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView = scrollSpy; });
+  afterEach(() => { delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView; });
+
+  it('starts fresh for another project: Show more and folders closed under a filter do not carry over', () => {
+    const files = (n: number) => Array.from({ length: n }, (_, i) => file(`big/f${String(i).padStart(4, '0')}.ts`)).concat(file('lib/x.ts'));
+    function Keyed() { const r = useStore(s => s.root); return <FileTree key={r} />; }
+    useStore.getState().apply(hello(files(500)));
+    act(() => root.render(<Keyed />));
+    act(() => { vi.advanceTimersByTime(2000); });
+    act(() => navEl(moreKey('big'))!.click());
+    expect(host.querySelectorAll('[data-file^="big/"]')).toHaveLength(400);
+    act(() => useStore.getState().setFilter('x'));
+    act(() => dir('lib')!.click());
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(byData('file', 'lib/x.ts')).toBeNull();
+    act(() => useStore.getState().apply({ ...hello(files(500)), root: '/p/other', name: 'other' }));
+    act(() => { vi.advanceTimersByTime(2000); });
+    expect(byData('file', 'lib/x.ts')).not.toBeNull(); // the filter is the same, its closed folder is not
+    act(() => useStore.getState().setFilter(''));
+    expect(host.querySelectorAll('[data-file^="big/"]')).toHaveLength(200);
+  });
+
+  it('decides big or not when the first index finishes, not at the first files', () => {
+    useStore.getState().apply({ ...hello([file('a/x.ts'), file('b/y.ts')]), indexing: true });
+    mount();
+    const more = Array.from({ length: 2050 }, (_, i) => file(`a/gen/f${i}.ts`));
+    act(() => useStore.getState().apply({ type: 'files', files: more, removed: [] }));
+    act(() => useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts'), ...more]))); // indexing done
+    expect(dir('a')!.getAttribute('aria-expanded')).toBe('false');
+    expect(dir('b')!.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('closes the folders only the agent opened when it goes idle', () => {
+    const many = Array.from({ length: 2100 }, (_, i) => file(`d${i % 3}/s/f${i}.ts`));
+    useStore.getState().apply(hello(many));
+    mount();
+    target('d0/s/f0.ts');
+    expect(dir('d0/s')!.getAttribute('aria-expanded')).toBe('true');
+    idle();
+    expect(dir('d0/s')!.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('selecting the same file again reopens a folder the user closed', () => {
+    useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts')]));
+    mount();
+    act(() => useStore.getState().select('a/x.ts'));
+    act(() => dir('a')!.click());
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(dir('a')!.getAttribute('aria-expanded')).toBe('false');
+    act(() => useStore.getState().select('a/x.ts'));
+    expect(dir('a')!.getAttribute('aria-expanded')).toBe('true');
+    act(() => dir('a')!.click());
+    act(() => useStore.getState().revealLine('a/x.ts', 3));
+    expect(dir('a')!.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('does not scroll to an agent file hidden by a user close, now or later', () => {
+    useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts')]));
+    mount();
+    act(() => dir('a')!.click());
+    act(() => { vi.advanceTimersByTime(400); });
+    target('a/x.ts');
+    expect(scrollSpy).not.toHaveBeenCalled();
+    act(() => dir('a')!.click()); // the user opens it again much later: no stale scroll
+    act(() => { vi.advanceTimersByTime(60_000); });
+    expect(scrollSpy).not.toHaveBeenCalled();
+  });
+
+  it('drops a reveal whose row never showed', () => {
+    useStore.getState().apply(hello([file('a/x.ts')]));
+    mount();
+    act(() => useStore.getState().select('gone/z.ts')); // not in the tree (a file from another point in history)
+    act(() => useStore.getState().apply({ type: 'files', files: [file('gone/z.ts')], removed: [] }));
+    expect(scrollSpy).not.toHaveBeenCalled();
+  });
+
+  it('typeahead takes any printable character', () => {
+    useStore.getState().apply(hello([file('src/app/(admin)/page.tsx'), file('src/app/[slug]/page.tsx'), file('@types/x.d.ts'), file('src/app/z.ts')]));
+    mount();
+    act(() => dir('src/app')!.focus());
+    press('(');
+    expect(focused()).toBe(dirKey('src/app/(admin)'));
+    act(() => { vi.advanceTimersByTime(1000); });
+    press('[');
+    expect(focused()).toBe(dirKey('src/app/[slug]'));
+    act(() => { vi.advanceTimersByTime(1000); });
+    press('@');
+    expect(focused()).toBe(dirKey('@types'));
+  });
+
+  it('keeps ids apart from file names that look like them', () => {
+    useStore.getState().apply(hello([file('dir:src'), file('src/a.ts'), file('more:src'), file('src/b.ts#x:1')]));
+    mount();
+    const keys = [...host.querySelectorAll<HTMLElement>('[data-nav]')].map(e => e.dataset.nav);
+    expect(new Set(keys).size).toBe(keys.length);
+    act(() => dir('src')!.focus());
+    const seen: (string | undefined)[] = [focused()];
+    for (let i = 0; i < 4; i++) { press('ArrowDown'); seen.push(focused()); }
+    expect(seen).toEqual([dirKey('src'), 'src/a.ts', 'src/b.ts#x:1', 'dir:src', 'more:src']);
+    press('Home');
+    expect(focused()).toBe(dirKey('src'));
+    press('End');
+    expect(focused()).toBe('more:src');
+  });
+});
+
+describe('FileTree lazy keys', () => {
+  let real: typeof treeKeysLoader.load;
+  beforeEach(() => { real = treeKeysLoader.load; });
+  afterEach(async () => { treeKeysLoader.load = real; treeKeysLoader.reset(); await loadTreeKeys(); });
+  const focused = () => (document.activeElement as HTMLElement).dataset.nav;
+  const press = (k: string) => act(() => { (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })); });
+
+  it('replays keys pressed while the handler loads, in order', async () => {
+    let resolve!: () => void;
+    const gate = new Promise<void>(r => { resolve = r; });
+    treeKeysLoader.reset();
+    treeKeysLoader.load = () => gate.then(real);
+    useStore.getState().apply(hello([file('a.ts'), file('b.ts'), file('c.ts')]));
+    mount();
+    act(() => byData('file', 'a.ts')!.focus());
+    press('ArrowDown');
+    press('ArrowDown');
+    expect(focused()).toBe('a.ts');
+    await act(async () => { resolve(); await gate; await loadTreeKeys(); });
+    expect(focused()).toBe('c.ts');
+  });
+
+  it('retries after a failed load on the next key', async () => {
+    let calls = 0;
+    treeKeysLoader.reset();
+    treeKeysLoader.load = () => (++calls === 1 ? Promise.reject(new Error('offline')) : real());
+    useStore.getState().apply(hello([file('a.ts'), file('b.ts')]));
+    mount();
+    await act(async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); }); // the first load fails
+    expect(calls).toBe(1);
+    act(() => byData('file', 'a.ts')!.focus());
+    press('ArrowDown'); // retries, and is replayed once loaded
+    expect(calls).toBe(2);
+    await act(async () => { await loadTreeKeys(); });
+    expect(focused()).toBe('b.ts');
   });
 });
