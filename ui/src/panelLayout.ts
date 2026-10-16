@@ -10,10 +10,12 @@ export interface PanelLayout {
   last?: Panel;
   /** The inspector is widened: drawn at its reach. `w.inspector` stays the width to restore. */
   wide?: boolean;
+  /** The `.app` box width when a handle last set a width: in a smaller box the inspector gives way first. */
+  at?: number;
 }
 
 export const LAYOUT_KEY = 'livemap:layout';
-/** The inspector has no fixed maximum: it reaches as far as the center minimum allows (see reach). */
+/** The inspector has no fixed maximum: it reaches as far as the center minimum and the project panel's minimum allow. */
 export const LIMITS: Record<Panel, [number, number]> = { files: [200, 520], inspector: [300, Infinity] };
 /** The center column never gets narrower than this because of a panel. */
 export const CENTER_MIN = 420;
@@ -28,39 +30,46 @@ export const defaultWidth = (p: Panel, vw: number): number => (p === 'files' ? (
 const limit = (p: Panel, w: number): number => Math.max(LIMITS[p][0], Math.min(LIMITS[p][1], Math.round(w)));
 
 /**
- * The widths to draw in an `.app` box `width` px wide (`vw`, the viewport, picks the defaults): each set width, and
- * when the shown panels would squeeze the center below CENTER_MIN, the panel not resized last gives way first (down
- * to its minimum), then the other. A widened inspector asks for the whole box and gives way first, so it fills what
- * the center and the project panel leave. Nothing shrunk here is stored.
+ * The widths to draw in an `.app` box `width` px wide (`vw`, the viewport, picks the defaults). In the box a handle
+ * last set a width in (`at`), or a wider one: each set width, and when the shown panels would squeeze the center below
+ * CENTER_MIN, the panel not resized last gives way first (down to its minimum), then the other, so the handle in use
+ * wins. In a smaller box (a window resize, a reload on a smaller screen): what was drawn in that box, with the
+ * inspector giving way first down to its default width, then the same rules. A widened inspector asks for the whole
+ * box. Nothing shrunk here is stored.
  */
 export function fitLayout(l: PanelLayout, width: number, vw: number): Record<Panel, number> {
-  const wide = l.wide && !l.collapsed.inspector;
-  const out = { files: limit('files', l.w.files ?? defaultWidth('files', vw)), inspector: wide ? Math.max(LIMITS.inspector[0], width) : limit('inspector', l.w.inspector ?? defaultWidth('inspector', vw)) };
-  const shown = (wide || l.last === 'files' ? (['inspector', 'files'] as const) : (['files', 'inspector'] as const)).filter(p => !l.collapsed[p]);
-  let excess = shown.reduce((n, p) => n + out[p] + GAP, 0) - width + CENTER_MIN;
-  for (const p of shown) {
-    const cut = Math.max(0, Math.min(excess, out[p] - LIMITS[p][0]));
-    out[p] -= cut;
-    excess -= cut;
-  }
-  return out;
+  const wide = !!l.wide && !l.collapsed.inspector;
+  const want = { files: limit('files', l.w.files ?? defaultWidth('files', vw)), inspector: wide ? Math.max(LIMITS.inspector[0], width) : limit('inspector', l.w.inspector ?? defaultWidth('inspector', vw)) };
+  const shown = (l.last === 'files' ? (['inspector', 'files'] as const) : (['files', 'inspector'] as const)).filter(p => !l.collapsed[p]);
+  /** Fits `from` in `box`; with a `floor`, the inspector first gives way down to it. */
+  const squeeze = (from: Record<Panel, number>, box: number, floor?: number) => {
+    const out = { ...from };
+    let excess = shown.reduce((n, p) => n + out[p] + GAP, 0) - box + CENTER_MIN;
+    const steps: [Panel, number][] = shown.map(p => [p, LIMITS[p][0]]);
+    if (floor !== undefined && !l.collapsed.inspector) steps.unshift(['inspector', floor]);
+    for (const [p, min] of steps) {
+      const cut = Math.max(0, Math.min(excess, out[p] - min));
+      out[p] -= cut;
+      excess -= cut;
+    }
+    return out;
+  };
+  const at = l.at ?? Infinity;
+  if (wide || width >= at) return squeeze(want, width);
+  return squeeze(at === Infinity ? want : squeeze(want, at), width, Math.max(LIMITS.inspector[0], defaultWidth('inspector', vw)));
 }
 
-/**
- * The widest `p` can be drawn in this box: for the project panel, its limit or what the center minimum and the
- * inspector at its minimum leave; for the inspector, what the center minimum and the project panel as drawn leave.
- */
-export function reach(l: PanelLayout, p: Panel, width: number, vw: number): number {
-  const other = p === 'files'
-    ? (l.collapsed.inspector ? 0 : LIMITS.inspector[0] + GAP)
-    : (l.collapsed.files ? 0 : fitLayout(l, width, vw).files + GAP);
+/** The widest `p` can be drawn in this box: its limit, or what the center minimum and the other panel at its minimum leave. */
+export function reach(l: PanelLayout, p: Panel, width: number): number {
+  const o: Panel = p === 'files' ? 'inspector' : 'files';
+  const other = l.collapsed[o] ? 0 : LIMITS[o][0] + GAP;
   return Math.max(LIMITS[p][0], Math.min(LIMITS[p][1], width - CENTER_MIN - GAP - other));
 }
 
 /** A stored layout; anything unreadable falls back to the defaults, widths are clamped to their limits. */
 export function parseLayout(raw: string | null): PanelLayout {
   const l = emptyLayout();
-  let v: { w?: Record<string, unknown>; collapsed?: Record<string, unknown>; last?: unknown; wide?: unknown } | null = null;
+  let v: { w?: Record<string, unknown>; collapsed?: Record<string, unknown>; last?: unknown; wide?: unknown; at?: unknown } | null = null;
   try {
     v = raw ? JSON.parse(raw) : null;
   } catch {
@@ -74,6 +83,7 @@ export function parseLayout(raw: string | null): PanelLayout {
   }
   if (v.last === 'files' || v.last === 'inspector') l.last = v.last;
   if (typeof v.wide === 'boolean') l.wide = v.wide;
+  if (typeof v.at === 'number' && Number.isFinite(v.at) && v.at > 0) l.at = Math.round(v.at);
   return l;
 }
 

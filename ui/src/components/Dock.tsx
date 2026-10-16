@@ -10,7 +10,8 @@ const filesCollapsed = collapsedOf('files');
 const inspectorCollapsed = collapsedOf('inspector');
 
 /**
- * The `.app` grid. It re-renders only when a panel collapses or expands or a drag starts or ends; the column widths
+ * The `.app` grid. It re-renders only when a panel collapses or expands, the inspector widens or restores, or a drag
+ * starts or ends; the column widths
  * are written onto it directly from the store, so a drag or a window resize re-renders nothing here.
  */
 export function Dock({ gated, children }: { gated: boolean; children: ReactNode }) {
@@ -18,10 +19,12 @@ export function Dock({ gated, children }: { gated: boolean; children: ReactNode 
   const files = useStore(filesCollapsed);
   const inspector = useStore(inspectorCollapsed);
   const dragging = useStore(s => s.dock.dragging);
-  // The columns animate only while a panel collapses or expands, never on first paint, during a drag or on a window
+  const wide = useStore(s => !!s.layout.wide);
+  // The columns animate only while a panel collapses or expands or the inspector widens or restores (styles.css turns
+  // this off for reduced motion), never on first paint, during a drag or on a window
   // resize. Decided during render, so the class lands in the same commit as the collapsed class and the transition
   // starts; a timer re-render drops it.
-  const shape = `${files} ${inspector}`;
+  const shape = `${files} ${inspector} ${wide}`;
   const prev = useRef(shape);
   const until = useRef(0);
   if (prev.current !== shape) {
@@ -39,10 +42,18 @@ export function Dock({ gated, children }: { gated: boolean; children: ReactNode 
   // Before first paint: measure the real box (safe-area insets and gutters included; the ResizeObserver also sees
   // every window resize, since .app is inset from the window) and write the drawn widths as --left-w and --right-w,
   // then keep both current. jsdom has no layout: the box falls back to the window less its 12 px gutters.
+  // Widen and Restore change the widths in the commit that adds .glide (the effect below), so they glide.
+  const shownWide = useRef(wide);
+  const repaint = useRef<() => void>();
+  useLayoutEffect(() => {
+    shownWide.current = wide;
+    repaint.current?.();
+  }, [wide]);
   useLayoutEffect(() => {
     const el = ref.current!;
     let last: unknown;
     const paint = (s: StoreState) => {
+      if (!!s.layout.wide !== shownWide.current) return;
       const { fit } = drawn(s);
       if (fit === last) return;
       last = fit;
@@ -50,6 +61,7 @@ export function Dock({ gated, children }: { gated: boolean; children: ReactNode 
       el.style.setProperty('--right-w', `${fit.inspector}px`);
     };
     const measure = () => useStore.getState().setDock({ width: el.clientWidth || window.innerWidth - 24, vw: window.innerWidth });
+    repaint.current = () => paint(useStore.getState());
     measure();
     paint(useStore.getState());
     const off = useStore.subscribe(paint);
@@ -82,18 +94,24 @@ export function CollapseButton({ panel }: { panel: Panel }) {
   );
 }
 
+/** How close to its reach the inspector may be for Widen to still do something. */
+const WIDEN_SLACK = 24;
+
 /**
- * Widens the docked inspector to the most the box allows beside the center and the project panel, or restores the
- * width it had (hidden below 1080 px). A drag or a key on its handle ends the widened state.
+ * Widens the docked inspector to its reach (the project panel gives way to its minimum), or restores the widths it
+ * had. Disabled when there is no room to widen; hidden below 1080 px. A drag or a key on its handle ends the widened state.
  */
 export function WidenButton() {
   const wide = useStore(s => !!s.layout.wide);
+  const full = useStore(s => { const { fit, reach } = drawn(s); return fit.inspector >= reach.inspector - WIDEN_SLACK; });
+  const off = !wide && full;
+  const label = wide ? 'Restore inspector width' : off ? 'No room to widen' : 'Widen inspector';
   const toggle = () => {
     const s = useStore.getState();
-    s.setLayout({ ...s.layout, wide: !wide });
+    s.setLayout({ ...s.layout, wide: !wide, ...(!wide && { last: 'inspector' as const }) });
   };
   return (
-    <button type="button" className="iconbtn hidebtn widebtn" aria-label="Widen inspector" aria-pressed={wide} title={wide ? 'Restore width' : 'Widen inspector'} onClick={toggle}>
+    <button type="button" className="iconbtn widebtn" aria-label={off ? 'Widen inspector' : label} title={label} disabled={off} onClick={toggle}>
       <WidenIcon on={wide} />
     </button>
   );

@@ -99,6 +99,11 @@
   .iconbtn.hidebtn { width:26px; height:26px; border-radius:8px; color:var(--ink3); }
   .iconbtn.hidebtn svg { width:15px; height:15px; }
   .iconbtn.hidebtn:hover { color:var(--ink2); }
+  /* The inspector's Widen button: the hide button's size, its own spacing (see .ins-bar). */
+  .iconbtn.widebtn { width:26px; height:26px; border-radius:8px; color:var(--ink3); }
+  .iconbtn.widebtn svg { width:15px; height:15px; }
+  .iconbtn.widebtn:hover { color:var(--ink2); }
+  .iconbtn.widebtn:disabled { opacity:.4; cursor:default; background:transparent; }
 
   /* sidebar */
   .sidebar { border-radius:20px; display:flex; flex-direction:column; min-height:0; box-shadow:var(--shadow); overflow:hidden; }
@@ -194,8 +199,8 @@
   .ins-bar { display:flex; align-items:center; gap:8px; min-height:26px; padding:14px 10px 0 16px; }
   .ins-bar .live-h { flex:1; min-width:0; }
   .ins-bar .hidebtn { margin:-4px -6px -4px auto; }
-  .ins-bar .widebtn { margin-right:-6px; }
-  .ins-bar .widebtn + .hidebtn { margin-left:0; }
+  .ins-bar .widebtn { margin:-4px 0 -4px auto; }
+  .ins-bar .widebtn + .hidebtn { margin-left:-2px; }
   .ins-body { position:relative; flex:1; min-height:0; display:flex; flex-direction:column; }
   .ins-scroll { flex:1; overflow:auto; padding:16px; display:flex; flex-direction:column; gap:16px; }
   /* Content cross-fade (180 ms): the new page fades in while the old one, on top, fades out a little faster, then unmounts. */
@@ -937,7 +942,8 @@
   @media (min-width:1080px) { .only-narrow-scrim { display:none; } }
   /* Docked panels: widths from --left-w and --right-w (set from the store; 272/384, or 248/340 below 1280 px, by
      default), each with its gap. A collapsed panel's column (gap included) goes to 0 and the panel fades out, sliding
-     off at its outer edge at its full width, so its content never reflows. `.glide` is on while a panel collapses or expands. */
+     off at its outer edge at its full width, so its content never reflows. `.glide` is on while a panel collapses or expands,
+     or the inspector widens or restores. */
   .rz { display:none; }
   @media (min-width:1080px) {
     .app { --dl:272px; --dr:384px; --lc:calc(var(--left-w,var(--dl)) + 12px); --rc:calc(var(--right-w,var(--dr)) + 12px); grid-template-columns:var(--lc) minmax(0,1fr) var(--rc); column-gap:0; }
@@ -949,6 +955,11 @@
     .insp { width:var(--right-w,var(--dr)); justify-self:start; margin-left:12px; }
     .sidebar, .insp { transition:opacity .3s var(--ease),visibility 0s; }
     .left-collapsed .sidebar, .right-collapsed .insp { opacity:0; visibility:hidden; transition:opacity .25s var(--ease),visibility 0s .45s; }
+    /* Widen and Restore change the panels' widths in the same commit as .glide: the panels and handles glide with the columns. */
+    .app.glide .sidebar, .app.glide .insp { transition:opacity .3s var(--ease),visibility 0s,width .45s var(--layout-glide); }
+    .app.glide.left-collapsed .sidebar, .app.glide.right-collapsed .insp { transition:opacity .25s var(--ease),visibility 0s .45s,width .45s var(--layout-glide); }
+    .app.glide .rz-files { transition:left .45s var(--layout-glide); }
+    .app.glide .rz-inspector { transition:right .45s var(--layout-glide); }
     /* The resize handle fills the gap on the panel's inner edge; its line shows on hover, drag and keyboard focus. */
     .rz { display:block; position:absolute; top:68px; bottom:0; width:12px; z-index:5; cursor:col-resize; touch-action:none; }
     .rz-files { left:var(--left-w,var(--dl)); }
@@ -968,7 +979,7 @@
     .insp { position:fixed; right:calc(var(--gutter) + var(--sar)); top:calc(var(--gutter) * 2 + 56px + var(--sat)); bottom:calc(var(--gutter) + var(--sab)); width:min(380px,calc(100vw - var(--gutter) * 2 - var(--sal) - var(--sar))); z-index:25; transform:translateX(110%); transition:transform .55s var(--ease); background:var(--glass-strong); }
     .insp.open { transform:none; box-shadow:var(--shadow-lg); }
     .sidebar:focus, .insp:focus { outline:0; }
-    .iconbtn.hidebtn { display:none; }
+    .iconbtn.hidebtn, .iconbtn.widebtn { display:none; }
     /* Condensed toolbar: chips show their avatar (name in the tooltip), search shows its icon and shortcut. */
     .toolbar { gap:8px; padding:0 8px 0 12px; }
     .brand span { display:none; }

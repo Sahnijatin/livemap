@@ -21,15 +21,16 @@ export function PanelHandle({ panel }: { panel: Panel }) {
 
   const set = (w: number | null, save = true) => {
     const s = useStore.getState();
-    // Resizing the inspector ends its widened state: the new width is the one kept.
-    s.setLayout({ ...s.layout, w: { ...s.layout.w, [panel]: w }, last: panel, ...(panel === 'inspector' && { wide: false }) }, save);
+    // The box is remembered: in a smaller one the inspector gives way first (fitLayout). Resizing the inspector ends
+    // its widened state: the new width is the one kept.
+    s.setLayout({ ...s.layout, w: { ...s.layout.w, [panel]: w }, last: panel, at: s.dock.width, ...(panel === 'inspector' && { wide: false }) }, save);
   };
   /** Draws the panel at `d`, within reach; nothing happens (or is saved) when that is the width drawn now. */
   const draw = (d: number, save = true) => {
     // The drawn width now, not at this render: several moves can arrive before React renders.
     const { fit: f, reach: r } = drawn(useStore.getState());
     const t = Math.max(min, Math.min(r[panel], Math.round(d)));
-    if (t !== f[panel]) set(t, save);
+    if (t !== f[panel] || (panel === 'inspector' && useStore.getState().layout.wide)) set(t, save);
   };
   const end = () => {
     const d = g.current;

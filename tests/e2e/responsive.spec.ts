@@ -284,26 +284,53 @@ test('at 1440 px dragging the sidebar handle resizes the column, and the width s
   expect(Math.round((await page.locator('main.center').boundingBox())!.x)).toBe(12);
 });
 
-test('at 1920 px Widen inspector fills the room beside the center, survives a reload and restores the width', async ({ page }) => {
+test('at 1920 px Widen inspector glides to its reach, survives a reload and restores both widths', async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await open(page);
   const insp = page.locator('aside.insp');
   const width = async () => Math.round((await insp.boundingBox())!.width);
-  const wide = page.getByRole('button', { name: 'Widen inspector' });
+  const files = async () => Math.round((await page.locator('aside.sidebar').boundingBox())!.width);
+  const widen = page.getByRole('button', { name: 'Widen inspector' });
+  const restore = page.getByRole('button', { name: 'Restore inspector width' });
   expect(await width()).toBe(384);
-  await wide.click();
-  await expect(wide).toHaveAttribute('aria-pressed', 'true');
-  // 1896 px box - 420 center - 12 gap - (272 + 12) project panel.
-  await expect.poll(width).toBe(1180);
+  // Its own 26 px button, at least 6 px from the hide button.
+  const a = (await widen.boundingBox())!;
+  const b = (await page.getByRole('button', { name: 'Hide inspector' }).boundingBox())!;
+  expect([Math.round(a.width), Math.round(a.height)]).toEqual([26, 26]);
+  expect(b.x - (a.x + a.width)).toBeGreaterThanOrEqual(6);
+  await widen.hover();
+  await page.waitForTimeout(500);
+  // It glides like a collapse: on the frame after the click, the panel's width is transitioning.
+  const glides = await page.evaluate(async () => {
+    const insp = document.querySelector('aside.insp')!;
+    document.querySelector<HTMLButtonElement>('button.widebtn')!.click();
+    await new Promise(r => requestAnimationFrame(r));
+    return insp.getAnimations().map(a => (a as CSSTransition).transitionProperty);
+  });
+  expect(glides).toContain('width');
+  // 1896 px box - 420 center - 12 gap - (200 + 12) project panel at its minimum.
+  await expect.poll(width).toBe(1252);
+  expect(await files()).toBe(200);
   expect(Math.round((await page.locator('main.center').boundingBox())!.width)).toBe(420);
   await page.reload();
   await expect(page.getByRole('status').filter({ hasText: 'Live' })).toBeAttached({ timeout: 15_000 });
-  expect(await width()).toBe(1180);
-  await wide.click();
-  await expect(wide).toHaveAttribute('aria-pressed', 'false');
+  expect(await width()).toBe(1252);
+  await restore.click();
+  await expect(widen).toBeVisible();
   await expect.poll(width).toBe(384);
+  expect(await files()).toBe(272);
   await page.setViewportSize({ width: 900, height: 900 });
-  await expect(wide).toHaveCount(0);
+  await expect(widen).toHaveCount(0);
+});
+
+test('a 980 px inspector stored on a 1920 px screen leaves the file tree at its width at 1440 px', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await page.evaluate(() => localStorage.setItem('livemap:layout', JSON.stringify({ w: { files: null, inspector: 980 }, collapsed: { files: false, inspector: false }, last: 'inspector', at: 1896 })));
+  await page.reload();
+  await expect(page.getByRole('status').filter({ hasText: 'Live' })).toBeAttached({ timeout: 15_000 });
+  expect(Math.round((await page.locator('aside.sidebar').boundingBox())!.width)).toBe(272);
+  expect(Math.round((await page.locator('aside.insp').boundingBox())!.width)).toBe(1416 - 444 - 272);
 });
 
 /** Every center tab and Map tool lies whole inside the center column and its head, with nothing scrolled or clipped. */
@@ -345,7 +372,7 @@ test('the center tabs and Map tools fit a 420 px center: icon and count, the lab
   await expect(tab(page, 'schema')).toHaveAttribute('title', 'Schema');
   await expect(tab(page, 'api')).toHaveAccessibleName(/^API, \d+/);
   // At 1080 px with the default widths the center is 444 px: the same holds.
-  await page.getByRole('button', { name: 'Widen inspector' }).click();
+  await page.getByRole('button', { name: 'Restore inspector width' }).click();
   await page.setViewportSize({ width: 1080, height: 800 });
   await showTab(page, 'map');
   expect(await centerHeadFits(page)).toBe(444);

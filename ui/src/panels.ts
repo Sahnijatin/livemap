@@ -28,7 +28,7 @@ export function drawn(s: StoreState): Drawn {
   if (memo && memo.layout === s.layout && memo.peek === peek && memo.dock === s.dock) return memo.v;
   const l = shownLayout(s);
   const { width, vw } = s.dock;
-  const v = { l, fit: fitLayout(l, width, vw), reach: { files: reach(l, 'files', width, vw), inspector: reach(l, 'inspector', width, vw) } };
+  const v = { l, fit: fitLayout(l, width, vw), reach: { files: reach(l, 'files', width), inspector: reach(l, 'inspector', width) } };
   memo = { layout: s.layout, peek, dock: s.dock, v };
   return v;
 }
