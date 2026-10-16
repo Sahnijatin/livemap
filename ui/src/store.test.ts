@@ -645,3 +645,15 @@ describe('history and rewind', () => {
     expect(st.rewound).toEqual({ seq: 5, at: 2 });
   });
 });
+
+describe('expanded files', () => {
+  it('a file named like an object key toggles like any other', () => {
+    useStore.getState().reset();
+    for (const name of ['constructor', 'toString', '__proto__']) {
+      useStore.getState().toggle(name);
+      expect(Object.hasOwn(useStore.getState().expanded, name) && useStore.getState().expanded[name]).toBe(true);
+      useStore.getState().toggle(name);
+      expect(useStore.getState().expanded[name]).toBe(false);
+    }
+  });
+});

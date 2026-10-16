@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { file } from '../fixtures';
 import { buildTree, dirKey, visibleItems } from '../treeModel';
-import { namesFor } from './treeKeys';
+import { namesFor } from './treeDeferred';
 
 describe('typeahead names', () => {
   it('are built once per row list: each folder of a compact row, and file names', () => {

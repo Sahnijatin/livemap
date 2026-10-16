@@ -485,7 +485,7 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   toggle(path) {
     const expanded = get().expanded;
-    set({ expanded: { ...expanded, [path]: !expanded[path] } });
+    set({ expanded: { ...expanded, [path]: !(Object.hasOwn(expanded, path) && expanded[path]) } }); // own keys: a file may be named `constructor`
   },
 
   setFilter(q) {

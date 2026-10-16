@@ -113,6 +113,14 @@ export function chainOf(node: DirNode): DirNode[] {
   return chain;
 }
 
+/** `set` with `add` added and `del` removed, as a new set. */
+export function editSet(set: ReadonlySet<string>, add: readonly string[], del: readonly string[] = []): ReadonlySet<string> {
+  const next = new Set(set);
+  for (const a of add) next.add(a);
+  for (const d of del) next.delete(d);
+  return next;
+}
+
 /** Every folder above `path`, outermost first. */
 export function ancestors(path: string): string[] {
   const out: string[] = [];
@@ -154,7 +162,7 @@ export function dirActivity(live: Record<string, LiveBadge>, target: string | nu
 export type Item =
   | { kind: 'dir'; node: DirNode; chain: string[]; label: string; level: number; open: boolean; up: string | null }
   | { kind: 'file'; row: Row; open: boolean; level: number; up: string | null }
-  | { kind: 'more'; dir: string; part: 'dirs' | 'files'; shown: number; hidden: number; level: number };
+  | { kind: 'more'; dir: string; part: 'dirs' | 'files'; shown: number; hidden: number; level: number; up: string | null };
 
 /**
  * What the tree renders, depth first. The project root's children are listed like any open folder's children. An
@@ -205,7 +213,7 @@ export function visibleItems(
   const navKeys: string[] = [];
   const more = (dir: string, part: 'dirs' | 'files', shown: number, hidden: number, level: number) => {
     if (hidden <= 0) return;
-    items.push({ kind: 'more', dir, part, shown, hidden, level });
+    items.push({ kind: 'more', dir, part, shown, hidden, level, up: dir === '' ? null : dirKey(dir) });
     navKeys.push(moreKey(dir, part));
   };
   const walk = (node: DirNode, level: number, up: string | null) => {
@@ -274,8 +282,6 @@ function splitWord(name: string): [string, string] {
 
 /** Open and closed folders, by full path, stored per project. */
 export const treeKey = (root: string): string => `livemap:tree:${root}`;
-/** Stored choices beyond this many drop the oldest. */
-const MAX_STORED = 2000;
 
 /** Stored choices as [path, open] pairs, oldest first; anything else is ignored. */
 export function parseTreeState(raw: string | null): Map<string, boolean> {
@@ -290,24 +296,11 @@ export function parseTreeState(raw: string | null): Map<string, boolean> {
   return out;
 }
 
-/** The newest `max` choices as [path, open] pairs. */
-export function serializeTreeState(state: DirState, max = MAX_STORED): string {
-  return JSON.stringify([...state].slice(-max));
-}
-
 /** The project's stored folders; empty when storage is missing, blocked, throws or holds something unreadable. */
 export function loadTreeState(root: string): Map<string, boolean> {
   try {
     return parseTreeState(globalThis.localStorage?.getItem(treeKey(root)) ?? null);
   } catch {
     return new Map();
-  }
-}
-
-export function saveTreeState(root: string, state: DirState): void {
-  try {
-    globalThis.localStorage?.setItem(treeKey(root), serializeTreeState(state));
-  } catch {
-    // Private mode, quota or blocked storage: folders stay as set for this page only.
   }
 }

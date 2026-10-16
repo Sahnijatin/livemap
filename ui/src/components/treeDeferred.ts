@@ -1,4 +1,30 @@
-import { dirKey, type Item } from '../treeModel';
+/**
+ * The file tree's code that first paint does not need, in a chunk of its own (FileTree loads it on mount): key
+ * handling, and saving folder choices.
+ */
+import type { Dispatch, SetStateAction } from 'react';
+import { dirKey, editSet as edit, treeKey, type DirState, type Item } from '../treeModel';
+import type { Moving, Session } from './FileTree';
+
+/** Folder unfold and fold (height and fade), matching `.dgroup.unfold/.fold` in styles.css. */
+const FOLD_MS = 360;
+const NONE: ReadonlySet<string> = new Set();
+
+/** Stored choices beyond this many drop the oldest. */
+const MAX_STORED = 2000;
+
+/** The newest `max` choices as [path, open] pairs. */
+export function serializeTreeState(state: DirState, max = MAX_STORED): string {
+  return JSON.stringify([...state].slice(-max));
+}
+
+export function saveTreeState(root: string, state: DirState): void {
+  try {
+    globalThis.localStorage?.setItem(treeKey(root), serializeTreeState(state));
+  } catch {
+    // Private mode, quota or blocked storage: folders stay as set for this page only.
+  }
+}
 
 /** Typed letters within this long of each other search as one prefix. */
 const TYPEAHEAD_MS = 700;
@@ -6,7 +32,17 @@ const TYPEAHEAD_MS = 700;
 /** What the handler reads from a key event (a replayed key has only these). */
 export interface KeyPress { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; preventDefault(): void }
 
-export interface TreeKeyContext {
+type Set_<T> = Dispatch<SetStateAction<T>>;
+
+/** What the deferred tree code reads and sets in FileTree. */
+export interface TreeContext {
+  dirItems: ReadonlyMap<string, Extract<Item, { kind: 'dir' }>>;
+  q: string;
+  reduced: boolean;
+  setFilterClosed: Set_<{ q: string; dirs: ReadonlySet<string> }>;
+  setDirs: Set_<DirState>;
+  setSession: Set_<Session>;
+  setMoving: Set_<ReadonlyMap<string, Moving>>;
   /** Focusable rows in order. */
   navKeys: string[];
   navSet: ReadonlySet<string>;
@@ -37,10 +73,10 @@ export function namesFor(items: Item[]): Map<string, string[]> {
 }
 
 /**
- * The file tree's keys, loaded after first paint (FileTree): Up/Down/Home/End move, Right opens or enters, Left
+ * The file tree's keys: Up/Down/Home/End move, Right opens or enters, Left
  * closes or goes up, and typing a name moves to the next row that starts with it.
  */
-export function treeKeyDown(e: KeyPress, c: TreeKeyContext): void {
+export function treeKeyDown(e: KeyPress, c: TreeContext): void {
   const el = document.activeElement as HTMLElement | null;
   const key = el?.dataset.nav;
   const { navKeys } = c;
@@ -84,4 +120,39 @@ export function treeKeyDown(e: KeyPress, c: TreeKeyContext): void {
     }
   }
   e.preventDefault();
+}
+
+/** Opens or closes a folder row: for the session under a filter, else as the user's saved choice. */
+export function toggleDir(dir: string, c: TreeContext): void {
+  const item = c.dirItems.get(dir);
+  if (!item) return;
+  const { open, chain } = item;
+  const { q } = c;
+  if (q) {
+    c.setFilterClosed(f => {
+      const was = f.q === q ? f.dirs : NONE;
+      return { q, dirs: open ? edit(was, [dir]) : edit(was, [], [dir]) };
+    });
+  } else {
+    // A chain opens and closes as a whole, so each of its folders keeps the state when the chain splits.
+    c.setDirs(d => {
+      const next = new Map(d);
+      for (const p of chain) { next.delete(p); next.set(p, !open); } // re-added last: the newest choices are kept longest
+      return next;
+    });
+    // The user's choice replaces a reveal, and a close holds against the agent for the session.
+    c.setSession(s => ({
+      ...s,
+      picked: edit(s.picked, [], chain),
+      closed: open ? edit(s.closed, chain) : edit(s.closed, [], chain),
+    }));
+  }
+  if (c.reduced) return;
+  // A closing folder keeps the rows it shows now until its fold ends (a folding child among them, closed).
+  const rows = c.items;
+  const at = rows.findIndex(it => it.kind === 'dir' && it.node.path === dir);
+  let end = at + 1;
+  while (at >= 0 && end < rows.length && rows[end].level > rows[at].level) end++;
+  const kept = open && at >= 0 ? rows.slice(at + 1, end) : [];
+  c.setMoving(m => new Map(m).set(dir, { kind: open ? 'fold' : 'unfold', until: Date.now() + FOLD_MS, rows: kept }));
 }

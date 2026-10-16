@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { FileModel } from '@shared/types.js';
 import { file, sym } from './fixtures';
+import { saveTreeState, serializeTreeState } from './components/treeDeferred';
 import {
   ROW_BUDGET, DIR_BATCH, ancestors, buildTree, chainOf, closedAbove, chainOpen, compareNames, dirActivity, loadTreeState, parseTreeState,
-  saveTreeState, serializeTreeState, dirKey, moreKey, symKey, splitName, treeKey, visibleItems, type DirNode, type Item,
+  dirKey, moreKey, symKey, splitName, treeKey, visibleItems, type DirNode, type Item,
 } from './treeModel';
 
 /** Slower CI runners scale wall-clock budgets (LIVEMAP_TIME_SCALE, set by CI on macOS and Windows). */

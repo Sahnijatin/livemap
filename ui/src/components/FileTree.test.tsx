@@ -840,6 +840,133 @@ describe('FileTree round 3', () => {
   });
 });
 
+describe('FileTree round 5', () => {
+  const dir = (path: string) => byData('dir', path);
+  const open = (path: string) => dir(path)!.getAttribute('aria-expanded');
+  const focused = () => (document.activeElement as HTMLElement).dataset.nav;
+  const press = (k: string) => act(() => { (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })); });
+  const scrollSpy = vi.fn();
+  let tool = 500;
+  const sessionIs = (status: 'working' | 'idle') => act(() => useStore.getState().apply({ type: 'session', session: session({ id: 's1', status, lastAt: Date.now() }) }));
+  const edit = (path: string) => {
+    sessionIs('working');
+    const id = `e${++tool}`;
+    act(() => useStore.getState().apply({ type: 'agentEvent', event: event({ sessionId: 's1', type: 'tool_start', at: Date.now(), tool: { id, name: 'Edit', label: 'Edit', paths: [path] } }) }));
+    return id;
+  };
+  const done = (id: string) => act(() => useStore.getState().apply({ type: 'agentEvent', event: event({ sessionId: 's1', type: 'tool_end', at: Date.now(), tool: { id, name: 'Edit', label: 'Edit', paths: [] } }) }));
+  const many = () => Array.from({ length: 2100 }, (_, i) => file(`d${i % 3}/s/f${i}.ts`));
+  beforeEach(() => { scrollSpy.mockClear(); (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView = scrollSpy; });
+  afterEach(() => { delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView; });
+
+  it('keeps the agent\'s folders open while it reads between edits, and does not scroll again', () => {
+    useStore.getState().apply(hello(many()));
+    mount();
+    const id = edit('d0/s/f0.ts');
+    expect(open('d0/s')).toBe('true');
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    done(id); // reading: no target
+    sessionIs('working');
+    act(() => { vi.advanceTimersByTime(15_000); });
+    expect(open('d0/s')).toBe('true');
+    edit('d0/s/f0.ts');
+    expect(open('d0/s')).toBe('true');
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    edit('d0/s/f3.ts'); // another file in the same folder
+    expect(open('d0/s')).toBe('true');
+    sessionIs('idle'); // the session ends: the folders it opened close
+    expect(open('d0/s')).toBe('false');
+  });
+
+  it('waits for the user-scroll hold before closing or opening folders for a target move', () => {
+    useStore.getState().apply(hello(many()));
+    mount();
+    edit('d0/s/f0.ts');
+    act(() => { vi.advanceTimersByTime(1000); });
+    act(() => { host.querySelector('.tree')!.dispatchEvent(new Event('wheel', { bubbles: true })); });
+    edit('d1/s/f1.ts');
+    expect(open('d0/s')).toBe('true');
+    expect(open('d1/s')).toBe('false');
+    act(() => { vi.advanceTimersByTime(5100); });
+    expect(open('d0/s')).toBe('false');
+    expect(open('d1/s')).toBe('true');
+  });
+
+  it('waits for the hold before closing the folders of an agent that stopped', () => {
+    useStore.getState().apply(hello(many()));
+    mount();
+    edit('d0/s/f0.ts');
+    act(() => { host.querySelector('.tree')!.dispatchEvent(new Event('wheel', { bubbles: true })); });
+    sessionIs('idle');
+    expect(open('d0/s')).toBe('true');
+    act(() => { vi.advanceTimersByTime(5100); });
+    expect(open('d0/s')).toBe('false');
+  });
+
+  it('a waiting reveal expires, and goes when the filter changes', () => {
+    useStore.getState().apply(hello(many()));
+    mount();
+    act(() => useStore.getState().setFilter('f1'));
+    act(() => useStore.getState().select('d2/s/f5.ts')); // hidden by the filter
+    act(() => { vi.advanceTimersByTime(60_000); });
+    act(() => useStore.getState().setFilter(''));
+    expect(scrollSpy).not.toHaveBeenCalled();
+    // A file the agent creates within 10 s still scrolls; one that shows after that does not.
+    edit('d0/s/new.ts');
+    act(() => { vi.advanceTimersByTime(5000); });
+    act(() => useStore.getState().apply({ type: 'files', files: [file('d0/s/new.ts')], removed: [] }));
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    edit('d1/s/late.ts');
+    act(() => { vi.advanceTimersByTime(11_000); });
+    act(() => useStore.getState().apply({ type: 'files', files: [file('d1/s/late.ts')], removed: [] }));
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps big or not fixed while indexing, deciding again only when it ends', () => {
+    useStore.getState().apply({ ...hello([file('a/x.ts'), file('b/y.ts')]), indexing: true });
+    mount();
+    const more = Array.from({ length: 2050 }, (_, i) => file(`a/gen/f${i}.ts`));
+    act(() => useStore.getState().apply({ type: 'files', files: more, removed: [] }));
+    expect(open('a')).toBe('true'); // no collapse mid-index
+    act(() => useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts'), ...more])));
+    expect(open('a')).toBe('false');
+    act(() => useStore.getState().apply({ type: 'files', files: [], removed: more.map(f => f.path) }));
+    expect(open('a')).toBe('false'); // never again
+  });
+
+  it('a folder folding inside a closing parent draws closed, without its rows', () => {
+    useStore.getState().apply(hello([file('a/b/x.ts'), file('a/y.ts')]));
+    mount();
+    act(() => dir('a/b')!.click());
+    act(() => { vi.advanceTimersByTime(100); });
+    act(() => dir('a')!.click());
+    act(() => { vi.advanceTimersByTime(300); }); // a/b has finished folding, a has not
+    expect(dir('a/b')).not.toBeNull();
+    expect(open('a/b')).toBe('false');
+    expect(byData('file', 'a/b/x.ts')).toBeNull();
+  });
+
+  it('Left on a "Show more" row moves to its folder', () => {
+    useStore.getState().apply(hello(Array.from({ length: 300 }, (_, i) => file(`big/f${i}.ts`))));
+    mount();
+    act(() => navEl(moreKey('big'))!.focus());
+    press('ArrowLeft');
+    expect(focused()).toBe(dirKey('big'));
+  });
+
+  it('the agent opens nothing below a folder the user closed', () => {
+    useStore.getState().apply(hello(many()));
+    mount();
+    act(() => dir('d0/s')!.click()); // opened by the user
+    act(() => dir('d0/s')!.click()); // and closed again, this session
+    act(() => { vi.advanceTimersByTime(400); });
+    useStore.getState().apply({ type: 'files', files: [file('d0/s/deep/z.ts')], removed: [] });
+    edit('d0/s/deep/z.ts');
+    act(() => dir('d0/s')!.click()); // the user opens it: the agent did not open what is inside
+    expect(open('d0/s/deep')).toBe('false');
+  });
+});
+
 describe('FileTree lazy keys', () => {
   let real: typeof treeKeysLoader.load;
   beforeEach(() => { real = treeKeysLoader.load; });
@@ -860,6 +987,19 @@ describe('FileTree lazy keys', () => {
     expect(focused()).toBe('a.ts'); // not replayed
     press('ArrowDown');
     expect(focused()).toBe('b.ts');
+  });
+
+  it('a folder clicked before the deferred code loads opens or closes once it has', async () => {
+    let resolve!: () => void;
+    const gate = new Promise<void>(r => { resolve = r; });
+    treeKeysLoader.reset();
+    treeKeysLoader.load = () => gate.then(real);
+    useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts')]));
+    mount();
+    act(() => byData('dir', 'a')!.click());
+    expect(byData('dir', 'a')!.getAttribute('aria-expanded')).toBe('true');
+    await act(async () => { resolve(); await gate; await loadTreeKeys(); });
+    expect(byData('dir', 'a')!.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('retries after a failed load on the next key', async () => {

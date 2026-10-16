@@ -9,50 +9,44 @@ import { LAYERS } from '../layers';
 import { latestChange, type SymbolTag } from '../changes';
 import { useLiveRecent } from '../recent';
 import {
-  BIG_PROJECT, DIR_BATCH, ancestors, buildTree, cachedTags, chainOpen, closedAbove, dirActivity, dirKey, loadTreeState, moreKey,
-  saveTreeState, visibleItems, type Activity, type DirState, type Item, type Row,
+  BIG_PROJECT, DIR_BATCH, ancestors, editSet as edit, buildTree, cachedTags, chainOpen, closedAbove, dirActivity, dirKey, loadTreeState, moreKey,
+  visibleItems, type Activity, type DirState, type Item, type Row,
 } from '../treeModel';
 import { FileRow, MidName } from './FileRow';
-import type { TreeKeyContext } from './treeKeys';
+import type { TreeContext } from './treeDeferred';
 import { CollapseButton } from './Dock';
 import { usePrefersReducedMotion } from '../motion';
 import { Chevron, SearchIcon } from './icons';
 
 const POP_MS = 700;
-/** Folder unfold and fold (height and fade), matching `.dgroup.unfold/.fold` in styles.css. */
-const FOLD_MS = 360;
 /** Auto-reveal pauses this long after the user scrolls the tree. */
 const USER_SCROLL_HOLD_MS = 5000;
 /** Scroll events this soon after our own scrollIntoView are the animation, not the user. */
 const SELF_SCROLL_MS = 900;
+/** A reveal whose row has not shown by then is dropped (a file the agent creates is indexed well within it). */
+const REVEAL_WAIT_MS = 10_000;
 /** Folder choices are saved this long after the last change, and right away when the page is hidden or closed. */
 const SAVE_MS = 300;
 const EMPTY_TAGS = new Map<string, SymbolTag>();
 const NO_LIMITS: ReadonlyMap<string, number> = new Map();
 const NO_DIRS: ReadonlySet<string> = new Set();
-/** `set` with `add` added and `del` removed, as a new set. */
-const edit = (set: ReadonlySet<string>, add: readonly string[], del: readonly string[] = []): ReadonlySet<string> => {
-  const next = new Set(set);
-  for (const a of add) next.add(a);
-  for (const d of del) next.delete(d);
-  return next;
-};
-/** A closed folder's activity dot: its label, and the title as "A file in this folder <title>". */
-const ACTIVITY: Record<Activity, [string, string]> = { now: ['being written', 'is being written'], edited: ['edited', 'was edited'], new: ['new', 'is new'] };
+/** A closed folder's activity dot label; its title reads "A file in this folder is <label>". */
+const ACTIVITY: Record<Activity, string> = { now: 'being written', edited: 'edited', new: 'new' };
 /**
  * This session's folder overrides, never saved: `picked` folders opened to show a file the user selected,
- * `closed` folders the user closed (the agent's reveals leave them shut), and `agentAt` the agent file being shown.
+ * `closed` folders the user closed (the agent's reveals leave them shut), `agentAt` the agent file being shown, and
+ * `blocked` an agent file that arrived under a folder the user closed (it opens nothing, even once that reopens).
  */
-type Session = { picked: ReadonlySet<string>; closed: ReadonlySet<string>; agentAt: string | null };
-type Moving = { kind: 'fold' | 'unfold'; until: number; rows: Item[] };
+export type Session = { picked: ReadonlySet<string>; closed: ReadonlySet<string>; agentAt: string | null; blocked?: string | null };
+export type Moving = { kind: 'fold' | 'unfold'; until: number; rows: Item[] };
 
-type KeysModule = typeof import('./treeKeys');
-/** The tree's key handling, a chunk of its own that loads after first paint. */
+type KeysModule = typeof import('./treeDeferred');
+/** The tree's key handling and saving, a chunk of its own that loads after first paint. */
 let keys: KeysModule | null = null;
 let loading: Promise<KeysModule | null> | null = null;
 /** How the key chunk is fetched (tests swap it), and `reset` to forget it. */
 export const treeKeysLoader = {
-  load: (): Promise<KeysModule> => import('./treeKeys'),
+  load: (): Promise<KeysModule> => import('./treeDeferred'),
   reset(): void { keys = null; loading = null; },
 };
 /** The key handler, loading it once; a failed load resolves null and the next call tries again. */
@@ -80,7 +74,8 @@ export function FileTree() {
   const targetPath = target?.path ?? null;
   const userScrolledAt = useRef(0);
   const selfScrollUntil = useRef(0);
-  const [reveal, setReveal] = useState<string | null>(null);
+  /** The file to scroll to once its row shows, when it was asked for, and under which filter. */
+  const [reveal, setReveal] = useState<{ path: string; at: number; q: string } | null>(null);
   const treeRef = useRef<HTMLDivElement>(null);
   /** Mounted rows by nav key (ids can hold a NUL, which a CSS selector cannot match). */
   const rowEls = useRef(new Map<string, HTMLElement>());
@@ -106,17 +101,20 @@ export function FileTree() {
   const closedNow = filterClosed.q === q ? filterClosed.dirs : NO_DIRS;
   const { root: tree, layers } = useMemo(() => buildTree(files, q), [files, q]);
   const fileCount = useMemo(() => Object.keys(files).length, [files]);
-  // Big or not is decided once, when the first index has finished, so later growth leaves the folders alone.
+  // Big or not: taken from the first files seen, held while indexing, decided once more when the index finishes.
   const indexing = useStore(s => s.indexing !== null);
-  const [bigAt, setBigAt] = useState<boolean | null>(null);
-  if (bigAt === null && !indexing && fileCount > 0) setBigAt(fileCount >= BIG_PROJECT);
-  const big = bigAt ?? fileCount >= BIG_PROJECT;
+  const [bigAt, setBigAt] = useState<{ big: boolean; final: boolean } | null>(null);
+  if (!bigAt?.final && fileCount > 0 && (!indexing || !bigAt)) setBigAt({ big: fileCount >= BIG_PROJECT, final: !indexing });
+  const big = bigAt ? bigAt.big : fileCount >= BIG_PROJECT;
 
   const pending = useRef<DirState | null>(null);
   const flush = useCallback(() => {
     const p = pending.current;
+    if (!p) return;
+    // The saving code is in the deferred chunk (normally loaded by now); a failed load keeps the choices pending.
+    if (!keys) { void loadTreeKeys().then(m => { if (m) flush(); }); return; }
     pending.current = null;
-    if (p) saveTreeState(projectRoot, p);
+    keys.saveTreeState(projectRoot, p);
   }, [projectRoot]);
   useEffect(() => {
     if (dirs === loaded.current) return; // as read from storage: nothing to write back
@@ -130,8 +128,8 @@ export function FileTree() {
     document.addEventListener('visibilitychange', hidden);
     return () => { window.removeEventListener('pagehide', flush); document.removeEventListener('visibilitychange', hidden); flush(); };
   }, [flush]);
-  const latest = useRef({ dirs, big, closed: session.closed });
-  latest.current = { dirs, big, closed: session.closed };
+  const latest = useRef({ dirs, big, closed: session.closed, q });
+  latest.current = { dirs, big, closed: session.closed, q };
   /** Shows a file the user selected: opens the closed folders above it for this session, even ones they closed. */
   const showPicked = useCallback((path: string) => {
     const above = ancestors(path);
@@ -146,7 +144,8 @@ export function FileTree() {
   // The agent's file shows its folders until the agent moves on; folders the user closed this session stay shut.
   const agentDirs = useMemo(() => {
     const at = session.agentAt;
-    if (at === null) return NO_DIRS;
+    // Nothing opens under a folder the user closed this session.
+    if (at === null || at === session.blocked || ancestors(at).some(a => session.closed.has(a))) return NO_DIRS;
     return edit(NO_DIRS, closedAbove(at, dirs, big, session.picked).filter(a => !session.closed.has(a)));
   }, [session, dirs, big]);
   const revealed = useMemo(() => (agentDirs.size ? edit(session.picked, [...agentDirs]) : session.picked), [session.picked, agentDirs]);
@@ -160,27 +159,35 @@ export function FileTree() {
   }, [q, closedNow, dirs, big, revealed]);
 
   // Auto-reveal: open the target's folders, then scroll its row into view. Never selects or focuses.
-  // During the hold after a user scroll the latest target waits, and is revealed when the hold ends.
+  // The folders stay while the agent reads (no target) and change when it writes elsewhere or its session stops.
+  // During the hold after a user scroll any such change waits, and applies when the hold ends.
+  const agentWorking = useStore(s => Object.values(s.sessions).some(x => x.status === 'working'));
   const [holdEnded, setHoldEnded] = useState(0);
+  const lastShown = useRef<string | null>(null);
   useEffect(() => {
-    // An idle agent shows nothing: the folders only it opened close, as when it moves on.
-    if (targetPath === null) { setSession(s => (s.agentAt === null ? s : { ...s, agentAt: null })); return; }
+    const want = agentWorking ? targetPath : null;
+    if (want === null && agentWorking) return; // reading between writes: keep what is open
     const wait = userScrolledAt.current + USER_SCROLL_HOLD_MS - Date.now();
     if (wait > 0) {
       const t = window.setTimeout(() => setHoldEnded(n => n + 1), wait);
       return () => window.clearTimeout(t);
     }
-    setSession(s => (s.agentAt === targetPath ? s : { ...s, agentAt: targetPath }));
-    // No scroll to a file inside a folder the user closed: its row stays hidden.
-    if (!ancestors(targetPath).some(a => latest.current.closed.has(a))) setReveal(targetPath);
-  }, [targetPath, holdEnded]);
+    setSession(s => (s.agentAt === want ? s : { ...s, agentAt: want, blocked: want !== null && ancestors(want).some(a => s.closed.has(a)) ? want : null }));
+    // No scroll to a file inside a folder the user closed (its row stays hidden), nor again to one in view.
+    if (want === null || ancestors(want).some(a => latest.current.closed.has(a))) return;
+    const r = rowEls.current.get(want)?.getBoundingClientRect();
+    const box = treeRef.current?.getBoundingClientRect();
+    if (want === lastShown.current && r && box && r.top >= box.top && r.bottom <= box.bottom) return;
+    lastShown.current = want;
+    setReveal({ path: want, at: Date.now(), q: latest.current.q });
+  }, [targetPath, agentWorking, holdEnded]);
   // Each selection (Map, palette, Activity, inspector, or this tree) is revealed, the same file again included.
   const selects = useStore(s => s.selects);
   useEffect(() => {
     const path = useStore.getState().selected;
     if (path === null) return;
     showPicked(path);
-    setReveal(path);
+    setReveal({ path, at: Date.now(), q: latest.current.q });
   }, [selects, showPicked]);
   const rowOpen = useCallback((row: Row) => row.forceOpen || (Object.hasOwn(expanded, row.file.path) && expanded[row.file.path]), [expanded]);
   const pins = useMemo(() => {
@@ -199,9 +206,10 @@ export function FileTree() {
     return byDir;
   }, [openItems]);
   // Rows of folding folders render until the fold ends, but are never part of keyboard navigation.
+  // Every folding folder that is not open again draws closed, one inside a closing parent's saved rows too.
   const folding = useMemo(() => {
     const f = new Set<string>();
-    for (const [d, m] of moving) if (m.kind === 'fold' && dirItems.get(d)?.open === false) f.add(d);
+    for (const [d, m] of moving) if (m.kind === 'fold' && !dirItems.get(d)?.open) f.add(d);
     return f;
   }, [moving, dirItems]);
   // A folding folder's rows are the ones it showed when it closed; the other folders already show their new layout.
@@ -223,14 +231,16 @@ export function FileTree() {
     }, Math.max(0, soonest - Date.now()));
     return () => window.clearTimeout(t);
   }, [moving]);
-  // A reveal waits for its row (a file the agent is creating shows once indexed), unless a user close hides it.
+  // A reveal waits for its row (a file the agent is creating shows once indexed), for up to 10 s. It goes when the
+  // filter changes, when a user close hides the row, or when a newer one replaces it.
   useEffect(() => {
     if (reveal === null) return;
-    const el = rowEls.current.get(reveal);
-    if (!el) {
-      if (ancestors(reveal).some(a => (q ? closedNow : session.closed).has(a))) setReveal(null);
+    if (Date.now() - reveal.at > REVEAL_WAIT_MS || reveal.q !== q || ancestors(reveal.path).some(a => (q ? closedNow : session.closed).has(a))) {
+      setReveal(null);
       return;
     }
+    const el = rowEls.current.get(reveal.path);
+    if (!el) return;
     setReveal(null);
     selfScrollUntil.current = Date.now() + SELF_SCROLL_MS;
     el.scrollIntoView?.({ block: 'nearest', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
@@ -263,49 +273,28 @@ export function FileTree() {
     s.revealLine(path, line);
     if (isNarrow()) s.setPanel('inspector');
   }, []);
-  const toggleDir = (dir: string) => {
-    const item = dirItems.get(dir);
-    if (!item) return;
-    const { open, chain } = item;
-    if (q) {
-      setFilterClosed(f => {
-        const was = f.q === q ? f.dirs : NO_DIRS;
-        return { q, dirs: open ? edit(was, [dir]) : edit(was, [], [dir]) };
-      });
-    } else {
-      // A chain opens and closes as a whole, so each of its folders keeps the state when the chain splits.
-      setDirs(d => {
-        const next = new Map(d);
-        for (const p of chain) { next.delete(p); next.set(p, !open); } // re-added last: the newest choices are kept longest
-        return next;
-      });
-      // The user's choice replaces a reveal, and a close holds against the agent for the session.
-      setSession(s => ({
-        ...s,
-        picked: edit(s.picked, [], chain),
-        closed: open ? edit(s.closed, chain) : edit(s.closed, [], chain),
-      }));
-    }
-    if (reduced) return;
-    // A closing folder keeps the rows it shows now until its fold ends.
-    const at = items.findIndex(it => it.kind === 'dir' && it.node.path === dir);
-    let end = at + 1;
-    while (at >= 0 && end < items.length && items[end].level > items[at].level) end++;
-    const rows = open && at >= 0 ? items.slice(at + 1, end) : [];
-    setMoving(m => new Map(m).set(dir, { kind: open ? 'fold' : 'unfold', until: Date.now() + FOLD_MS, rows }));
-  };
+
 
   useEffect(() => { void loadTreeKeys(); }, []);
-  const keyCtx = useRef<TreeKeyContext | null>(null);
-  keyCtx.current = {
+  const ctx = useRef<TreeContext | null>(null);
+  ctx.current = {
     navKeys,
     navSet,
     items: openItems,
+    dirItems,
+    q,
+    reduced,
+    setFilterClosed,
+    setDirs,
+    setSession,
+    setMoving,
     focus: k => rowEls.current.get(k)?.focus(),
     toggle: el => (el.dataset.dir !== undefined ? toggleDir(el.dataset.dir) : onToggle(el.dataset.file!)),
   };
+  // Opening and closing folders lives in the deferred chunk too (loaded by the time anyone clicks; else it waits).
+  const toggleDir = (dir: string) => (keys ? keys.toggleDir(dir, ctx.current!) : void loadTreeKeys().then(m => m?.toggleDir(dir, ctx.current!)));
   // Keys before the handler has loaded do nothing; a key after a failed load tries again.
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => (keys ? keys.treeKeyDown(e, keyCtx.current!) : void loadTreeKeys());
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => (keys ? keys.treeKeyDown(e, ctx.current!) : void loadTreeKeys());
 
   const animateFrom = helloAt + 1000;
   const now = Date.now();
@@ -313,7 +302,7 @@ export function FileTree() {
     if (item.kind === 'more') {
       const k = moreKey(item.dir, item.part);
       return (
-        <button type="button" key={k} ref={el => register(k, el)} className="more-rows" style={{ ['--d' as string]: item.level - 1 }} data-nav={k} tabIndex={active === k ? 0 : -1} onClick={() => showMore(k, item.shown)}>
+        <button type="button" key={k} ref={el => register(k, el)} className="more-rows" style={{ ['--d' as string]: item.level - 1 }} data-nav={k} data-up={item.up ?? undefined} tabIndex={active === k ? 0 : -1} onClick={() => showMore(k, item.shown)}>
           Show {Math.min(item.hidden, DIR_BATCH).toLocaleString()} more {item.part === 'dirs' ? 'folders' : 'files'} ({item.hidden.toLocaleString()} hidden)
         </button>
       );
@@ -346,7 +335,7 @@ export function FileTree() {
           title={`${dir} · ${node.count.toLocaleString()} ${node.count === 1 ? 'file' : 'files'}`}
         >
           <Chevron className="dchev" /><i /><MidName name={label} kind="dir" />
-          {act && <em className={clsx('dlive', act, act === 'now' && 'pulse')} role="img" aria-label={ACTIVITY[act][0]} title={`A file in this folder ${ACTIVITY[act][1]}`} />}
+          {act && <em className={clsx('dlive', act, act === 'now' && 'pulse')} role="img" aria-label={ACTIVITY[act]} title={`A file in this folder is ${ACTIVITY[act]}`} />}
           {!open && !act && selectedDirs.has(dir) && <em className="dlive" role="img" aria-label="contains the selected file" title="The selected file is in this folder" />}
           <b>{node.count.toLocaleString()}</b>
         </button>,
