@@ -269,8 +269,9 @@ test('at 1440 px dragging the sidebar handle resizes the column, and the width s
     (window as unknown as { appClasses: string[] }).appClasses = seen;
     new MutationObserver(() => {
       const app = document.querySelector('.app');
-      if (app && seen[seen.length - 1] !== app.className) seen.push(app.className);
-    }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
+      const c = app && app.className + (app.hasAttribute('data-glide') ? ' data-glide' : '');
+      if (app && seen[seen.length - 1] !== c) seen.push(c!);
+    }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'data-glide'] });
   });
   await page.reload();
   await expect(page.getByRole('status').filter({ hasText: 'Live' })).toBeAttached({ timeout: 15_000 });
@@ -282,6 +283,156 @@ test('at 1440 px dragging the sidebar handle resizes the column, and the width s
     expect(c).not.toContain('glide');
   }
   expect(Math.round((await page.locator('main.center').boundingBox())!.x)).toBe(12);
+});
+
+test('at 1920 px Widen inspector glides to its reach, survives a reload and restores both widths', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await open(page);
+  const insp = page.locator('aside.insp');
+  const width = async () => Math.round((await insp.boundingBox())!.width);
+  const files = async () => Math.round((await page.locator('aside.sidebar').boundingBox())!.width);
+  const widen = page.getByRole('button', { name: 'Widen inspector' });
+  const restore = page.getByRole('button', { name: 'Restore inspector width' });
+  expect(await width()).toBe(384);
+  // Its own 26 px button, at least 6 px from the hide button.
+  const a = (await widen.boundingBox())!;
+  const b = (await page.getByRole('button', { name: 'Hide inspector' }).boundingBox())!;
+  expect([Math.round(a.width), Math.round(a.height)]).toEqual([26, 26]);
+  expect(b.x - (a.x + a.width)).toBeGreaterThanOrEqual(6);
+  await widen.hover();
+  await page.waitForTimeout(500);
+  // It glides like a collapse: the panel takes its new width at once and its grid column slides.
+  const glides = await page.evaluate(async () => {
+    const app = document.querySelector('.app')!;
+    document.querySelector<HTMLButtonElement>('button.widebtn')!.click();
+    await new Promise(r => requestAnimationFrame(r));
+    return { columns: app.getAnimations().map(a => (a as CSSTransition).transitionProperty), panel: Math.round(document.querySelector('aside.insp')!.getBoundingClientRect().width) };
+  });
+  expect(glides).toEqual({ columns: ['grid-template-columns'], panel: 1252 });
+  // 1896 px box - 420 center - 12 gap - (200 + 12) project panel at its minimum.
+  await expect.poll(width).toBe(1252);
+  expect(await files()).toBe(200);
+  await expect.poll(async () => Math.round((await page.locator('main.center').boundingBox())!.width)).toBe(420);
+  await page.reload();
+  await expect(page.getByRole('status').filter({ hasText: 'Live' })).toBeAttached({ timeout: 15_000 });
+  expect(await width()).toBe(1252);
+  await restore.click();
+  await expect(widen).toBeVisible();
+  await expect.poll(width).toBe(384);
+  expect(await files()).toBe(272);
+  await page.setViewportSize({ width: 900, height: 900 });
+  await expect(widen).toHaveCount(0);
+});
+
+test('a 980 px inspector stored on a 1920 px screen leaves the file tree at its width at 1440 px', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await page.evaluate(() => localStorage.setItem('livemap:layout', JSON.stringify({ w: { files: null, inspector: 980 }, collapsed: { files: false, inspector: false }, last: 'inspector', at: 1896 })));
+  await page.reload();
+  await expect(page.getByRole('status').filter({ hasText: 'Live' })).toBeAttached({ timeout: 15_000 });
+  expect(Math.round((await page.locator('aside.sidebar').boundingBox())!.width)).toBe(272);
+  expect(Math.round((await page.locator('aside.insp').boundingBox())!.width)).toBe(1416 - 444 - 272);
+});
+
+/** Every center tab and Map tool lies whole inside the center column and its head, with nothing scrolled or clipped. */
+async function centerHeadFits(page: Page) {
+  const r = await page.evaluate(() => {
+    const box = (el: Element) => el.getBoundingClientRect();
+    const center = box(document.querySelector('main.center')!);
+    const head = document.querySelector('.c-head')!;
+    const tabs = document.querySelector('.tabs')!;
+    const inside = (el: Element) => { const b = box(el); return b.width > 0 && b.left >= center.left - 0.5 && b.right <= center.right + 0.5 && b.left >= box(head).left - 0.5 && b.right <= box(head).right + 0.5; };
+    const items = [...document.querySelectorAll('.tabs [role=tab], .c-tools > *')];
+    return {
+      outside: items.filter(el => !inside(el)).map(el => el.getAttribute('aria-label') ?? el.className),
+      tabsInside: [...tabs.querySelectorAll('[role=tab]')].every(el => box(el).left >= box(tabs).left - 0.5 && box(el).right <= box(tabs).right + 0.5),
+      scrolled: [head, tabs].some(el => el.scrollWidth > el.clientWidth + 1),
+      center: Math.round(center.width),
+    };
+  });
+  expect(r.outside).toEqual([]);
+  expect(r.tabsInside).toBe(true);
+  expect(r.scrolled).toBe(false);
+  return r.center;
+}
+
+/** Wider text than this container's Inter: DejaVu Sans (as on Linux CI runners), spaced out a little more. */
+async function wideFont(page: Page) {
+  await page.addInitScript(() => {
+    const css = ':root { --sans: "DejaVu Sans", Verdana, sans-serif !important; --display: "DejaVu Sans", Verdana, sans-serif !important; } body { letter-spacing: .3em; }';
+    document.addEventListener('DOMContentLoaded', () => { const st = document.createElement('style'); st.textContent = css; document.head.append(st); });
+  });
+}
+
+for (const font of ['default', 'wide'] as const) test(`the center tabs and Map tools fit a 420 px center (${font} font): icon and count, the label as tooltip and name`, async ({ page }) => {
+  if (font === 'wide') await wideFont(page);
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await open(page);
+  const labels = page.locator('.tabs [role=tab] .tl');
+  await expect(labels.first()).toBeVisible();
+  await page.getByRole('button', { name: 'Widen inspector' }).click();
+  await expect.poll(async () => Math.round((await page.locator('main.center').boundingBox())!.width)).toBe(420);
+  for (const t of ['activity', 'map', 'schema', 'api', 'stack']) {
+    await showTab(page, t);
+    expect(await centerHeadFits(page)).toBe(420);
+    await expect(tab(page, t)).toBeInViewport({ ratio: 1 });
+  }
+  // The selected tab's knob never sticks out of the strip, not even while it springs from one end to the other.
+  const overflow = await page.evaluate(async () => {
+    const tabs = document.querySelector('.tabs')!;
+    let most = 0;
+    for (const t of ['activity', 'stack', 'activity', 'stack']) {
+      document.querySelector<HTMLElement>(`[data-tab="${t}"]`)!.click();
+      const t0 = performance.now();
+      while (performance.now() - t0 < 700) {
+        await new Promise(r => requestAnimationFrame(r));
+        most = Math.max(most, tabs.scrollWidth - tabs.clientWidth);
+      }
+    }
+    return most;
+  });
+  expect(overflow).toBe(0);
+  // Labels are hidden but still name each tab, and show as a tooltip.
+  await expect(tab(page, 'schema').locator('.tl')).toBeHidden();
+  await expect(tab(page, 'schema')).toHaveAttribute('title', 'Schema');
+  await expect(tab(page, 'api')).toHaveAccessibleName(/^API, \d+/);
+  // At 1080 px with the default widths the center is 444 px: the same holds.
+  await page.getByRole('button', { name: 'Restore inspector width' }).click();
+  await page.setViewportSize({ width: 1080, height: 800 });
+  await showTab(page, 'map');
+  expect(await centerHeadFits(page)).toBe(444);
+  // At 1440 px every label shows again.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect.poll(() => labels.evaluateAll(els => els.every(el => (el as HTMLElement).offsetWidth > 0))).toBe(true);
+  await centerHeadFits(page);
+});
+
+test('with the default panel widths every center tab keeps its label, from 1080 px up', async ({ page }) => {
+  for (const width of [1080, 1100, 1200, 1280]) {
+    await page.setViewportSize({ width, height: 800 });
+    await open(page);
+    for (const t of ['activity', 'map']) {
+      await showTab(page, t);
+      await centerHeadFits(page);
+      const shown = await page.locator('.tabs [role=tab] .tl').evaluateAll(els => els.map(el => (el as HTMLElement).offsetWidth > 0 && el.scrollWidth <= (el as HTMLElement).offsetWidth + 1));
+      expect(shown, `${width} px, ${t}`).toEqual([true, true, true, true, true]);
+    }
+  }
+});
+
+test('loaded at 900 px and widened to 1400, a collapse glides for the full CSS duration', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 800 });
+  await open(page);
+  await page.setViewportSize({ width: 1400, height: 800 });
+  await expect(page.getByRole('button', { name: 'Hide project panel' })).toBeVisible();
+  await page.waitForTimeout(300);
+  const glide = await page.evaluate(async () => {
+    const app = document.querySelector('.app')!;
+    document.querySelector<HTMLButtonElement>('button[aria-label="Hide project panel"]')!.click();
+    await new Promise(r => setTimeout(r, 250));
+    return { on: app.hasAttribute('data-glide'), dur: getComputedStyle(app).getPropertyValue('--glide-dur').trim() };
+  });
+  expect(glide).toEqual({ on: true, dur: '.45s' });
 });
 
 test('phone toolbar: condensed, and the Map tools live in the options menu', async ({ page }) => {

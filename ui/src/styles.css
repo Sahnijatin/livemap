@@ -20,6 +20,8 @@
        damping 32: about 1% overshoot) over .4s; --layout-glide samples LAYOUT (critically damped) over .45s. */
     --spring-gentle:linear(0, .061, .198, .359, .515, .651, .761, .846, .908, .95, .978, .996, 1.005, 1.01, 1.011, 1.01, 1.009, 1.007, 1.005, 1.004, 1);
     --layout-glide:linear(0, .08, .24, .408, .557, .677, .769, .837, .887, .922, .947, .964, .976, .984, .989, .993, .995, .997, 1);
+    /* The docked columns' glide (Dock reads it once at mount, at any width). */
+    --glide-dur:.45s;
     /* Code colors (Shiki css-variables theme) mapped onto the prototype palette. */
     --shiki-foreground:var(--ink); --shiki-background:transparent;
     --shiki-token-keyword:var(--pink); --shiki-token-function:var(--blue); --shiki-token-string:var(--green);
@@ -96,9 +98,11 @@
   /* At 1080 px and wider the Files and Inspector buttons show state with their icon's filled side, not a pressed background. */
   @media (min-width:1080px) { .iconbtn[data-panel-opener][aria-expanded=true]:not(:hover) { background:transparent; } }
   .iconbtn svg { width:17px; height:17px; }
-  .iconbtn.hidebtn { width:26px; height:26px; border-radius:8px; color:var(--ink3); }
-  .iconbtn.hidebtn svg { width:15px; height:15px; }
-  .iconbtn.hidebtn:hover { color:var(--ink2); }
+  /* The small icon buttons in a docked panel's header (hide, and the inspector's Widen); hidden below 1080 px. */
+  .iconbtn.barbtn { width:26px; height:26px; border-radius:8px; color:var(--ink3); }
+  .iconbtn.barbtn svg { width:15px; height:15px; }
+  .iconbtn.barbtn:hover { color:var(--ink2); }
+  .iconbtn.barbtn[aria-disabled=true] { opacity:.4; cursor:default; background:transparent; }
 
   /* sidebar */
   .sidebar { border-radius:20px; display:flex; flex-direction:column; min-height:0; box-shadow:var(--shadow); overflow:hidden; }
@@ -190,10 +194,12 @@
 
   /* inspector */
   .insp { position:relative; border-radius:20px; display:flex; flex-direction:column; min-height:0; box-shadow:var(--shadow); overflow:hidden; }
-  /* The inspector's bar: the view's header (Live session, or a file's back link) and the hide button, above the scrolling view. */
+  /* The inspector's bar: the view's header (Live session, or a file's back link) and the widen and hide buttons, above the scrolling view. */
   .ins-bar { display:flex; align-items:center; gap:8px; min-height:26px; padding:14px 10px 0 16px; }
   .ins-bar .live-h { flex:1; min-width:0; }
   .ins-bar .hidebtn { margin:-4px -6px -4px auto; }
+  .ins-bar .widebtn { margin:-4px 0 -4px auto; }
+  .ins-bar .widebtn + .hidebtn { margin-left:-2px; }
   .ins-body { position:relative; flex:1; min-height:0; display:flex; flex-direction:column; }
   .ins-scroll { flex:1; overflow:auto; padding:16px; display:flex; flex-direction:column; gap:16px; }
   /* Content cross-fade (180 ms): the new page fades in while the old one, on top, fades out a little faster, then unmounts. */
@@ -344,9 +350,11 @@
   .toast.show { transform:translate(-50%,0) scale(1); opacity:1; }
   .toast.err { color:var(--red); }
 
-  /* center tabs: segmented control with a sliding knob */
-  .c-head { display:flex; align-items:center; flex-wrap:wrap; gap:10px; padding:10px 12px; border-bottom:1px solid var(--hair); min-height:50px; }
+  /* center tabs: segmented control with a sliding knob. The head is a container: a narrow center (the 420 px minimum
+     beside wide panels) shows tabs as icon and count, the label as tooltip; the Map's tools wrap to a row of their own. */
+  .c-head { display:flex; align-items:center; flex-wrap:wrap; gap:10px; padding:10px 12px; border-bottom:1px solid var(--hair); min-height:50px; container:c-head / inline-size; }
   .tabs { position:relative; display:flex; background:var(--hair); border-radius:12px; padding:3px; max-width:100%; }
+  .tabs .knob-track { position:absolute; inset:0; overflow-x:clip; border-radius:inherit; pointer-events:none; }
   .tabs .knob { position:absolute; top:3px; bottom:3px; left:3px; width:0; border-radius:9px; background:var(--card); box-shadow:0 1px 2px rgba(0,0,0,.08),0 3px 10px rgba(0,0,0,.06); }
   .tabs.ready .knob { transition:left .5s var(--spring),width .5s var(--spring); }
   .tabs [role=tab] { position:relative; z-index:1; border:0; background:none; padding:6px 12px; border-radius:9px; font-size:13px; font-weight:500; color:var(--ink2); cursor:pointer; display:flex; align-items:center; gap:7px; white-space:nowrap; transition:color .25s; }
@@ -355,6 +363,17 @@
   .tabs [role=tab] svg { width:15px; height:15px; flex-shrink:0; }
   .tabs .cnt { font:600 10.5px var(--sans); color:var(--ink3); background:var(--hair); border-radius:6px; padding:0 5px; min-width:18px; text-align:center; font-variant-numeric:tabular-nums; transition:transform .4s var(--spring),color .3s,background .3s; }
   .tabs .cnt.bump { transform:scale(1.35); color:var(--green); background:var(--green-t); }
+  /* Never clipped: past the breakpoints below, a label shortens with an ellipsis before a tab leaves the strip. */
+  .tabs [role=tab] { min-width:0; }
+  .tabs .tl { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+  /* Full labels need about 500 px of head; tighter tabs fit them in 414 (the default widths at 1080 px leave 418).
+     Below that (a center near its 420 px minimum) only the selected tab keeps its label; below 380 none does. */
+  @container c-head (max-width:539.98px) { .tabs [role=tab] { padding:6px; gap:4px; } }
+  @container c-head (max-width:413.98px) {
+    .tabs [role=tab] { padding:6px 10px; gap:6px; }
+    .tabs [role=tab]:not([aria-selected="true"]) .tl { display:none; }
+  }
+  @container c-head (max-width:379.98px) { .tabs [role=tab] .tl { display:none; } }
   .dotlive { width:7px; height:7px; border-radius:50%; background:var(--green); animation:pulse 1.4s ease-in-out infinite; }
   .c-body { position:relative; flex:1; min-height:0; display:flex; flex-direction:column; }
   .c-view { position:relative; flex:1; min-height:0; display:flex; flex-direction:column; }
@@ -793,7 +812,8 @@
   @keyframes lvlfade { from { opacity:0; } }
   .map-note { position:absolute; left:12px; top:12px; z-index:5; max-width:calc(100% - 24px); padding:7px 13px; border-radius:999px; font-size:12.5px; color:var(--ink2); box-shadow:var(--shadow); animation:fin .45s var(--ease) both; }
   .zoomctl .zfit { width:40px; font-size:12px; font-weight:600; }
-  .c-tools { margin-left:auto; display:flex; align-items:center; gap:8px; min-width:0; }
+  /* Wraps instead of overflowing when the text is wider (other fonts) or the center is narrow. */
+  .c-tools { margin-left:auto; display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:8px; min-width:0; max-width:100%; }
   .c-tools:empty { display:none; }
   .mini-seg { position:relative; display:flex; background:var(--hair); border-radius:10px; padding:3px; }
   .mini-seg .knob { position:absolute; top:3px; bottom:3px; border-radius:7px; background:var(--card); box-shadow:0 1px 2px rgba(0,0,0,.08); }
@@ -925,11 +945,12 @@
   @media (min-width:1080px) { .only-narrow-scrim { display:none; } }
   /* Docked panels: widths from --left-w and --right-w (set from the store; 272/384, or 248/340 below 1280 px, by
      default), each with its gap. A collapsed panel's column (gap included) goes to 0 and the panel fades out, sliding
-     off at its outer edge at its full width, so its content never reflows. `.glide` is on while a panel collapses or expands. */
+     off at its outer edge at its full width, so its content never reflows. `data-glide` (set by Dock) is on while a panel collapses or
+     expands, or the inspector widens or restores. */
   .rz { display:none; }
   @media (min-width:1080px) {
     .app { --dl:272px; --dr:384px; --lc:calc(var(--left-w,var(--dl)) + 12px); --rc:calc(var(--right-w,var(--dr)) + 12px); grid-template-columns:var(--lc) minmax(0,1fr) var(--rc); column-gap:0; }
-    .app.glide { transition:grid-template-columns .45s var(--layout-glide); }
+    .app[data-glide] { transition:grid-template-columns var(--glide-dur) var(--layout-glide); }
     .app.left-collapsed { --lc:0px; }
     .app.right-collapsed { --rc:0px; }
     .app.resizing { cursor:col-resize; user-select:none; }
@@ -956,7 +977,7 @@
     .insp { position:fixed; right:calc(var(--gutter) + var(--sar)); top:calc(var(--gutter) * 2 + 56px + var(--sat)); bottom:calc(var(--gutter) + var(--sab)); width:min(380px,calc(100vw - var(--gutter) * 2 - var(--sal) - var(--sar))); z-index:25; transform:translateX(110%); transition:transform .55s var(--ease); background:var(--glass-strong); }
     .insp.open { transform:none; box-shadow:var(--shadow-lg); }
     .sidebar:focus, .insp:focus { outline:0; }
-    .iconbtn.hidebtn { display:none; }
+    .iconbtn.barbtn { display:none; }
     /* Condensed toolbar: chips show their avatar (name in the tooltip), search shows its icon and shortcut. */
     .toolbar { gap:8px; padding:0 8px 0 12px; }
     .brand span { display:none; }

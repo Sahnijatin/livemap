@@ -129,7 +129,8 @@ export function CenterTabs() {
     <main className={clsx('center', rewound && 'rewound')} aria-label={META[tab].label} {...(narrow && panel ? INERT : {})}>
       <div className="c-head">
         <div className={clsx('tabs', placed && 'ready')} role="tablist" aria-label="Views" ref={list} onKeyDown={onKeyDown}>
-          <i className="knob" ref={knob} aria-hidden="true" />
+          {/* The track clips the knob's spring overshoot at the strip's ends (no overflow, whatever the text widths). */}
+          <i className="knob-track" aria-hidden="true"><i className="knob" ref={knob} /></i>
           {CENTER_TABS.map(t => (
             <button
               key={t}
@@ -138,6 +139,7 @@ export function CenterTabs() {
               id={`tab-${t}`}
               data-tab={t}
               aria-label={badge[t] !== undefined ? `${META[t].label}, ${badge[t]!.toLocaleString()}` : META[t].label}
+              title={META[t].label}
               aria-selected={t === tab}
               aria-controls="center-panel"
               tabIndex={t === tab ? 0 : -1}

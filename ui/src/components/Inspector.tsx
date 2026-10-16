@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { useStore } from '../store';
 import { LiveHead, LiveSession } from './LiveSession';
-import { CollapseButton } from './Dock';
+import { CollapseButton, WidenButton } from './Dock';
 import { LEAVING, useGlide, useLeaving } from '../motion';
 import { NARROW_QUERY, useMedia } from '../media';
 import { INERT, focusOpener, shownLayout } from '../panels';
@@ -88,9 +88,10 @@ export function Inspector() {
       onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) focused.current = false; }}
       {...((narrow ? panel !== 'inspector' : collapsed) ? INERT : {})}
     >
-      {/* The bar stays put above the scrolling view: its header and the hide button, so nothing scrolls under them. */}
+      {/* The bar stays put above the scrolling view: its header and the widen and hide buttons, so nothing scrolls under them. */}
       <div className="ins-bar">
         {hasFile ? <button type="button" className="backbtn" onClick={() => useStore.getState().select(null)}>‹ Live session</button> : <LiveHead />}
+        {!narrow && <WidenButton />}
         <CollapseButton panel="inspector" />
       </div>
       <div className="ins-body">
