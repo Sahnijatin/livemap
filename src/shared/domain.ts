@@ -1,4 +1,4 @@
-import type { Dep, Field, Route } from './types.js';
+import type { Dep, Field, Route, Rule } from './types.js';
 
 /** A route with the router mount prefixes applied; `id` = `${method} ${fullPath} ${file}:${line}`. */
 export interface ApiRoute extends Route { id: string; file: string; fullPath: string; mountedVia?: string[] }
@@ -8,6 +8,8 @@ export interface Table {
   sources: { file: string; line: number }[];
   fields: (Field & { file: string })[];
   relations: { field: string; to: string; many: boolean; via: 'fk' | 'relation' }[];
+  /** Rules that run on the table (ServiceNow business rules, client scripts, UI policies, ACLs), in firing order. */
+  rules?: (Rule & { file: string })[];
 }
 export interface Tech {
   id: string; name: string;

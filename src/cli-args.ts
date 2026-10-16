@@ -1,6 +1,25 @@
 import { DEFAULT_PORT } from './server/server.js';
+import type { Analyzer } from './engine/domain/index.js';
+import type { RecordKey } from './agents/attribution.js';
 
-export const USAGE = 'Usage: livemap [dir=.] [--port N] [--no-open] [--pull[=SEC]] [--no-history] [--summaries]\n       livemap init [dir=.] [--agents claude,codex,cursor] [--remove]\n       livemap export [dir=.] [--session ID] [--no-code] [--out FILE]';
+/** How a source other than a plain folder (the ServiceNow mirror) runs the server on its files. */
+export interface ServeOptions {
+  /** Analyzers added to the built-in ones. */
+  analyzers?: Analyzer[];
+  /** Maps a changed path to the record it mirrors, for attribution. */
+  recordOf?: (path: string) => RecordKey | undefined;
+  /** False: no git polling (the folder is not a repo). */
+  git?: boolean;
+  /** What "LiveMap is watching ..." names instead of the folder. */
+  title?: string;
+}
+/** What core hands a source's command: the server loop and root resolution. */
+export interface CoreHooks {
+  serve(root: string, args: Args, opts?: ServeOptions): Promise<void>;
+  resolveRoot(dir: string): string;
+}
+
+export const USAGE = 'Usage: livemap [dir=.] [--port N] [--no-open] [--pull[=SEC]] [--no-history] [--summaries]\n       livemap init [dir=.] [--agents claude,codex,cursor] [--remove]\n       livemap export [dir=.] [--session ID] [--no-code] [--out FILE]\n       livemap sn [dir=.] --scope NAMESPACE|SYS_ID [--instance NAME] [--nexus URL] [--port N] [--no-open] [--no-history] [--mirror-only]';
 const DEFAULT_PULL_SEC = 15;
 
 export interface Args { dir: string; port: number; open: boolean; pullSec: number | null; history: boolean; summaries: boolean }

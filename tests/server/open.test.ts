@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { openBrowser, isOpenableUrl, openerFor } from '../../src/server/open.js';
+import { browserWords, openBrowser, isOpenableUrl, openerFor } from '../../src/server/open.js';
 
 describe('openBrowser', () => {
   it('never throws, even when no opener command exists', async () => {
@@ -22,18 +22,33 @@ describe('openerFor', () => {
     expect(openerFor(url, 'linux', {})).toEqual({ cmd: 'xdg-open', args: [url], opts: {} });
     expect(openerFor(url, 'win32', {})).toEqual({ cmd: 'cmd', args: ['/c', 'start', '""', `"${url}"`], opts: { windowsVerbatimArguments: true } });
   });
-  it('runs BROWSER with the URL as its one argument', () => {
-    expect(openerFor(url, 'linux', { BROWSER: '/usr/bin/firefox' })).toEqual({ cmd: '/usr/bin/firefox', args: [url], opts: {} });
-    expect(openerFor(url, 'win32', { BROWSER: 'C:\\Apps\\chrome.exe' })).toEqual({ cmd: 'C:\\Apps\\chrome.exe', args: [url], opts: {} });
-    expect(openerFor(url, 'darwin', { BROWSER: '  ' })).toEqual({ cmd: 'open', args: [url], opts: {} });
+  const none = () => false;
+  it('runs BROWSER with the URL as its last argument', () => {
+    expect(openerFor(url, 'linux', { BROWSER: '/usr/bin/firefox' }, none)).toEqual({ cmd: '/usr/bin/firefox', args: [url], opts: {} });
+    expect(openerFor(url, 'win32', { BROWSER: 'C:\\Apps\\chrome.exe' }, none)).toEqual({ cmd: 'C:\\Apps\\chrome.exe', args: [url], opts: {} });
+    expect(openerFor(url, 'darwin', { BROWSER: '  ' }, none)).toEqual({ cmd: 'open', args: [url], opts: {} });
+  });
+  it('passes BROWSER arguments, and puts the URL where %s stands', () => {
+    expect(openerFor(url, 'linux', { BROWSER: 'chrome --incognito' }, none)).toEqual({ cmd: 'chrome', args: ['--incognito', url], opts: {} });
+    expect(openerFor(url, 'linux', { BROWSER: 'firefox -new-tab %s --foreground' }, none)).toEqual({ cmd: 'firefox', args: ['-new-tab', url, '--foreground'], opts: {} });
+    expect(openerFor(url, 'win32', { BROWSER: '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --new-window' }, none))
+      .toEqual({ cmd: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', args: ['--new-window', url], opts: {} });
+  });
+  it('treats a BROWSER that is an existing file as one program, spaces and all', () => {
+    const chrome = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+    expect(openerFor(url, 'win32', { BROWSER: chrome }, p => p === chrome)).toEqual({ cmd: chrome, args: [url], opts: {} });
+  });
+  it('splits words on spaces outside quotes, keeping backslashes', () => {
+    expect(browserWords(`a "b c" 'd e' C:\\x\\y.exe ""`)).toEqual(['a', 'b c', 'd e', 'C:\\x\\y.exe', '']);
   });
   it('opens nothing for BROWSER=none, in any case', () => {
-    expect(openerFor(url, 'linux', { BROWSER: 'none' })).toBeNull();
+    expect(openerFor(url, 'linux', { BROWSER: 'none' }, none)).toBeNull();
     expect(openerFor(url, 'win32', { BROWSER: ' None ' })).toBeNull();
   });
-  it('runs a Windows .cmd or .bat BROWSER through cmd, both quoted', () => {
+  it('runs a Windows .cmd or .bat BROWSER through cmd, every word quoted', () => {
     const b = 'C:\\My Tools\\open it.cmd';
-    expect(openerFor(url, 'win32', { BROWSER: b })).toEqual({ cmd: 'cmd', args: ['/d', '/s', '/c', `""${b}" "${url}""`], opts: { windowsVerbatimArguments: true } });
+    expect(openerFor(url, 'win32', { BROWSER: b }, p => p === b)).toEqual({ cmd: 'cmd', args: ['/d', '/s', '/c', `""${b}" "${url}""`], opts: { windowsVerbatimArguments: true } });
+    expect(openerFor(url, 'win32', { BROWSER: `"${b}" --x` }, none)).toEqual({ cmd: 'cmd', args: ['/d', '/s', '/c', `""${b}" "--x" "${url}""`], opts: { windowsVerbatimArguments: true } });
   });
 });
 

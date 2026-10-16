@@ -1,4 +1,4 @@
-import type { Dep, Entity, Lang, Mount, Route } from '../../shared/types.js';
+import type { CodeSymbol, Dep, Entity, Lang, Mount, Route, Rule } from '../../shared/types.js';
 import { deps } from './deps.js';
 import { env } from './env.js';
 import { routesJs } from './routes-js.js';
@@ -15,6 +15,9 @@ export interface DomainFacts {
   env: string[];
   deps?: { deps: Dep[]; scripts?: Record<string, string> };
   mounts: Omit<Mount, 'target'>[];
+  /** Symbols that replace the parser's for this file (a platform whose files the grammars do not read). */
+  symbols?: CodeSymbol[];
+  rules?: Rule[];
 }
 
 /** A pattern-based extractor; `applies` gates it by path and language so unrelated files cost nothing. */
@@ -22,6 +25,12 @@ export interface Analyzer {
   name: string;
   applies(rel: string, lang: Lang): boolean;
   run(rel: string, lang: Lang, text: string): Partial<DomainFacts>;
+  /**
+   * Project files this file depends on beyond its language's imports (a ServiceNow script naming a script
+   * include, a page placing a widget). `has` says whether a path exists. Merged into `imports.local` on
+   * every build and relink.
+   */
+  links?(rel: string, lang: Lang, text: string, has: (path: string) => boolean): string[];
 }
 
 export const ANALYZERS: Analyzer[] = [deps, env, routesJs, routesOther, screens, schemaJs, schemaSql, schemaPy, schemaMobile];
@@ -49,6 +58,8 @@ export function analyzeFile(rel: string, lang: Lang, text: string, analyzers = A
     if (facts.mounts) out.mounts.push(...facts.mounts);
     if (facts.env) for (const k of facts.env) names.add(k);
     if (facts.deps && !out.deps) out.deps = facts.deps;
+    if (facts.symbols) out.symbols = [...(out.symbols ?? []), ...facts.symbols];
+    if (facts.rules?.length) out.rules = [...(out.rules ?? []), ...facts.rules];
   }
   out.routes.sort((a, b) => a.line - b.line || (a.method < b.method ? -1 : a.method > b.method ? 1 : 0));
   out.env = [...names].sort();

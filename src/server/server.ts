@@ -23,6 +23,8 @@ import { handleHistoryApi, sendJsonMaybeGzip } from './history-routes.js';
 import { serveStatic } from './static.js';
 
 export interface ServerOptions {
+  /** The project name the UI shows; the root folder's name by default. */
+  name?: string;
   model: ProjectModel;
   watcher: Watcher;
   /** First port to try (default 4317); 0 lets the OS choose. */
@@ -194,7 +196,7 @@ function reject(socket: Duplex, status: number, text: string): void {
 export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   const { model, watcher, uiDir, hub, attributor, history, summarizer, buildDomain = buildDomainIndex } = opts;
   const token = opts.token ?? newToken();
-  const name = path.basename(model.root);
+  const name = opts.name ?? path.basename(model.root);
 
   let isReady = false;
   let indexing = { done: 0, total: 0 };

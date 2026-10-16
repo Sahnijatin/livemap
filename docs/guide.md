@@ -15,6 +15,7 @@ How to run LiveMap and what each part of the UI does. For agent setup see [agent
 livemap [dir=.] [--port N] [--no-open] [--pull[=SEC]] [--no-history] [--summaries]
 livemap init [dir=.] [--agents claude,codex,cursor] [--remove]
 livemap export [dir=.] [--session ID] [--no-code] [--out FILE]
+livemap sn [dir=.] --scope NAMESPACE|SYS_ID [--instance NAME] [--nexus URL] [--port N] [--no-open] [--no-history] [--mirror-only]
 ```
 
 `dir` is the project folder in every command. It defaults to the current folder. `-h` or `--help` prints the usage. Options that take a value also accept `=` (`--port=5000`, `--agents=claude`, `--out=shop.html`).
@@ -56,6 +57,30 @@ Writes the recorded history as one HTML file. See [Exporting a replay](#exportin
 | `--no-code` | code is embedded | Leaves source code out: file contents, diff lines and agent tool inputs and outputs. |
 | `--out FILE` | `livemap-<project>-<YYYYMMDD-HHMM>.html` in the current folder | The output file. |
 
+### `livemap sn`
+
+Mirrors a ServiceNow application scope to files, then runs LiveMap on them. It reads the instance through SkyForge's nexus MCP, so keep SkyForge running. LiveMap holds no ServiceNow credentials and only calls nexus's read tools (`sn_query_table`, `sn_get_table_metadata`, `sn_get_instance_info`, `sn_session_context` and `tool_search`); it refuses any other tool.
+
+| Option | Default | What it does |
+|---|---|---|
+| `--scope NAMESPACE\|SYS_ID` | required | The scope to mirror: its namespace (`x_snc_cc_offering`) or the sys_id of its `sys_scope` record. |
+| `--instance NAME` | the instance nexus is set to | Sent to nexus as the `X-SN-Instance` header. |
+| `--nexus URL` | `http://127.0.0.1:3006/mcp` | nexus's MCP endpoint. LiveMap tries Streamable HTTP first, then SSE. |
+| `--port N` | `4317` | As for `livemap`. |
+| `--no-open` | the browser opens | As for `livemap`. |
+| `--no-history` | history is recorded | As for `livemap`. |
+| `--mirror-only` | off | Writes the mirror and exits without starting the UI. |
+
+Before it pulls, LiveMap prints the instance, the nexus transport and the scope it resolved (name, namespace and sys_id). It then reads the scope's `sys_metadata` inventory and the full records of every class, 200 at a time, and prints how many records it pulled and how long it took.
+
+The mirror is written to `.livemap/sn/<scope>/` in `dir`, one folder per kind of record: `portal`, `page`, `widget`, `schema`, `business_rule`, `client_script`, `script_include`, `ui_action`, `ui_policy`, `acl`, `flow`, `rest`, `workspace`, `ai_agent` and `other`. Each record's file or folder is named `<name>__<sys_id>`, so a record keeps its identity when it is renamed (its file moves). Names are made safe for Windows, and paths stay under 240 characters. Widget instances live in their page's `layout.json`, dictionary entries in their table's `.sntable.json`, and ACL roles in their ACL.
+
+On the map, a portal links to its home page, a page to its layout, a layout to the widgets it places, and a widget to its code. Scripts link to the script includes they call (`new Utils()`, `new x_scope.Utils()`, `gs.include`, `GlideAjax`) and to the scope tables they name, in a `GlideRecord` call or in any string that matches a mirrored table name. Rules, ACLs and UI actions link to their table.
+
+Credential records (`sys_auth_profile*`, `oauth_entity*`, `discovery_credentials`) are listed by name only, fields named like passwords, secrets, tokens or keys are never written, and system properties are read without their values. The `.livemap` folder is readable only by you. When `dir` is inside a git repository, LiveMap adds `.livemap/` to its `.gitignore`; elsewhere it leaves `.gitignore` alone.
+
+A second `livemap sn` on the same folder updates the mirror in place: unchanged files are not rewritten, and files of records that are gone or renamed are removed.
+
 ### Environment variables
 
 | Variable | What it does |
@@ -64,7 +89,7 @@ Writes the recorded history as one HTML file. See [Exporting a replay](#exportin
 | `LIVEMAP_HISTORY_MB` | History size cap per project, in MB. Default 200. |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | Keys for AI summaries when the config has no `apiKey`. |
 | `CLAUDE_CONFIG_DIR` | Where LiveMap looks for Claude Code transcripts. Default `~/.claude`. |
-| `BROWSER` | The program that opens LiveMap's URL instead of the default browser. It gets the URL as its only argument, so the value is a program path without arguments. On Windows it can be a `.exe`, `.cmd` or `.bat` file. `none` opens nothing, like `--no-open`. |
+| `BROWSER` | The program that opens LiveMap's URL instead of the default browser, with any arguments (`chrome --incognito`). `%s` stands for the URL; without it the URL goes last. Quote a path with spaces, or give just the path. On Windows it can be a `.exe`, `.cmd` or `.bat` file. `none` opens nothing, like `--no-open`. |
 
 ## Using LiveMap
 

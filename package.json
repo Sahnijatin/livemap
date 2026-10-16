@@ -3,9 +3,17 @@
   "version": "0.1.0",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
-  "bin": { "livemap": "dist/cli.js" },
-  "engines": { "node": ">=18" },
-  "files": ["dist", "!dist/**/*.map", "!dist/ui/.vite"],
+  "bin": {
+    "livemap": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "!dist/ui/.vite"
+  ],
   "scripts": {
     "prebuild": "node scripts/ui-deps.mjs",
     "build": "tsup && node scripts/copy-grammars.mjs && npm --prefix ui run build && npm --prefix ui run build:export",
@@ -19,6 +27,7 @@
     "budget": "node scripts/check-budget.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.1",
     "chokidar": "^4.0.3",
     "diff": "^7.0.0",
     "ignore": "^6.0.2",

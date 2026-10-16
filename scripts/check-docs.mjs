@@ -6,7 +6,8 @@
  *   the gitignored demo (docs/demo/*.html) may be missing only with --allow-missing-media.
  * - Every #anchor matches a heading in the target file.
  * - No em dash (U+2014).
- * - Every flag (--x) the docs mention appears in src/cli.ts, apart from the few non-LiveMap flags below.
+ * - Every flag (--x) the docs mention appears in the CLI sources (src/cli.ts, src/cli-args.ts, plugins/servicenow/cli.ts),
+ *   apart from the few non-LiveMap flags below.
  * - A table row whose first cell starts with --port or --pull states the default the code uses.
  *
  * Flags are checked against the whole of src/cli.ts, not per command: `livemap export --port`
@@ -27,6 +28,7 @@ const OTHER_FLAGS = new Set([
   '--allow-missing-media', // this script
   '--shots', // scripts/demo.mjs
   '--ff-only', // git pull, run by --pull
+  '--incognito', // a browser's own flag, in the BROWSER example
   '--prefix', // npm --prefix ui
   '--self-test', // this script
 ]);
@@ -36,7 +38,7 @@ const docFiles = ['README.md', 'CONTRIBUTING.md', ...fs.readdirSync(path.join(ro
   .map(n => `docs/${n}`)]
   .filter(f => fs.existsSync(path.join(root, f)));
 
-const cliSource = ['src/cli.ts', 'src/cli-args.ts'].map(f => fs.readFileSync(path.join(root, f), 'utf8')).join('\n');
+const cliSource = ['src/cli.ts', 'src/cli-args.ts', 'plugins/servicenow/cli.ts'].map(f => fs.readFileSync(path.join(root, f), 'utf8')).join('\n');
 const serverSource = fs.readFileSync(path.join(root, 'src/server/server.ts'), 'utf8');
 const constant = (src, name) => {
   const m = new RegExp(`const ${name} = (\\d+);`).exec(src);
