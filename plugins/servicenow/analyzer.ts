@@ -7,8 +7,9 @@
  * - Rules: business rules, client scripts, UI policies and ACLs on a table.
  * - Links: `new X()` (also `new x_scope.X()`), `gs.include('X')`, `new GlideAjax('X')` to script
  *   includes; GlideRecord tables and string literals naming a scope table to their schema; a portal to
- *   its home page; a page to the widgets it places; a widget to embedded widgets; a rule, ACL or UI
- *   action to its table; a table to the table it extends.
+ *   its home page; a page's meta.json to its layout and the layout to the widgets it places; a
+ *   widget's meta.json to its code; a widget to embedded widgets; a rule, ACL or UI action to its
+ *   table; a table to the table it extends.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -91,6 +92,9 @@ export class MirrorIndex {
   }
 }
 
+/** The code files a widget folder can hold, next to its meta.json. */
+const WIDGET_CODE = ['template.html', 'client.js', 'server.js', 'link.js'];
+
 /** A table name's schema file in a scope's mirror. */
 const schemaPath = (ns: string, table: string): string => `${ns}/schema/${safeSegment(table)}.sntable.json`;
 
@@ -122,6 +126,14 @@ function scriptIncludeSymbols(text: string, header: Obj): CodeSymbol[] {
   });
   const parent = /Object\.extendsObject\(\s*([\w.]+)/.exec(text)?.[1];
   return [symbol(name, 'class', parent ? `class ${name} extends ${parent}` : `class ${name}`, start, lines.length, text, methods)];
+}
+
+/**
+ * The one symbol of a portal, page, layout, widget or table record file. These are JSON, and the Map draws a
+ * JSON file only when it has symbols, so this puts the records on the Map next to the scripts they use.
+ */
+function recordSymbol(name: string, kind: CodeSymbol['kind'], signature: string, text: string): CodeSymbol {
+  return symbol(name, kind, signature, 1, text.split('\n').length, text);
 }
 
 /** The one symbol of a business rule or client script: `table.when(condition)`. */
@@ -174,7 +186,7 @@ export function serviceNowAnalyzer(root: string): Analyzer & { index: MirrorInde
       const entity: Entity = { name: str(t.label)?.trim() || table, table, orm: 'servicenow', file: rel, line: 1, fields };
       // A dictionary-only file adds columns to a table defined elsewhere (another scope or the platform).
       if (t.defined_here === false) entity.partial = true;
-      return { entities: [entity] };
+      return { entities: [entity], symbols: [recordSymbol(table, 'struct', `table ${table}`, text)] };
     }
     if (kind === 'page' && base === 'meta.json') {
       const p = parse(text);
@@ -182,7 +194,21 @@ export function serviceNowAnalyzer(root: string): Analyzer & { index: MirrorInde
       if (!id) return {};
       const portals = Array.isArray(p.portals) ? (p.portals as unknown[]).filter((x): x is string => typeof x === 'string') : [];
       const routes: Route[] = (portals.length ? portals : ['sp']).map(s => ({ method: 'GET', path: `/${s}?id=${id}`, kind: 'page', framework: 'servicenow', line: 1 }));
-      return { routes };
+      return { routes, symbols: [recordSymbol(id, 'component', `page ${routes[0].path}`, text)] };
+    }
+    if (kind === 'page' && base === 'layout.json') {
+      const placed = links(rel, text, () => true).length;
+      return { symbols: [recordSymbol('layout', 'module', `layout (${placed} widget${placed === 1 ? '' : 's'})`, text)] };
+    }
+    if (kind === 'widget' && base === 'meta.json') {
+      const w = parse(text);
+      const id = str(w.id) ?? str(w.name);
+      return id ? { symbols: [recordSymbol(id, 'component', `widget ${str(w.name) ?? id}`, text)] } : {};
+    }
+    if (kind === 'portal' && base === 'meta.json') {
+      const p = parse(text);
+      const suffix = str(p.url_suffix) ?? str(p.title);
+      return suffix ? { symbols: [recordSymbol(suffix, 'component', `portal /${suffix}`, text)] } : {};
     }
     if (kind === 'workspace' && rel.includes('/sys_ux_app_route/')) {
       const r = parse(text);
@@ -232,6 +258,12 @@ export function serviceNowAnalyzer(root: string): Analyzer & { index: MirrorInde
       };
       walk(parse(text));
     }
+    // A widget's or page's meta.json uses the files of its own record, so portal -> page -> widget -> script
+    // include stays one chain on the Map.
+    if (kind === 'widget' && base === 'meta.json') {
+      for (const f of WIDGET_CODE) add(path.posix.join(path.posix.dirname(rel), f));
+    }
+    if (kind === 'page' && base === 'meta.json') add(path.posix.join(path.posix.dirname(rel), 'layout.json'));
     if (kind === 'schema') table(str(parse(text).extends));
     if (kind === 'acl') table((str(parse(text).name) ?? '').split('.')[0] || undefined);
     if (kind === 'ui_policy') table(str(parse(text).table));

@@ -132,6 +132,26 @@ describe('ServiceNow analyzer on the BharatBank mirror', () => {
     for (const t of tables) if (model.get(`${NS}/schema/${t}.sntable.json`)) expect(links).toContain(`${NS}/schema/${t}.sntable.json`);
   });
 
+  it('links portal -> page -> widget -> script include, and the widget to the table a string names', () => {
+    const w = byClass('sp_widget').find(x => x.id === 'bb-card-carousel')!;
+    const meta = paths[w.sys_id];
+    const dir = path.posix.dirname(meta);
+    const si = paths[byClass('sys_script_include').find(s => s.api_name === 'x_snc_cc_offering.BBPortalFormatUtils')!.sys_id];
+    const catalogue = `${NS}/schema/x_snc_cc_offering_card_catalogue.sntable.json`;
+    // The portal's home page (cc_home) places the carousel.
+    const portal = Object.values(paths).find(p => p.includes('/portal/'))!;
+    const pageMeta = Object.values(paths).find(p => /\/page\/cc_home__\w+\/meta\.json$/.test(p))!;
+    const layout = `${path.posix.dirname(pageMeta)}/layout.json`;
+    expect(file(portal).imports.local).toContain(pageMeta);
+    expect(file(pageMeta).imports.local).toContain(layout);
+    expect(file(layout).imports.local).toContain(meta);
+    expect(file(meta).imports.local).toContain(`${dir}/server.js`);
+    // server.js calls new x_snc_cc_offering.BBPortalFormatUtils() and reads 'x_snc_cc_offering_card_catalogue'.
+    expect(file(`${dir}/server.js`).imports.local).toEqual(expect.arrayContaining([si, catalogue]));
+    const panel = path.posix.dirname(paths[byClass('sp_widget').find(x => x.id === 'bb-card-detail-panel')!.sys_id]);
+    expect(file(`${panel}/server.js`).imports.local).toEqual(expect.arrayContaining([si, catalogue]));
+  });
+
   it('links a business rule and an ACL to their table', () => {
     const br = byClass('sys_script').find(r => r.name === 'CCO - Auto-create Ops Tasks')!;
     expect(file(paths[br.sys_id]).imports.local).toContain(`${NS}/schema/${br.collection}.sntable.json`);

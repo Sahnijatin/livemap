@@ -87,17 +87,21 @@ test('livemap sn: mirrors the BharatBank scope and shows it in the Map and Schem
   await tab(page, 'map').click();
   await expect(tab(page, 'map')).toHaveAttribute('aria-selected', 'true');
   await page.locator('.react-flow__node').first().waitFor({ timeout: 20_000 });
-  // The home page's layout uses the widgets it places (Uses, in the inspector).
+  // The home page's layout is used by the page (portal -> page) and uses the widgets it places, the card
+  // carousel among them (Uses, in the inspector).
   const filter = page.getByPlaceholder('Filter files and functions');
   await filter.fill('cc_home');
   await page.getByRole('treeitem', { name: /layout\.json/ }).or(page.getByText('layout.json')).first().click();
   await expect(page.getByText('USES', { exact: false }).first()).toBeVisible();
+  await expect(page.getByText('Nothing uses this yet')).toHaveCount(0);
   await page.waitForTimeout(1500);
   await page.screenshot({ path: path.join(shots, 'servicenow-map-page.png'), animations: 'disabled' });
-  // The application form widget embeds two widgets ($sp.getWidget) and writes scope tables (GlideRecord).
-  await filter.fill('bb-application-form');
+  // The card carousel widget's server.js calls new x_snc_cc_offering.BBPortalFormatUtils() and reads the
+  // card catalogue table through a string; the widget's meta.json, placed by a page, uses it.
+  await filter.fill('bb-card-carousel');
   await page.getByText('server.js').first().click();
-  await expect(page.getByText(/sntable\.json/).first()).toBeVisible();
+  await expect(page.getByText(/BBPortalFormatUtils/).first()).toBeVisible();
+  await expect(page.getByText(/x_snc_cc_offering_card_catalogue/).first()).toBeVisible();
   await page.waitForTimeout(1500);
   await page.screenshot({ path: path.join(shots, 'servicenow-map-widget.png'), animations: 'disabled' });
   await filter.fill('');
