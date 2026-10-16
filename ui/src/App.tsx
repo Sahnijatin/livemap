@@ -16,6 +16,8 @@ import { PanelHandle } from './components/PanelHandle';
 export function App() {
   const panel = useStore(s => s.panel);
   const name = useStore(s => s.name);
+  // Keyed by project: switching projects starts the file tree's state (folders, Show more, filter closes) fresh.
+  const root = useStore(s => s.root);
   // While the gate covers the workspace, nothing behind it is focusable or clickable.
   const gated = useStore(isGated);
 
@@ -31,7 +33,7 @@ export function App() {
       <div className="ambient" aria-hidden="true"><div className="blob b1" /><div className="blob b2" /><div className="blob b3" /></div>
       <Dock gated={gated}>
         <Toolbar />
-        <FileTree />
+        <FileTree key={root} />
         <PanelHandle panel="files" />
         <CenterTabs />
         <PanelHandle panel="inspector" />

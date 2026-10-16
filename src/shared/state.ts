@@ -104,9 +104,12 @@ export function applyMessage(state: ProjectState, msg: ServerMessage): ProjectSt
   }
 }
 
-/** File summaries after a `fileSummary` message: set, or removed when its hash is empty (a clear). Mirrored by the UI store. */
+/**
+ * File summaries after a `fileSummary` message: set, or removed when its hash is empty (a clear). Mirrored by the UI
+ * store. Keyed by path with no prototype, so a file named `constructor` or `__proto__` is an ordinary key.
+ */
 export function withFileSummary(files: Record<string, FileSummary>, msg: { path: string; hash: string; summary: string }): Record<string, FileSummary> {
-  const out = { ...files };
+  const out: Record<string, FileSummary> = Object.assign(Object.create(null), files);
   if (msg.hash) out[msg.path] = { hash: msg.hash, summary: msg.summary };
   else delete out[msg.path];
   return out;

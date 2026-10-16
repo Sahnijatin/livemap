@@ -4,7 +4,7 @@ import type { HistoryStatus, UsedByEntry, WireMessage } from '@shared/protocol.j
 import { patchChanges, withFileSummary, type ProjectState } from '@shared/state.js';
 import { emptySummaries, type SummariesState } from '@shared/summaries.js';
 import type { AgentEvent, AgentSession, ChangeSummary, ControlState, Dep, FileModel } from '@shared/types.js';
-import { LARGE_PROJECT, codeFileCount, edgeBaseline, type Level } from './map/mapModel';
+import { LARGE_PROJECT, codeFileCount, edgeBaseline, type Level } from './map/mapBase';
 import { historySource, type HistoryRecord, type HistoryState, type LiveState } from './history';
 import { loadLayout, saveLayout, type Panel, type PanelLayout } from './panelLayout';
 
@@ -89,6 +89,14 @@ function pushHistory(history: string[], path: string): string[] {
   return [path, ...history.filter(p => p !== path)].slice(0, HISTORY_MAX);
 }
 export type ConnectionState = 'connecting' | 'open' | 'closed' | 'unauthorized';
+
+/**
+ * A record keyed by file path, with no prototype: a file named `constructor` or `__proto__` reads as absent until
+ * set, and setting it never changes the record's prototype.
+ */
+export const dict = <T>(...from: Record<string, T>[]): Record<string, T> => Object.assign(Object.create(null) as Record<string, T>, ...from);
+/** Summaries with their per-file record keyed safely (see dict); none means the empty state. */
+const summariesOf = (s: SummariesState = emptySummaries()): SummariesState => ({ ...s, files: dict(s.files) });
 
 /** Recording status before a hello says otherwise (and from a server without history). */
 export const NO_HISTORY: HistoryStatus = { enabled: false, first: 0, last: 0, firstAt: 0, lastAt: 0 };
@@ -221,12 +229,12 @@ const initial = {
   helloAt: 0,
   root: '',
   name: '',
-  files: {},
+  files: dict<FileModel>(),
   changes: [],
   usedBy: [],
   selected: null,
-  recent: {},
-  expanded: {},
+  recent: dict<{ kind: RecentKind; at: number }>(),
+  expanded: dict<boolean>(),
   filter: '',
   reveal: null,
   panel: null,
@@ -250,26 +258,36 @@ const initial = {
   historyStatus: NO_HISTORY,
   rewound: null as StoreState['rewound'],
   playing: false,
-  summaries: emptySummaries(),
+  summaries: summariesOf(),
   replay: false,
 };
 
 function routesByFileOf(domain: DomainIndex): Record<string, ApiRoute[]> {
-  const out: Record<string, ApiRoute[]> = {};
+  const out = dict<ApiRoute[]>();
   for (const r of domain.routes) (out[r.file] ??= []).push(r);
   return out;
 }
 
-const freshDomain = () => ({ domain: emptyDomainIndex(), domainBase: baseOf(emptyDomainIndex()), routesByFile: {} });
+const freshDomain = () => ({ domain: emptyDomainIndex(), domainBase: baseOf(emptyDomainIndex()), routesByFile: dict<ApiRoute[]>() });
+
+/**
+ * When each file arrived after the hello (path to time): files the live project gains, recorded as they come so the
+ * file tree can pop just those rows. A hello or past state starts it over; a removed file is forgotten.
+ */
+export const arrivals = new Map<string, number>();
 
 /**
  * Files after upserting and removing; clears the selection if its file is gone. A live deletion of the selected file
  * also ends its peek, so the file coming back does not reopen the inspector; a played (historical) one does not.
  */
 function upsertFiles(st: StoreState, upserts: FileModel[], removed: string[]): Pick<StoreState, 'files' | 'selected' | 'peek'> {
-  const files = { ...st.files };
-  for (const p of removed) delete files[p];
-  for (const f of upserts) files[f.path] = f;
+  const files = dict(st.files);
+  const now = Date.now();
+  for (const p of removed) { delete files[p]; arrivals.delete(p); }
+  for (const f of upserts) {
+    if (!files[f.path]) arrivals.set(f.path, now);
+    files[f.path] = f;
+  }
   const selected = st.selected && files[st.selected] ? st.selected : null;
   return { files, selected, peek: !replaying && st.selected && !selected ? null : st.peek };
 }
@@ -284,10 +302,11 @@ function recordRecent(recent: StoreState['recent'], c: ChangeSummary): void {
  * baselines, so nothing that arrives with it animates in. View state is the caller's business.
  */
 function replaceData(msg: ProjectState, st: StoreState) {
-  const files: Record<string, FileModel> = {};
+  arrivals.clear();
+  const files = dict<FileModel>();
   for (const f of msg.files) files[f.path] = f;
   const changes = msg.changes.slice(-MAX_CHANGES);
-  const recent: StoreState['recent'] = {};
+  const recent: StoreState['recent'] = dict();
   for (const c of changes) recordRecent(recent, c);
   // Tolerate a hello without agent fields (agent activity unavailable).
   const events = (msg.events ?? []).slice(-MAX_EVENTS);
@@ -311,7 +330,7 @@ function replaceData(msg: ProjectState, st: StoreState) {
     changes,
     usedBy: msg.usedBy,
     // Tolerate a hello (or past state) without summaries: older server or recording.
-    summaries: msg.summaries ?? emptySummaries(),
+    summaries: summariesOf(msg.summaries),
     recent,
     indexing: msg.indexing ? st.indexing ?? { done: 0, total: 0 } : null,
     helloEdges: edgeBaseline(files),
@@ -428,9 +447,9 @@ export const useStore = create<StoreState>()((set, get) => ({
         const c = msg.change;
         const prev = get().changes;
         const changes = prev.length >= MAX_CHANGES ? [...prev.slice(prev.length - MAX_CHANGES + 1), c] : [...prev, c];
-        const recent = { ...get().recent };
+        const recent = dict(get().recent);
         recordRecent(recent, c);
-        const expanded = c.kind === 'deleted' ? get().expanded : { ...get().expanded, [c.path]: true };
+        const expanded = c.kind === 'deleted' ? get().expanded : dict(get().expanded, { [c.path]: true });
         // One update for the change and its files, so views re-render (and refetch code) once.
         set({ changes, recent, expanded, ...upsertFiles(get(), msg.files, msg.removed) });
         return;
@@ -485,7 +504,7 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   toggle(path) {
     const expanded = get().expanded;
-    set({ expanded: { ...expanded, [path]: !expanded[path] } });
+    set({ expanded: dict(expanded, { [path]: !expanded[path] }) });
   },
 
   setFilter(q) {
@@ -651,6 +670,6 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   reset() {
     summaryRequests.clear();
-    set({ ...initial, ...freshDomain(), tab: 'activity', follow: loadFollow(), layout: loadLayout(), historyStatus: NO_HISTORY, rewound: null, playing: false, summaries: emptySummaries(), helloFiles: new Set(), files: {}, changes: [], usedBy: [], recent: {}, expanded: {}, events: [], sessions: {}, control: { paused: false, flags: [] }, mapExpanded: {}, helloEdges: new Set(), history: [] });
+    set({ ...initial, ...freshDomain(), tab: 'activity', follow: loadFollow(), layout: loadLayout(), historyStatus: NO_HISTORY, rewound: null, playing: false, summaries: summariesOf(), helloFiles: new Set(), files: dict<FileModel>(), changes: [], usedBy: [], recent: dict<{ kind: RecentKind; at: number }>(), expanded: dict<boolean>(), events: [], sessions: {}, control: { paused: false, flags: [] }, mapExpanded: {}, helloEdges: new Set(), history: [] });
   },
 }));

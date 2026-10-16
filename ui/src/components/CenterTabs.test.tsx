@@ -172,3 +172,12 @@ describe('CenterTabs transitions', () => {
     }
   });
 });
+
+describe('timeline', () => {
+  it('holds its place while it loads, then shows the session timeline', async () => {
+    mount();
+    expect(host.querySelector('.timeline')).not.toBeNull(); // the bar keeps its height from the first paint
+    await act(async () => { await import('./Timeline'); });
+    expect(host.querySelector('[role=group][aria-label="Session timeline"]')).not.toBeNull();
+  });
+});

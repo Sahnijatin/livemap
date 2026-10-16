@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { DomainIndex } from '@shared/domain.js';
-import { useStore, liveGeneration, MAX_CHANGES, MAX_EVENTS, CENTER_TABS, loadTab, depKey, tableKey, fieldKey, routeBaseKey } from './store';
+import type { ApiRoute, DomainIndex } from '@shared/domain.js';
+import { arrivals, useStore, liveGeneration, MAX_CHANGES, MAX_EVENTS, CENTER_TABS, loadTab, depKey, tableKey, fieldKey, routeBaseKey } from './store';
 import { LARGE_PROJECT } from './map/mapModel';
 import { file, change, event, session, emptyDomain } from './fixtures';
 import { restHistorySource, setHistorySource, type HistorySource } from './history';
@@ -643,5 +643,61 @@ describe('history and rewind', () => {
     const st = useStore.getState();
     expect(Object.keys(st.files)).toEqual(['restart.ts']);
     expect(st.rewound).toEqual({ seq: 5, at: 2 });
+  });
+});
+
+describe('expanded files', () => {
+  it('a file named like an object key toggles like any other', () => {
+    useStore.getState().reset();
+    // `expanded` has no prototype, so plain reads see only real entries.
+    expect(Object.getPrototypeOf(useStore.getState().expanded)).toBeNull();
+    for (const name of ['constructor', 'toString', '__proto__']) {
+      expect(useStore.getState().expanded[name]).toBeUndefined();
+      useStore.getState().toggle(name);
+      expect(Object.getPrototypeOf(useStore.getState().expanded)).toBeNull();
+      expect(useStore.getState().expanded[name]).toBe(true);
+      useStore.getState().toggle(name);
+      expect(useStore.getState().expanded[name]).toBe(false);
+    }
+    useStore.getState().apply({ type: 'change', files: [], removed: [], change: change('constructor', 'modified') });
+    expect(Object.getPrototypeOf(useStore.getState().expanded)).toBeNull();
+  });
+});
+
+describe('routes by file', () => {
+  it('are keyed without a prototype, so a file named constructor is an ordinary key', () => {
+    useStore.getState().reset();
+    expect(useStore.getState().routesByFile['constructor']).toBeUndefined();
+    const route = { id: 'r1', file: 'constructor', fullPath: '/x', method: 'GET', path: '/x', line: 1, framework: 'express' } as unknown as ApiRoute;
+    useStore.getState().apply({ type: 'domain', domain: { ...emptyDomain(), routes: [route] } });
+    expect(useStore.getState().routesByFile['constructor']).toEqual([route]);
+    expect(useStore.getState().routesByFile['toString']).toBeUndefined();
+  });
+
+  it('file summaries are keyed without a prototype too', () => {
+    useStore.getState().reset();
+    expect(useStore.getState().summaries.files['constructor']).toBeUndefined();
+    useStore.getState().apply({ type: 'hello', root: '/p', name: 'p', files: [], changes: [], usedBy: [], domain: emptyDomain(), indexing: false, events: [], sessions: [], control: { paused: false, flags: [] }, summaries: JSON.parse('{"status":{"state":"off"},"files":{}}') });
+    expect(useStore.getState().summaries.files['constructor']).toBeUndefined();
+    expect(useStore.getState().routesByFile['constructor']).toBeUndefined();
+    useStore.getState().apply({ type: 'fileSummary', path: 'constructor', hash: 'h', summary: 'S' });
+    expect(Object.getPrototypeOf(useStore.getState().summaries.files)).toBeNull();
+    expect(useStore.getState().summaries.files['constructor']).toEqual({ hash: 'h', summary: 'S' });
+    expect(useStore.getState().summaries.files['toString']).toBeUndefined();
+  });
+});
+
+describe('file arrivals', () => {
+  it('records when a file first arrives after the hello, and forgets a removed one', () => {
+    useStore.getState().reset();
+    useStore.getState().apply({ type: 'hello', root: '/p', name: 'p', files: [file('a.ts')], changes: [], usedBy: [], domain: emptyDomain(), indexing: false, events: [], sessions: [], control: { paused: false, flags: [] } });
+    expect(arrivals.has('a.ts')).toBe(false);
+    useStore.getState().apply({ type: 'files', files: [file('b.ts')], removed: [] });
+    const at = arrivals.get('b.ts')!;
+    expect(at).toBeGreaterThan(0);
+    useStore.getState().apply({ type: 'files', files: [file('b.ts', [])], removed: [] }); // an update is not an arrival
+    expect(arrivals.get('b.ts')).toBe(at);
+    useStore.getState().apply({ type: 'files', files: [], removed: ['b.ts'] });
+    expect(arrivals.has('b.ts')).toBe(false);
   });
 });

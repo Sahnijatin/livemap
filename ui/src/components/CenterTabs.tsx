@@ -1,16 +1,18 @@
 import { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { CENTER_TABS, useStore, type CenterTab } from '../store';
-import { codeFileCount } from '../map/mapModel';
+import { codeFileCount } from '../map/mapBase';
 import { LEAVING, useLeaving } from '../motion';
 import { NARROW_QUERY, useMedia } from '../media';
 import { INERT } from '../panels';
 import { Activity } from './Activity';
-import { RewoundBanner, Timeline } from './Timeline';
+import { RewoundBanner } from './Rewound';
 import { ApiIcon, MapIcon, PulseIcon, SchemaIcon, StackIcon } from './icons';
 
 // Map and Schema (React Flow, ELK, framer-motion), API and Stack load on first open, so Activity's first paint does not pay for them.
 const MapView = lazy(() => import('../map/MapView'));
+// The timeline loads right after first paint; its bar keeps its height meanwhile (10 px padding around the 34 px play button).
+const Timeline = lazy(() => import('./Timeline').then(m => ({ default: m.Timeline })));
 const SchemaView = lazy(() => import('./SchemaView'));
 const ApiView = lazy(() => import('./ApiView').then(m => ({ default: m.ApiView })));
 const StackView = lazy(() => import('./StackView').then(m => ({ default: m.StackView })));
@@ -164,7 +166,7 @@ export function CenterTabs() {
           <div className={viewClass(t)} style={slide} key={t} {...(t === prev ? LEAVING : {})}>{view(t, tools)}</div>
         ))}
       </div>
-      <Timeline />
+      <Suspense fallback={<div className="timeline" aria-hidden="true"><i style={{ height: 34 }} /></div>}><Timeline /></Suspense>
     </main>
   );
 }
