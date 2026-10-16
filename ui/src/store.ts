@@ -95,6 +95,8 @@ export type ConnectionState = 'connecting' | 'open' | 'closed' | 'unauthorized';
  * set, and setting it never changes the record's prototype.
  */
 export const dict = <T>(...from: Record<string, T>[]): Record<string, T> => Object.assign(Object.create(null) as Record<string, T>, ...from);
+/** Summaries with their per-file record keyed safely (see dict); none means the empty state. */
+const summariesOf = (s: SummariesState = emptySummaries()): SummariesState => ({ ...s, files: dict(s.files) });
 
 /** Recording status before a hello says otherwise (and from a server without history). */
 export const NO_HISTORY: HistoryStatus = { enabled: false, first: 0, last: 0, firstAt: 0, lastAt: 0 };
@@ -256,17 +258,17 @@ const initial = {
   historyStatus: NO_HISTORY,
   rewound: null as StoreState['rewound'],
   playing: false,
-  summaries: emptySummaries(),
+  summaries: summariesOf(),
   replay: false,
 };
 
 function routesByFileOf(domain: DomainIndex): Record<string, ApiRoute[]> {
-  const out: Record<string, ApiRoute[]> = {};
+  const out = dict<ApiRoute[]>();
   for (const r of domain.routes) (out[r.file] ??= []).push(r);
   return out;
 }
 
-const freshDomain = () => ({ domain: emptyDomainIndex(), domainBase: baseOf(emptyDomainIndex()), routesByFile: {} });
+const freshDomain = () => ({ domain: emptyDomainIndex(), domainBase: baseOf(emptyDomainIndex()), routesByFile: dict<ApiRoute[]>() });
 
 /**
  * Files after upserting and removing; clears the selection if its file is gone. A live deletion of the selected file
@@ -317,7 +319,7 @@ function replaceData(msg: ProjectState, st: StoreState) {
     changes,
     usedBy: msg.usedBy,
     // Tolerate a hello (or past state) without summaries: older server or recording.
-    summaries: msg.summaries ?? emptySummaries(),
+    summaries: summariesOf(msg.summaries),
     recent,
     indexing: msg.indexing ? st.indexing ?? { done: 0, total: 0 } : null,
     helloEdges: edgeBaseline(files),
@@ -475,7 +477,7 @@ export const useStore = create<StoreState>()((set, get) => ({
       }
       case 'fileSummary': {
         const prev = get().summaries;
-        set({ summaries: { ...prev, files: withFileSummary(prev.files, msg) } });
+        set({ summaries: { ...prev, files: dict(withFileSummary(prev.files, msg)) } });
         return;
       }
       case 'summaryStatus':
@@ -657,6 +659,6 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   reset() {
     summaryRequests.clear();
-    set({ ...initial, ...freshDomain(), tab: 'activity', follow: loadFollow(), layout: loadLayout(), historyStatus: NO_HISTORY, rewound: null, playing: false, summaries: emptySummaries(), helloFiles: new Set(), files: dict<FileModel>(), changes: [], usedBy: [], recent: dict<{ kind: RecentKind; at: number }>(), expanded: dict<boolean>(), events: [], sessions: {}, control: { paused: false, flags: [] }, mapExpanded: {}, helloEdges: new Set(), history: [] });
+    set({ ...initial, ...freshDomain(), tab: 'activity', follow: loadFollow(), layout: loadLayout(), historyStatus: NO_HISTORY, rewound: null, playing: false, summaries: summariesOf(), helloFiles: new Set(), files: dict<FileModel>(), changes: [], usedBy: [], recent: dict<{ kind: RecentKind; at: number }>(), expanded: dict<boolean>(), events: [], sessions: {}, control: { paused: false, flags: [] }, mapExpanded: {}, helloEdges: new Set(), history: [] });
   },
 }));

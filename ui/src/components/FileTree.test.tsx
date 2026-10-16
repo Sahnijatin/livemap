@@ -426,7 +426,7 @@ describe('FileTree folders', () => {
     act(() => dir('c')!.click());
     expect(localStorage.getItem('livemap:tree:/p/shop')).toBeNull(); // saved after a 300 ms pause
     act(() => { vi.advanceTimersByTime(300); });
-    expect(stored()).toEqual([['a/b', false], ['c', true]]);
+    expect(stored()).toEqual([['a/b', false]]); // c is open again, its default: not stored
     act(() => root.unmount());
     root = createRoot(host);
     localStorage.setItem('livemap:tree:/p/shop', JSON.stringify([['a/b', false], ['c', false], ['gone', true], ['bad', 3]]));
@@ -810,15 +810,12 @@ describe('FileTree round 3', () => {
     expect(stored()).toEqual([['a', false]]);
   });
 
-  it('typeahead takes any printable character', () => {
+  it('typeahead takes printable characters other than the panel keys', () => {
     useStore.getState().apply(hello([file('src/app/(admin)/page.tsx'), file('src/app/[slug]/page.tsx'), file('@types/x.d.ts'), file('src/app/z.ts')]));
     mount();
     act(() => dir('src/app')!.focus());
     press('(');
     expect(focused()).toBe(dirKey('src/app/(admin)'));
-    act(() => { vi.advanceTimersByTime(1000); });
-    press('[');
-    expect(focused()).toBe(dirKey('src/app/[slug]'));
     act(() => { vi.advanceTimersByTime(1000); });
     press('@');
     expect(focused()).toBe(dirKey('@types'));
@@ -995,6 +992,72 @@ describe('FileTree round 6', () => {
     }
     act(() => byData('file', 'constructor')!.click());
     expect(byData('file', 'constructor')!.getAttribute('aria-expanded')).toBe('true');
+  });
+});
+
+describe('FileTree round 7', () => {
+  const dir = (path: string) => byData('dir', path);
+  beforeEach(() => { (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView = vi.fn(); });
+  afterEach(() => { delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView; });
+  const keydown = (k: string, init: KeyboardEventInit = {}) => {
+    let notPrevented = true;
+    act(() => { notPrevented = (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...init })); });
+    return notPrevented;
+  };
+
+  it('a folder added before an open one keeps the rows inside it mounted', () => {
+    useStore.getState().apply(hello([file('m/x.ts'), file('m/y.ts')]));
+    mount();
+    const row = byData('file', 'm/y.ts')!;
+    act(() => row.focus());
+    act(() => useStore.getState().apply({ type: 'files', files: [file('a/z.ts')], removed: [] }));
+    expect(byData('file', 'm/y.ts')).toBe(row);
+    expect(document.activeElement).toBe(row);
+  });
+
+  it('a root file named constructor with no changes shows its symbol count, not a badge', () => {
+    useStore.getState().apply(hello([file('constructor', [sym('a'), sym('b')])]));
+    mount();
+    expect(byData('file', 'constructor')!.querySelector('.fmeta')!.textContent).toBe('2');
+  });
+
+  it('typeahead leaves the panel keys and modified keys alone', () => {
+    useStore.getState().apply(hello([file('src/[slug]/page.tsx'), file('src/a.ts'), file('lib/b.ts')]));
+    mount();
+    act(() => byData('file', 'src/a.ts')!.focus());
+    expect(keydown('[')).toBe(true); // not consumed: the panel shortcut gets it
+    expect(keydown(']')).toBe(true);
+    expect((document.activeElement as HTMLElement).dataset.nav).toBe('src/a.ts');
+    expect(keydown('l', { altKey: true })).toBe(true);
+    expect(keydown('l', { ctrlKey: true })).toBe(true);
+    expect((document.activeElement as HTMLElement).dataset.nav).toBe('src/a.ts');
+    expect(keydown('l')).toBe(false);
+    expect((document.activeElement as HTMLElement).dataset.nav).toBe(dirKey('lib'));
+  });
+
+  it('rows shown by opening a folder or Show more do not pop; a file that arrives does', () => {
+    const files = Array.from({ length: 2100 }, (_, i) => file(`d${i % 3}/f${String(i).padStart(4, '0')}.ts`));
+    useStore.getState().apply(hello(files));
+    mount();
+    act(() => dir('d0')!.click());
+    expect(host.querySelectorAll('.frow.pop')).toHaveLength(0);
+    act(() => navEl(moreKey('d0'))!.click());
+    expect(host.querySelectorAll('.frow.pop')).toHaveLength(0);
+    act(() => useStore.getState().apply({ type: 'files', files: [file('d0/a-new.ts')], removed: [] }));
+    expect(byData('file', 'd0/a-new.ts')!.classList.contains('pop')).toBe(true);
+    act(() => { vi.advanceTimersByTime(1000); });
+    act(() => dir('d1')!.click());
+    expect(host.querySelectorAll('.frow.pop')).toHaveLength(0);
+  });
+
+  it('a folder set back to its default is not stored', () => {
+    useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts')]));
+    mount();
+    act(() => dir('a')!.click()); // closed: stored
+    act(() => dir('b')!.click());
+    act(() => dir('b')!.click()); // open again: the default, so not stored
+    act(() => { vi.advanceTimersByTime(300); });
+    expect(stored()).toEqual([['a', false]]);
   });
 });
 

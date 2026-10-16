@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { DomainIndex } from '@shared/domain.js';
+import type { ApiRoute, DomainIndex } from '@shared/domain.js';
 import { useStore, liveGeneration, MAX_CHANGES, MAX_EVENTS, CENTER_TABS, loadTab, depKey, tableKey, fieldKey, routeBaseKey } from './store';
 import { LARGE_PROJECT } from './map/mapModel';
 import { file, change, event, session, emptyDomain } from './fixtures';
@@ -661,5 +661,24 @@ describe('expanded files', () => {
     }
     useStore.getState().apply({ type: 'change', files: [], removed: [], change: change('constructor', 'modified') });
     expect(Object.getPrototypeOf(useStore.getState().expanded)).toBeNull();
+  });
+});
+
+describe('routes by file', () => {
+  it('are keyed without a prototype, so a file named constructor is an ordinary key', () => {
+    useStore.getState().reset();
+    expect(useStore.getState().routesByFile['constructor']).toBeUndefined();
+    const route = { id: 'r1', file: 'constructor', fullPath: '/x', method: 'GET', path: '/x', line: 1, framework: 'express' } as unknown as ApiRoute;
+    useStore.getState().apply({ type: 'domain', domain: { ...emptyDomain(), routes: [route] } });
+    expect(useStore.getState().routesByFile['constructor']).toEqual([route]);
+    expect(useStore.getState().routesByFile['toString']).toBeUndefined();
+  });
+
+  it('file summaries are keyed without a prototype too', () => {
+    useStore.getState().reset();
+    expect(useStore.getState().summaries.files['constructor']).toBeUndefined();
+    useStore.getState().apply({ type: 'hello', root: '/p', name: 'p', files: [], changes: [], usedBy: [], domain: emptyDomain(), indexing: false, events: [], sessions: [], control: { paused: false, flags: [] }, summaries: JSON.parse('{"status":{"state":"off"},"files":{}}') });
+    expect(useStore.getState().summaries.files['constructor']).toBeUndefined();
+    expect(useStore.getState().routesByFile['constructor']).toBeUndefined();
   });
 });

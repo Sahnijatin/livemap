@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { useStore } from '../store';
 import { NARROW_QUERY, isNarrow, useMedia } from '../media';
@@ -84,10 +84,19 @@ export function FileTree() {
   const treeRef = useRef<HTMLDivElement>(null);
   /** Mounted rows by nav key (ids can hold a NUL, which a CSS selector cannot match). */
   const rowEls = useRef(new Map<string, HTMLElement>());
-  const register = useCallback((k: string, el: HTMLElement | null) => {
-    if (el) rowEls.current.set(k, el); else rowEls.current.delete(k);
+  /** One stable ref callback per row id, so re-renders do not detach and re-attach rows. */
+  const refs = useRef(new Map<string, (el: HTMLElement | null) => void>());
+  const refFor = useCallback((k: string) => {
+    let f = refs.current.get(k);
+    if (!f) {
+      f = el => {
+        if (el) rowEls.current.set(k, el);
+        else { rowEls.current.delete(k); refs.current.delete(k); }
+      };
+      refs.current.set(k, f);
+    }
+    return f;
   }, []);
-  const born = useRef(new Map<string, number>());
   const [focused, setFocused] = useState<string | null>(null);
   // App keys this component by project, so every piece of state here belongs to one project.
   // Folders the user opened or closed, by full path, remembered per project. Folders without an entry follow the defaults.
@@ -106,6 +115,16 @@ export function FileTree() {
   const closedNow = filterClosed.q === q ? filterClosed.dirs : NO_DIRS;
   const { root: tree, layers } = useMemo(() => buildTree(files, q), [files, q]);
   const fileCount = useMemo(() => Object.keys(files).length, [files]);
+  // When each file arrived: 0 for files there at the hello (or when the tree mounted), else when it first showed up.
+  // A row pops only for a file that just arrived, never because a folder opened or Show more revealed it.
+  const helloFiles = useStore(s => s.helloFiles);
+  const arrived = useRef<{ files: typeof files | null; at: Map<string, number> }>({ files: null, at: new Map() });
+  if (arrived.current.files !== files) {
+    const first = arrived.current.files === null;
+    const t = Date.now();
+    for (const p in files) if (!arrived.current.at.has(p)) arrived.current.at.set(p, first || helloFiles.has(p) || t < helloAt + 1000 ? 0 : t);
+    arrived.current.files = files;
+  }
   // Big or not: taken from the first files seen, held while indexing, decided once more when the index finishes.
   const indexing = useStore(s => s.indexing !== null);
   const [bigAt, setBigAt] = useState<{ big: boolean; final: boolean } | null>(null);
@@ -130,19 +149,8 @@ export function FileTree() {
     document.addEventListener('visibilitychange', hidden);
     return () => { window.removeEventListener('pagehide', flush); document.removeEventListener('visibilitychange', hidden); flush(); };
   }, [flush]);
-  const latest = useRef({ dirs, big, closed: session.closed, q });
-  latest.current = { dirs, big, closed: session.closed, q };
-  /** Shows a file the user selected: opens the closed folders above it for this session, even ones they closed. */
-  const showPicked = useCallback((path: string) => {
-    const above = ancestors(path);
-    setSession(s => {
-      const need = closedAbove(path, latest.current.dirs, latest.current.big, s.picked);
-      const unclose = above.filter(a => s.closed.has(a));
-      if (!need.length && !unclose.length) return s;
-      return { ...s, picked: edit(s.picked, need), closed: edit(s.closed, [], unclose) };
-    });
-    setFilterClosed(f => (above.some(a => f.dirs.has(a)) ? { q: f.q, dirs: edit(f.dirs, [], above) } : f));
-  }, []);
+  const latest = useRef({ closed: session.closed, q });
+  latest.current = { closed: session.closed, q };
   // The agent's file shows its folders until the agent moves on; folders the user closed this session stay shut.
   const agentDirs = useMemo(() => {
     const at = session.agentAt;
@@ -190,9 +198,11 @@ export function FileTree() {
   useEffect(() => {
     const path = useStore.getState().selected;
     if (path === null) return;
-    showPicked(path);
+    // Opening its folders is deferred code (loaded by now; else it waits). The reveal waits for the row.
+    if (keys) keys.showPicked(path, ctx.current!);
+    else void loadTreeKeys().then(m => m?.showPicked(path, ctx.current!));
     if (selects !== ownSelect.current) setReveal({ path, at: Date.now(), q: latest.current.q });
-  }, [selects, showPicked]);
+  }, [selects]);
   const rowOpen = useCallback((row: Row) => row.forceOpen || !!expanded[row.file.path], [expanded]);
   const pins = useMemo(() => {
     const out = Object.keys(live);
@@ -295,6 +305,8 @@ export function FileTree() {
     setDirs,
     setSession,
     setMoving,
+    big,
+    dirs,
     focus: k => rowEls.current.get(k)?.focus(),
     toggle: el => (el.dataset.dir !== undefined ? toggleDir(el.dataset.dir) : onToggle(el.dataset.file!)),
   };
@@ -303,13 +315,12 @@ export function FileTree() {
   // Keys before the handler has loaded do nothing; a key after a failed load tries again.
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => (keys ? keys.treeKeyDown(e, ctx.current!) : void loadTreeKeys());
 
-  const animateFrom = helloAt + 1000;
   const now = Date.now();
   const renderItem = (item: Item, kids: Block[]): ReactNode => {
     if (item.kind === 'more') {
       const k = moreKey(item.dir, item.part);
       return (
-        <button type="button" key={k} ref={el => register(k, el)} className="more-rows" style={{ ['--d' as string]: item.level - 1 }} data-nav={k} data-up={item.up ?? undefined} tabIndex={active === k ? 0 : -1} onClick={() => showMore(k, item.shown)}>
+        <button type="button" key={k} ref={refFor(k)} className="more-rows" style={{ ['--d' as string]: item.level - 1 }} data-nav={k} data-up={item.up ?? undefined} tabIndex={active === k ? 0 : -1} onClick={() => showMore(k, item.shown)}>
           Show {Math.min(item.hidden, DIR_BATCH).toLocaleString()} more {item.part === 'dirs' ? 'folders' : 'files'} ({item.hidden.toLocaleString()} hidden)
         </button>
       );
@@ -323,17 +334,17 @@ export function FileTree() {
       const m = moving.get(dir);
       const fold = !open && m?.kind === 'fold';
       const act = open ? undefined : activity.get(dir);
-      return [
+      return (
+        <Fragment key={k}>
         <button
           type="button"
-          key={k}
           className={clsx('dir', open && 'open')}
           style={{ ['--c' as string]: LAYERS[node.layer].color, ['--d' as string]: level - 1 }}
           role="treeitem"
           aria-level={level}
           aria-expanded={open}
           aria-selected={false}
-          ref={el => register(k, el)}
+          ref={refFor(k)}
           data-nav={k}
           data-dir={dir}
           data-up={up ?? undefined}
@@ -345,17 +356,17 @@ export function FileTree() {
           {act && <em className={clsx('dlive', act, act === 'now' && 'pulse')} role="img" aria-label={ACTIVITY[act]} title={`A file in this folder is ${ACTIVITY[act]}`} />}
           {!open && !act && selectedDirs.has(dir) && <em className="dlive" role="img" aria-label="contains the selected file" title="The selected file is in this folder" />}
           <b>{node.count.toLocaleString()}</b>
-        </button>,
-        kids.length > 0 && (
-          <div key={`g:${dir}`} role="group" className={clsx('dgroup', fold && 'fold', open && m?.kind === 'unfold' && 'unfold')} {...(fold ? { inert: '' } : {})}>
+        </button>
+        {kids.length > 0 && (
+          <div role="group" className={clsx('dgroup', fold && 'fold', open && m?.kind === 'unfold' && 'unfold')} {...(fold ? { inert: '' } : {})}>
             <div>{kids.map(b => renderItem(b.item, b.kids))}</div>
           </div>
-        ),
-      ];
+        )}
+        </Fragment>
+      );
     }
     const { row } = item;
     const path = row.file.path;
-    if (!born.current.has(path)) born.current.set(path, now < animateFrom ? 0 : now);
     const badge = live[path];
     const change = badge ? latestChange(changes, path) : undefined;
     return (
@@ -372,13 +383,13 @@ export function FileTree() {
         selected={selected === path}
         badge={badge}
         target={path === targetPath}
-        pop={now - born.current.get(path)! < POP_MS}
+        pop={now - (arrived.current.at.get(path) ?? 0) < POP_MS}
         tags={change ? cachedTags(row.file, change) : EMPTY_TAGS}
         activeKey={active !== null && (active === path || active.startsWith(`${path}\0`)) ? active : null}
         onSelect={onSelect}
         onToggle={onToggle}
         onSymbol={onSymbol}
-        register={register}
+        refFor={refFor}
       />
     );
   };

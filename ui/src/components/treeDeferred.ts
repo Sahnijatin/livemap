@@ -3,7 +3,7 @@
  * handling, and opening and closing folders.
  */
 import type { Dispatch, SetStateAction } from 'react';
-import { dirKey, editSet as edit, type DirState, type Item } from '../treeModel';
+import { MAX_STORED, ancestors, closedAbove, dirKey, editSet as edit, type DirState, type Item } from '../treeModel';
 import type { Moving, Session } from './FileTree';
 
 /** Folder unfold and fold (height and fade), matching `.dgroup.unfold/.fold` in styles.css. */
@@ -23,6 +23,8 @@ export interface TreeContext {
   dirItems: ReadonlyMap<string, Extract<Item, { kind: 'dir' }>>;
   q: string;
   reduced: boolean;
+  big: boolean;
+  dirs: DirState;
   setFilterClosed: Set_<{ q: string; dirs: ReadonlySet<string> }>;
   setDirs: Set_<DirState>;
   setSession: Set_<Session>;
@@ -85,9 +87,9 @@ export function treeKeyDown(e: KeyPress, c: TreeContext): void {
       else return;
       break;
     default: {
-      // Typeahead: any printable character (AltGr ones too), not Space, which presses the row. A key that matches
-      // no row is left alone, so `[` with no `[...]` row still toggles the file panel.
-      if (e.key.length !== 1 || e.key === ' ' || e.metaKey || (e.ctrlKey && !e.altKey)) return;
+      // Typeahead: a printable character with no modifier. Space presses the row, and `[` and `]` toggle the panels,
+      // so those are left alone, as is a key that matches no row.
+      if (e.key.length !== 1 || ' []'.includes(e.key) || e.metaKey || e.ctrlKey || e.altKey) return;
       const now = Date.now();
       const t = typed;
       t.text = now - t.at < TYPEAHEAD_MS ? t.text + e.key.toLowerCase() : e.key.toLowerCase();
@@ -119,9 +121,11 @@ export function toggleDir(dir: string, c: TreeContext): void {
     });
   } else {
     // A chain opens and closes as a whole, so each of its folders keeps the state when the chain splits.
+    // A folder set back to its default (open below BIG_PROJECT files) is not stored; the oldest go past the cap.
     c.setDirs(d => {
       const next = new Map(d);
-      for (const p of chain) { next.delete(p); next.set(p, !open); } // re-added last: the newest choices are kept longest
+      for (const p of chain) { next.delete(p); if (open !== c.big) next.set(p, !open); } // re-added last: the newest choices are kept longest
+      for (const k of next.keys()) { if (next.size <= MAX_STORED) break; next.delete(k); }
       return next;
     });
     // The user's choice replaces a reveal, and a close holds against the agent for the session.
@@ -140,4 +144,16 @@ export function toggleDir(dir: string, c: TreeContext): void {
   while (at >= 0 && end < rows.length && rows[end].level > rows[at].level) end++;
   const kept = open && at >= 0 ? rows.slice(at + 1, end) : [];
   c.setMoving(m => new Map(m).set(dir, { kind: open ? 'fold' : 'unfold', until: Date.now() + FOLD_MS, rows: kept }));
+}
+
+/** Shows a file the user selected: opens the closed folders above it for this session, even ones they closed. */
+export function showPicked(path: string, c: TreeContext): void {
+  const above = ancestors(path);
+  c.setSession(s => {
+    const need = closedAbove(path, c.dirs, c.big, s.picked);
+    const unclose = above.filter(a => s.closed.has(a));
+    if (!need.length && !unclose.length) return s;
+    return { ...s, picked: edit(s.picked, need), closed: edit(s.closed, [], unclose) };
+  });
+  c.setFilterClosed(f => (above.some(a => f.dirs.has(a)) ? { q: f.q, dirs: edit(f.dirs, [], above) } : f));
 }

@@ -39,7 +39,7 @@ function sameBadges(a: Record<string, LiveBadge>, b: Record<string, LiveBadge>):
  */
 export function useLiveRecent(recent: Record<string, RecentEntry>): Record<string, LiveBadge> {
   const [tick, setTick] = useState(0);
-  const prev = useRef<Record<string, LiveBadge>>({});
+  const prev = useRef<Record<string, LiveBadge>>(Object.create(null)); // keyed by path: no inherited keys
   const now = Date.now();
   const next = liveRecent(recent, now);
   if (!sameBadges(prev.current, next)) prev.current = next;

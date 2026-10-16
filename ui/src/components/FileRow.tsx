@@ -44,8 +44,8 @@ export interface FileRowProps {
   onSelect(path: string): void;
   onToggle(path: string): void;
   onSymbol(path: string, line: number): void;
-  /** Records a mounted row (or null when it unmounts) by nav key. */
-  register(key: string, el: HTMLElement | null): void;
+  /** The stable ref callback that records the row with this nav key. */
+  refFor(key: string): (el: HTMLElement | null) => void;
 }
 
 export const FileRow = memo(function FileRow(props: FileRowProps) {
@@ -64,7 +64,7 @@ export const FileRow = memo(function FileRow(props: FileRowProps) {
         aria-level={level}
         aria-selected={selected}
         aria-expanded={hasSyms ? open : undefined}
-        ref={el => props.register(file.path, el)}
+        ref={props.refFor(file.path)}
         data-nav={file.path}
         data-file={file.path}
         data-up={up ?? undefined}
@@ -102,7 +102,7 @@ export const FileRow = memo(function FileRow(props: FileRowProps) {
                   role="treeitem"
                   aria-level={level + 1}
                   key={key}
-                  ref={el => props.register(key, el)}
+                  ref={props.refFor(key)}
                   data-nav={key}
                   data-parent={file.path}
                   tabIndex={activeKey === key ? 0 : -1}
