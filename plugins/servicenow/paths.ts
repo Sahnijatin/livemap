@@ -16,9 +16,22 @@ const FORBIDDEN = /[<>:"/\\|?*\u0000-\u001f\u007f]/g;
 /** Device names Windows reserves, with or without an extension (CON, CON.txt). */
 const RESERVED = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i;
 
-/** One path segment safe on every OS: forbidden characters become `_`, trailing dots and spaces go, reserved names get a `_` prefix. */
-export function safeSegment(raw: string): string {
-  let s = raw.normalize('NFC').replace(FORBIDDEN, '_').replace(/\s+/g, ' ').trim();
+/**
+ * Fails clearly when a record field that names a path is not a string, instead of a TypeError deep in the
+ * mirror. Records are flattened at the nexus client (`flattenRecord`), so this is a guard, not a converter.
+ */
+function requireText(v: unknown, field: string): string {
+  if (typeof v === 'string') return v;
+  const shown = JSON.stringify(v) ?? String(v);
+  throw new TypeError(`${field} must be a string to name a mirror path, got ${v === null ? 'null' : typeof v}: ${shown.length > 80 ? `${shown.slice(0, 80)}...` : shown}`);
+}
+
+/**
+ * One path segment safe on every OS: forbidden characters become `_`, trailing dots and spaces go, reserved
+ * names get a `_` prefix. `field` names the record field in the error when `raw` is not a string.
+ */
+export function safeSegment(raw: string, field = 'segment'): string {
+  let s = requireText(raw, field).normalize('NFC').replace(FORBIDDEN, '_').replace(/\s+/g, ' ').trim();
   s = s.replace(/[. ]+$/, '');
   if (!s || s === '.' || s === '..') return '_';
   if (RESERVED.test(s)) s = `_${s}`;
@@ -34,9 +47,9 @@ function cut(s: string, max: number): string {
 }
 
 /** `<name>__<sys_id><ext>`, the name made safe and cut to NAME_MAX; just `<sys_id><ext>` when there is no name. */
-export function recordSegment(name: string | undefined, sysId: string, ext = ''): string {
-  if (!SYS_ID.test(sysId)) throw new Error(`not a sys_id: ${sysId}`);
-  const n = name ? safeSegment(name) : '';
+export function recordSegment(name: string | undefined, sysId: string, ext = '', field = 'name'): string {
+  if (!SYS_ID.test(requireText(sysId, 'sys_id'))) throw new Error(`not a sys_id: ${sysId}`);
+  const n = name === undefined || name === '' ? '' : safeSegment(name, field);
   return n && n !== '_' ? `${cut(n, NAME_MAX)}__${sysId}${ext}` : `${sysId}${ext}`;
 }
 

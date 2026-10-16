@@ -57,8 +57,29 @@ export interface QueryOptions {
   max?: number;
 }
 
+/** A record as LiveMap uses it: every field a string, after `flattenRecord`. */
 export type SnRecord = Record<string, string>;
-interface QueryPage { records: SnRecord[]; has_more?: boolean; count?: number; total?: number | string }
+interface QueryPage { records: unknown[]; has_more?: boolean; count?: number; total?: number | string }
+
+/**
+ * One field as a string. Real nexus returns reference fields as `{link, value}` even with
+ * `display_value:false` (`sys_scope`, `operation`, `type`, ...); those become their `value`. null and
+ * undefined become '', numbers and booleans their text, and any other non-string its JSON.
+ */
+export function flattenValue(v: unknown): string {
+  if (typeof v === 'string') return v;
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  if (typeof v === 'object' && !Array.isArray(v) && 'value' in v) return flattenValue((v as { value: unknown }).value);
+  return JSON.stringify(v);
+}
+
+/** A record from nexus with every field flattened to a string (see `flattenValue`). */
+export function flattenRecord(r: unknown): SnRecord {
+  const out: SnRecord = {};
+  if (r && typeof r === 'object' && !Array.isArray(r)) for (const [k, v] of Object.entries(r)) out[k] = flattenValue(v);
+  return out;
+}
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -220,7 +241,8 @@ export class NexusClient {
       if (opts.orderBy) args.order_by = opts.orderBy;
       const body = await this.call('sn_query_table', args);
       const data = (isObj(body) && isObj(body.data) ? body.data : body) as QueryPage;
-      const records = Array.isArray(data?.records) ? data.records : [];
+      // Flattened here, at the boundary, so nothing past the client sees a reference object.
+      const records = Array.isArray(data?.records) ? data.records.map(flattenRecord) : [];
       if (records.length) yield records;
       offset += records.length;
       if (!data?.has_more || records.length < limit) return;

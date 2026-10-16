@@ -87,6 +87,25 @@ export interface MockNexusOptions {
   plusTotals?: boolean;
   /** has_more on every page, even a short one (the default is real nexus: has_more whenever a page is full). */
   alwaysMore?: boolean;
+  /** Plain strings for reference fields, as the fixture stores them (the default is real nexus: `{link, value}`). */
+  flatReferences?: boolean;
+}
+
+/** Fields real nexus returns as references, besides any other field holding a sys_id. */
+export const REFERENCE_FIELDS = new Set(['operation', 'type', 'sys_scope', 'sp_widget', 'sp_page', 'sp_column', 'sp_row', 'sp_container', 'collection', 'table', 'reference', 'super_class']);
+const SYS_ID_VALUE = /^[0-9a-f]{32}$/;
+
+/**
+ * A record in the shape real `sn_query_table` returns, verified live: reference fields are `{link, value}`
+ * objects even with `display_value:false`. The record's own `sys_id` stays a string; empty references stay ''.
+ */
+export function asNexusRecord(table: string, r: Rec): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(r)) {
+    const ref = k !== 'sys_id' && typeof v === 'string' && v !== '' && (REFERENCE_FIELDS.has(k) || SYS_ID_VALUE.test(v));
+    out[k] = ref ? { link: `https://mock.service-now.com/api/now/table/${k === 'sys_scope' ? 'sys_scope' : table}/${v}`, value: v } : v;
+  }
+  return out;
 }
 
 export interface CallLog { tool: string; args: Record<string, unknown>; inner?: string }
@@ -125,7 +144,8 @@ export async function startMockNexus(opts: MockNexusOptions = {}): Promise<MockN
     const offset = Number(a.offset ?? 0);
     const page = rows.slice(offset, offset + limit);
     const fields = Array.isArray(a.fields) ? (a.fields as string[]) : null;
-    const records = fields ? page.map(r => Object.fromEntries(fields.map(f => [f, r[f] ?? '']))) : page;
+    const picked = fields ? page.map(r => Object.fromEntries(fields.map(f => [f, r[f] ?? '']))) : page;
+    const records = opts.flatReferences ? picked : picked.map(r => asNexusRecord(table, r as Rec));
     const total = opts.plusTotals && rows.length > 100 ? '100+' : rows.length;
     // Real nexus sets has_more whenever a page is full, even when no rows are left.
     return { success: true, data: { records, count: records.length, total, has_more: opts.alwaysMore || records.length === limit } };

@@ -7,6 +7,10 @@ import { clean, layoutMirror, readHeader, SECRET_FIELD } from '../../plugins/ser
 import { NexusClient } from '../../plugins/servicenow/nexus.js';
 import { ensureGitignored, readManifest, snRoot, writeMirror } from '../../plugins/servicenow/writer.js';
 import { PATH_MAX } from '../../plugins/servicenow/paths.js';
+import { serviceNowAnalyzer } from '../../plugins/servicenow/analyzer.js';
+import { ProjectModel } from '../../src/engine/project.js';
+import { ANALYZERS } from '../../src/engine/domain/index.js';
+import { buildDomainIndex } from '../../src/engine/domain/build-index.js';
 import { expectMode, rmTree } from '../helpers/platform.js';
 import { loadFixture, startMockNexus, type MockNexus } from '../helpers/mock-nexus.js';
 
@@ -197,6 +201,35 @@ describe('secrets and partial records', () => {
     expect(decisions).toHaveLength(6);
     expect(decisions.every(e => e.partial && JSON.parse(files.get(e.path)!).partial === true)).toBe(true);
   });
+});
+
+describe('reference fields as {link, value} (real nexus)', () => {
+  it('pulls, mirrors and analyzes records whose reference fields are objects', async () => {
+    const { c } = await setup();
+    // The mock answers like real nexus: an ACL's operation is {link, value}, not a string.
+    const raw = await c.call('sn_query_table', { table: 'sys_security_acl', query: `sys_scope=${fx.scope.sys_id}`, limit: 1 }) as { data: { records: Record<string, unknown>[] } };
+    expect(raw.data.records[0].operation).toEqual({ link: expect.stringContaining('/'), value: expect.any(String) });
+    expect(raw.data.records[0].sys_scope).toEqual({ link: expect.any(String), value: fx.scope.sys_id });
+
+    const { root, manifest, files } = await backfill(c);
+    expect(Object.keys(manifest.records)).toHaveLength(1683);
+    expect(manifest.byClass).toEqual(fx.groundTruth.byClass);
+    // ACL folders are named by operation value, and nothing anywhere reads "[object Object]".
+    const ops = new Set(Object.values(manifest.records).filter(e => e.class === 'sys_security_acl').map(e => e.path.split('/')[2]));
+    expect([...ops].every(o => /^[a-z_]+$/.test(o))).toBe(true);
+    for (const [p, text] of files) {
+      expect(p).not.toContain('object Object');
+      expect(text, p).not.toContain('[object Object]');
+      expect(text, p).not.toContain('"link"');
+    }
+
+    const model = new ProjectModel(root, { analyzers: [...ANALYZERS, serviceNowAnalyzer(root)] });
+    await model.scan();
+    const domain = buildDomainIndex(model.all(), p => model.content(p));
+    const app = domain.tables.find(t => t.table === 'x_snc_cc_offering_credit_card_application')!;
+    expect(app.rules?.filter(r => r.kind === 'acl').length).toBeGreaterThan(0);
+    expect(app.rules?.filter(r => r.kind === 'business_rule').length).toBeGreaterThan(0);
+  }, 60_000);
 });
 
 describe('mirror on disk', () => {

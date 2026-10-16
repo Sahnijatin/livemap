@@ -47,6 +47,17 @@ describe('recordSegment', () => {
   });
 });
 
+describe('non-string names', () => {
+  it('fail with an error naming the field, not a TypeError from inside', () => {
+    const ref = { link: 'https://i.service-now.com/api/now/table/sys_security_operation/create', value: 'create' };
+    expect(() => safeSegment(ref as unknown as string, 'operation')).toThrow(/^operation must be a string to name a mirror path, got object: \{"link"/);
+    expect(() => safeSegment(null as unknown as string, 'table')).toThrow(/table must be a string.*got null/);
+    expect(() => recordSegment(42 as unknown as string, ID, '.js', 'api_name')).toThrow(/api_name must be a string.*got number: 42/);
+    expect(() => recordSegment('x', ref as unknown as string)).toThrow(/sys_id must be a string/);
+    expect(recordSegment(undefined, ID, '.js')).toBe(`${ID}.js`);
+  });
+});
+
 describe('fitPath', () => {
   const rel = `x_snc_cc_offering/business_rule/x_snc_cc_offering_credit_card_application/${'N'.repeat(NAME_MAX)}__${ID}.js`;
   it('leaves a path that fits unchanged', () => {

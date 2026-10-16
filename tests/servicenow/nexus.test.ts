@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { assertReadOnly, NotAllowedError, READ_ONLY_TOOLS } from '../../plugins/servicenow/allowlist.js';
-import { NexusClient, NexusOfflineError, NexusToolError, INSTANCE_HEADER, unwrapResult } from '../../plugins/servicenow/nexus.js';
+import { flattenRecord, flattenValue, NexusClient, NexusOfflineError, NexusToolError, INSTANCE_HEADER, unwrapResult } from '../../plugins/servicenow/nexus.js';
 import { loadFixture, matches, startMockNexus, type MockNexus } from '../helpers/mock-nexus.js';
 
 const open: { close(): Promise<void> }[] = [];
@@ -15,6 +15,35 @@ function client(m: MockNexus, opts: ConstructorParameters<typeof NexusClient>[0]
   open.push(c);
   return c;
 }
+
+describe('flattening records at the client boundary', () => {
+  it('turns every field into a string', () => {
+    const live = {
+      sys_id: 'a'.repeat(32),
+      operation: { link: 'https://i.service-now.com/api/now/table/sys_security_operation/create', value: 'create' },
+      sys_scope: { link: 'https://i.service-now.com/api/now/table/sys_scope/b', value: 'b'.repeat(32) },
+      empty_ref: { link: '', value: '' },
+      nested: { value: { value: 'deep' } },
+      order: 100, active: true, missing: null, gone: undefined,
+      blob: { a: 1 }, list: ['x', 'y'],
+    };
+    expect(flattenRecord(live)).toEqual({
+      sys_id: 'a'.repeat(32), operation: 'create', sys_scope: 'b'.repeat(32), empty_ref: '', nested: 'deep',
+      order: '100', active: 'true', missing: '', gone: '', blob: '{"a":1}', list: '["x","y"]',
+    });
+    expect(flattenValue('plain')).toBe('plain');
+    expect(flattenRecord(null)).toEqual({});
+  });
+
+  it('returns flattened records from query, though nexus sends {link, value}', async () => {
+    const m = await mock();
+    const c = client(m);
+    const acls = await c.query('sys_security_acl', { query: `sys_scope=${loadFixture().scope.sys_id}` });
+    expect(acls.length).toBeGreaterThan(0);
+    for (const r of acls) for (const [k, v] of Object.entries(r)) expect(typeof v, k).toBe('string');
+    expect(acls.every(r => r.sys_scope === loadFixture().scope.sys_id)).toBe(true);
+  });
+});
 
 describe('read-only allowlist', () => {
   it('allows exactly the read tools, directly and through tool_execute', () => {
