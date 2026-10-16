@@ -7,6 +7,9 @@ import { GitWatcher } from '../../src/agents/git.js';
 import type { RawAgentEvent } from '../../src/shared/types.js';
 import { IS_WIN, rmTree } from '../helpers/platform.js';
 
+/** Slower CI runners scale wall-clock budgets (LIVEMAP_TIME_SCALE, set by CI on macOS and Windows). */
+const TIME_SCALE = Number(process.env.LIVEMAP_TIME_SCALE) || 1;
+
 const dirs: string[] = [];
 const watchers: GitWatcher[] = [];
 afterEach(() => {
@@ -193,9 +196,9 @@ describe('GitWatcher', () => {
     expect(await w.start()).toBe(true);
     commit(a, 'from remote');
     git(a, 'push', '-q', 'origin', 'HEAD:main');
-    await until(() => got.length >= 1, 3500);
+    await until(() => got.length >= 1, 3500 * TIME_SCALE);
     expect(got[0].text).toBe('from remote');
-  });
+  }, 5000 * TIME_SCALE);
 
   it('emits a distinct pull error once and keeps polling', async () => {
     const d = initRepo();
