@@ -1,30 +1,14 @@
 /**
  * The file tree's code that first paint does not need, in a chunk of its own (FileTree loads it on mount): key
- * handling, and saving folder choices.
+ * handling, and opening and closing folders.
  */
 import type { Dispatch, SetStateAction } from 'react';
-import { dirKey, editSet as edit, treeKey, type DirState, type Item } from '../treeModel';
+import { dirKey, editSet as edit, type DirState, type Item } from '../treeModel';
 import type { Moving, Session } from './FileTree';
 
 /** Folder unfold and fold (height and fade), matching `.dgroup.unfold/.fold` in styles.css. */
 const FOLD_MS = 360;
 const NONE: ReadonlySet<string> = new Set();
-
-/** Stored choices beyond this many drop the oldest. */
-const MAX_STORED = 2000;
-
-/** The newest `max` choices as [path, open] pairs. */
-export function serializeTreeState(state: DirState, max = MAX_STORED): string {
-  return JSON.stringify([...state].slice(-max));
-}
-
-export function saveTreeState(root: string, state: DirState): void {
-  try {
-    globalThis.localStorage?.setItem(treeKey(root), serializeTreeState(state));
-  } catch {
-    // Private mode, quota or blocked storage: folders stay as set for this page only.
-  }
-}
 
 /** Typed letters within this long of each other search as one prefix. */
 const TYPEAHEAD_MS = 700;
@@ -148,7 +132,8 @@ export function toggleDir(dir: string, c: TreeContext): void {
     }));
   }
   if (c.reduced) return;
-  // A closing folder keeps the rows it shows now until its fold ends (a folding child among them, closed).
+  // A closing folder keeps the rows it shows now until its fold ends. A child still folding inside it is kept as a
+  // closed row: its own rows go at once (a snap inside a fold that is closing anyway).
   const rows = c.items;
   const at = rows.findIndex(it => it.kind === 'dir' && it.node.path === dir);
   let end = at + 1;

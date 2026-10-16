@@ -124,7 +124,8 @@ export function editSet(set: ReadonlySet<string>, add: readonly string[], del: r
 /** Every folder above `path`, outermost first. */
 export function ancestors(path: string): string[] {
   const out: string[] = [];
-  for (let i = path.indexOf('/'); i >= 0; i = path.indexOf('/', i + 1)) out.push(path.slice(0, i));
+  // From index 1: a leading slash never yields the root ('') as a folder.
+  for (let i = path.indexOf('/', 1); i >= 0; i = path.indexOf('/', i + 1)) out.push(path.slice(0, i));
   return out;
 }
 
@@ -195,7 +196,9 @@ export function visibleItems(
     const filesSet = limits.get(moreKey(node.path));
     const dirsShown = Math.min(node.dirs.length, dirsSet ?? Math.max(0, Math.min(DIR_BATCH, budget)));
     if (dirsSet === undefined) budget -= dirsShown;
-    const filesShown = Math.min(node.rows.length, filesSet ?? Math.max(0, Math.min(DIR_BATCH - dirsShown, budget)));
+    // Files share DIR_BATCH with the folders shown by default; after "Show more folders" they get a batch of their own.
+    const room = dirsSet === undefined ? DIR_BATCH - dirsShown : DIR_BATCH;
+    const filesShown = Math.min(node.rows.length, filesSet ?? Math.max(0, Math.min(room, budget)));
     if (filesSet === undefined) budget -= filesShown;
     const subs: Sub[] = [];
     for (let i = 0; i < node.dirs.length; i++) {
@@ -211,9 +214,9 @@ export function visibleItems(
   // Pass 2, depth first: the rows in display order.
   const items: Item[] = [];
   const navKeys: string[] = [];
-  const more = (dir: string, part: 'dirs' | 'files', shown: number, hidden: number, level: number) => {
+  const more = (dir: string, part: 'dirs' | 'files', shown: number, hidden: number, level: number, up: string | null) => {
     if (hidden <= 0) return;
-    items.push({ kind: 'more', dir, part, shown, hidden, level, up: dir === '' ? null : dirKey(dir) });
+    items.push({ kind: 'more', dir, part, shown, hidden, level, up });
     navKeys.push(moreKey(dir, part));
   };
   const walk = (node: DirNode, level: number, up: string | null) => {
@@ -227,19 +230,18 @@ export function visibleItems(
       navKeys.push(key);
       if (open) walk(tail, level + 1, key);
     }
-    more(node.path, 'dirs', dirsShown, node.dirs.length - dirsShown - extra, level);
-    const fileUp = node.path === '' ? null : dirKey(node.path);
+    more(node.path, 'dirs', dirsShown, node.dirs.length - dirsShown - extra, level, up);
     let extraFiles = 0;
     for (let i = 0; i < node.rows.length; i++) {
       const row = node.rows[i];
       // Past the cap, only pinned rows (selected or changing right now) still render.
       if (i >= filesShown) { if (!pinned.has(row.file.path)) continue; extraFiles++; }
       const ro = row.symbols.length > 0 && rowOpen(row);
-      items.push({ kind: 'file', row, open: ro, level, up: fileUp });
+      items.push({ kind: 'file', row, open: ro, level, up });
       navKeys.push(row.file.path);
       if (ro) for (const { sym } of row.symbols) navKeys.push(symKey(row.file.path, sym));
     }
-    more(node.path, 'files', filesShown, node.rows.length - filesShown - extraFiles, level);
+    more(node.path, 'files', filesShown, node.rows.length - filesShown - extraFiles, level, up);
   };
   walk(root, 1, null);
   return { items, navKeys };
@@ -294,6 +296,22 @@ export function parseTreeState(raw: string | null): Map<string, boolean> {
   }
   if (Array.isArray(v)) for (const e of v) if (Array.isArray(e) && typeof e[0] === 'string' && typeof e[1] === 'boolean') out.set(e[0], e[1]);
   return out;
+}
+
+/** Stored choices beyond this many drop the oldest. */
+const MAX_STORED = 2000;
+
+/** The newest `max` choices as [path, open] pairs. */
+export function serializeTreeState(state: DirState, max = MAX_STORED): string {
+  return JSON.stringify([...state].slice(-max));
+}
+
+export function saveTreeState(root: string, state: DirState): void {
+  try {
+    globalThis.localStorage?.setItem(treeKey(root), serializeTreeState(state));
+  } catch {
+    // Private mode, quota or blocked storage: folders stay as set for this page only.
+  }
 }
 
 /** The project's stored folders; empty when storage is missing, blocked, throws or holds something unreadable. */

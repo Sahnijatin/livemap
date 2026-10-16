@@ -10,7 +10,7 @@ import { latestChange, type SymbolTag } from '../changes';
 import { useLiveRecent } from '../recent';
 import {
   BIG_PROJECT, DIR_BATCH, ancestors, editSet as edit, buildTree, cachedTags, chainOpen, closedAbove, dirActivity, dirKey, loadTreeState, moreKey,
-  visibleItems, type Activity, type DirState, type Item, type Row,
+  saveTreeState, visibleItems, type Activity, type DirState, type Item, type Row,
 } from '../treeModel';
 import { FileRow, MidName } from './FileRow';
 import type { TreeContext } from './treeDeferred';
@@ -41,18 +41,23 @@ export type Session = { picked: ReadonlySet<string>; closed: ReadonlySet<string>
 export type Moving = { kind: 'fold' | 'unfold'; until: number; rows: Item[] };
 
 type KeysModule = typeof import('./treeDeferred');
-/** The tree's key handling and saving, a chunk of its own that loads after first paint. */
+/** The tree's key handling and folder toggling, a chunk of its own that loads after first paint. */
 let keys: KeysModule | null = null;
 let loading: Promise<KeysModule | null> | null = null;
 /** How the key chunk is fetched (tests swap it), and `reset` to forget it. */
 export const treeKeysLoader = {
   load: (): Promise<KeysModule> => import('./treeDeferred'),
-  reset(): void { keys = null; loading = null; },
+  reset(): void { keys = null; loading = null; reported = false; },
 };
-/** The key handler, loading it once; a failed load resolves null and the next call tries again. */
+let reported = false;
+/** The deferred code, loading it once; a failed load is logged once, resolves null, and the next call tries again. */
 export function loadTreeKeys(): Promise<KeysModule | null> {
   if (keys) return Promise.resolve(keys);
-  return (loading ??= treeKeysLoader.load().then(m => (keys = m), () => { loading = null; return null; }));
+  return (loading ??= treeKeysLoader.load().then(m => (keys = m), e => {
+    loading = null;
+    if (!reported) { reported = true; console.error('LiveMap: the file tree could not load its folder and key handling', e); }
+    return null;
+  }));
 }
 
 export function FileTree() {
@@ -110,11 +115,8 @@ export function FileTree() {
   const pending = useRef<DirState | null>(null);
   const flush = useCallback(() => {
     const p = pending.current;
-    if (!p) return;
-    // The saving code is in the deferred chunk (normally loaded by now); a failed load keeps the choices pending.
-    if (!keys) { void loadTreeKeys().then(m => { if (m) flush(); }); return; }
     pending.current = null;
-    keys.saveTreeState(projectRoot, p);
+    if (p) saveTreeState(projectRoot, p);
   }, [projectRoot]);
   useEffect(() => {
     if (dirs === loaded.current) return; // as read from storage: nothing to write back
@@ -146,7 +148,7 @@ export function FileTree() {
     const at = session.agentAt;
     // Nothing opens under a folder the user closed this session.
     if (at === null || at === session.blocked || ancestors(at).some(a => session.closed.has(a))) return NO_DIRS;
-    return edit(NO_DIRS, closedAbove(at, dirs, big, session.picked).filter(a => !session.closed.has(a)));
+    return edit(NO_DIRS, closedAbove(at, dirs, big, session.picked));
   }, [session, dirs, big]);
   const revealed = useMemo(() => (agentDirs.size ? edit(session.picked, [...agentDirs]) : session.picked), [session.picked, agentDirs]);
 
@@ -181,15 +183,17 @@ export function FileTree() {
     lastShown.current = want;
     setReveal({ path: want, at: Date.now(), q: latest.current.q });
   }, [targetPath, agentWorking, holdEnded]);
-  // Each selection (Map, palette, Activity, inspector, or this tree) is revealed, the same file again included.
+  // Each selection opens its folders, the same file again included. One made outside the tree (Map, palette,
+  // Activity, inspector) also scrolls to its row; a file or symbol clicked here is already in view.
   const selects = useStore(s => s.selects);
+  const ownSelect = useRef(-1);
   useEffect(() => {
     const path = useStore.getState().selected;
     if (path === null) return;
     showPicked(path);
-    setReveal({ path, at: Date.now(), q: latest.current.q });
+    if (selects !== ownSelect.current) setReveal({ path, at: Date.now(), q: latest.current.q });
   }, [selects, showPicked]);
-  const rowOpen = useCallback((row: Row) => row.forceOpen || (Object.hasOwn(expanded, row.file.path) && expanded[row.file.path]), [expanded]);
+  const rowOpen = useCallback((row: Row) => row.forceOpen || !!expanded[row.file.path], [expanded]);
   const pins = useMemo(() => {
     const out = Object.keys(live);
     if (selected !== null) out.push(selected);
@@ -206,7 +210,8 @@ export function FileTree() {
     return byDir;
   }, [openItems]);
   // Rows of folding folders render until the fold ends, but are never part of keyboard navigation.
-  // Every folding folder that is not open again draws closed, one inside a closing parent's saved rows too.
+  // Every folding folder that is not open again draws closed, one inside a closing parent's saved rows too (with
+  // no rows of its own there: see toggleDir in treeDeferred).
   const folding = useMemo(() => {
     const f = new Set<string>();
     for (const [d, m] of moving) if (m.kind === 'fold' && !dirItems.get(d)?.open) f.add(d);
@@ -263,13 +268,15 @@ export function FileTree() {
 
   const onSelect = useCallback((path: string) => {
     const s = useStore.getState();
+    ownSelect.current = s.selects + 1;
     s.select(path);
-    if (!(Object.hasOwn(s.expanded, path) && s.expanded[path])) s.toggle(path);
+    if (!s.expanded[path]) s.toggle(path);
     afterSelect();
   }, []);
   const onToggle = useCallback((path: string) => useStore.getState().toggle(path), []);
   const onSymbol = useCallback((path: string, line: number) => {
     const s = useStore.getState();
+    ownSelect.current = s.selects + 1;
     s.revealLine(path, line);
     if (isNarrow()) s.setPanel('inspector');
   }, []);
@@ -349,7 +356,7 @@ export function FileTree() {
     const { row } = item;
     const path = row.file.path;
     if (!born.current.has(path)) born.current.set(path, now < animateFrom ? 0 : now);
-    const badge = Object.hasOwn(live, path) ? live[path] : undefined;
+    const badge = live[path];
     const change = badge ? latestChange(changes, path) : undefined;
     return (
       <FileRow

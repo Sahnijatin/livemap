@@ -90,6 +90,12 @@ function pushHistory(history: string[], path: string): string[] {
 }
 export type ConnectionState = 'connecting' | 'open' | 'closed' | 'unauthorized';
 
+/**
+ * A record keyed by file path, with no prototype: a file named `constructor` or `__proto__` reads as absent until
+ * set, and setting it never changes the record's prototype.
+ */
+export const dict = <T>(...from: Record<string, T>[]): Record<string, T> => Object.assign(Object.create(null) as Record<string, T>, ...from);
+
 /** Recording status before a hello says otherwise (and from a server without history). */
 export const NO_HISTORY: HistoryStatus = { enabled: false, first: 0, last: 0, firstAt: 0, lastAt: 0 };
 
@@ -221,12 +227,12 @@ const initial = {
   helloAt: 0,
   root: '',
   name: '',
-  files: {},
+  files: dict<FileModel>(),
   changes: [],
   usedBy: [],
   selected: null,
-  recent: {},
-  expanded: {},
+  recent: dict<{ kind: RecentKind; at: number }>(),
+  expanded: dict<boolean>(),
   filter: '',
   reveal: null,
   panel: null,
@@ -267,7 +273,7 @@ const freshDomain = () => ({ domain: emptyDomainIndex(), domainBase: baseOf(empt
  * also ends its peek, so the file coming back does not reopen the inspector; a played (historical) one does not.
  */
 function upsertFiles(st: StoreState, upserts: FileModel[], removed: string[]): Pick<StoreState, 'files' | 'selected' | 'peek'> {
-  const files = { ...st.files };
+  const files = dict(st.files);
   for (const p of removed) delete files[p];
   for (const f of upserts) files[f.path] = f;
   const selected = st.selected && files[st.selected] ? st.selected : null;
@@ -284,10 +290,10 @@ function recordRecent(recent: StoreState['recent'], c: ChangeSummary): void {
  * baselines, so nothing that arrives with it animates in. View state is the caller's business.
  */
 function replaceData(msg: ProjectState, st: StoreState) {
-  const files: Record<string, FileModel> = {};
+  const files = dict<FileModel>();
   for (const f of msg.files) files[f.path] = f;
   const changes = msg.changes.slice(-MAX_CHANGES);
-  const recent: StoreState['recent'] = {};
+  const recent: StoreState['recent'] = dict();
   for (const c of changes) recordRecent(recent, c);
   // Tolerate a hello without agent fields (agent activity unavailable).
   const events = (msg.events ?? []).slice(-MAX_EVENTS);
@@ -428,9 +434,9 @@ export const useStore = create<StoreState>()((set, get) => ({
         const c = msg.change;
         const prev = get().changes;
         const changes = prev.length >= MAX_CHANGES ? [...prev.slice(prev.length - MAX_CHANGES + 1), c] : [...prev, c];
-        const recent = { ...get().recent };
+        const recent = dict(get().recent);
         recordRecent(recent, c);
-        const expanded = c.kind === 'deleted' ? get().expanded : { ...get().expanded, [c.path]: true };
+        const expanded = c.kind === 'deleted' ? get().expanded : dict(get().expanded, { [c.path]: true });
         // One update for the change and its files, so views re-render (and refetch code) once.
         set({ changes, recent, expanded, ...upsertFiles(get(), msg.files, msg.removed) });
         return;
@@ -485,7 +491,7 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   toggle(path) {
     const expanded = get().expanded;
-    set({ expanded: { ...expanded, [path]: !(Object.hasOwn(expanded, path) && expanded[path]) } }); // own keys: a file may be named `constructor`
+    set({ expanded: dict(expanded, { [path]: !expanded[path] }) });
   },
 
   setFilter(q) {
@@ -651,6 +657,6 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   reset() {
     summaryRequests.clear();
-    set({ ...initial, ...freshDomain(), tab: 'activity', follow: loadFollow(), layout: loadLayout(), historyStatus: NO_HISTORY, rewound: null, playing: false, summaries: emptySummaries(), helloFiles: new Set(), files: {}, changes: [], usedBy: [], recent: {}, expanded: {}, events: [], sessions: {}, control: { paused: false, flags: [] }, mapExpanded: {}, helloEdges: new Set(), history: [] });
+    set({ ...initial, ...freshDomain(), tab: 'activity', follow: loadFollow(), layout: loadLayout(), historyStatus: NO_HISTORY, rewound: null, playing: false, summaries: emptySummaries(), helloFiles: new Set(), files: dict<FileModel>(), changes: [], usedBy: [], recent: dict<{ kind: RecentKind; at: number }>(), expanded: dict<boolean>(), events: [], sessions: {}, control: { paused: false, flags: [] }, mapExpanded: {}, helloEdges: new Set(), history: [] });
   },
 }));

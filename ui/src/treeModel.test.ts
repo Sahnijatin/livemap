@@ -1,10 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { FileModel } from '@shared/types.js';
 import { file, sym } from './fixtures';
-import { saveTreeState, serializeTreeState } from './components/treeDeferred';
 import {
   ROW_BUDGET, DIR_BATCH, ancestors, buildTree, chainOf, closedAbove, chainOpen, compareNames, dirActivity, loadTreeState, parseTreeState,
-  dirKey, moreKey, symKey, splitName, treeKey, visibleItems, type DirNode, type Item,
+  saveTreeState, serializeTreeState, dirKey, moreKey, symKey, splitName, treeKey, visibleItems, type DirNode, type Item,
 } from './treeModel';
 
 /** Slower CI runners scale wall-clock budgets (LIVEMAP_TIME_SCALE, set by CI on macOS and Windows). */
@@ -159,6 +158,18 @@ describe('visibleItems', () => {
     expect(more.filter(i => i.kind === 'file')).toHaveLength(10);
   });
 
+  it('files keep their own room after "Show more folders" raises the folder cap past the batch', () => {
+    const paths: string[] = [];
+    for (let i = 0; i < 250; i++) paths.push(`x/s${String(i).padStart(3, '0')}/a.ts`);
+    for (let i = 0; i < 5; i++) paths.push(`x/f${i}.ts`);
+    const { root } = tree(paths);
+    const onlyX = (p: string[]) => p[p.length - 1] === 'x';
+    const list = visibleItems(root, onlyX, () => false, new Map([[moreKey('x', 'dirs'), 400]])).items;
+    expect(list.filter(i => i.kind === 'dir')).toHaveLength(251);
+    expect(list.filter(i => i.kind === 'file')).toHaveLength(5);
+    expect(list.some(i => i.kind === 'more')).toBe(false);
+  });
+
   it('renders pinned rows and the folders that hold them past the cap', () => {
     const paths: string[] = [];
     for (let i = 0; i < 250; i++) paths.push(`big/s${String(i).padStart(3, '0')}/a.ts`);
@@ -195,6 +206,9 @@ describe('activity and ancestors', () => {
   it('lists every ancestor folder of a path', () => {
     expect(ancestors('a/b/c.ts')).toEqual(['a', 'a/b']);
     expect(ancestors('c.ts')).toEqual([]);
+    // Never the project root, even for a path with a leading slash.
+    expect(ancestors('/a/b/c.ts')).toEqual(['/a', '/a/b']);
+    expect(ancestors('/x.ts')).toEqual([]);
   });
 
   it('marks each folder above a live file, the file being written winning over edits and new files', () => {

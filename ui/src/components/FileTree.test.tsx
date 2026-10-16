@@ -967,6 +967,37 @@ describe('FileTree round 5', () => {
   });
 });
 
+describe('FileTree round 6', () => {
+  const scrollSpy = vi.fn();
+  beforeEach(() => { scrollSpy.mockClear(); (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView = scrollSpy; });
+  afterEach(() => { delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView; });
+
+  it('a symbol or file clicked in the tree does not scroll the tree; a pick from elsewhere does', () => {
+    useStore.getState().apply(hello([file('src/a.ts', [sym('alpha')]), file('src/b.ts')]));
+    mount();
+    act(() => byData('file', 'src/a.ts')!.click()); // selects and expands it
+    expect(scrollSpy).not.toHaveBeenCalled();
+    const symRow = [...host.querySelectorAll<HTMLElement>('.srow')].find(e => e.textContent?.includes('alpha'))!;
+    act(() => symRow.click());
+    expect(useStore.getState().reveal?.path).toBe('src/a.ts');
+    expect(scrollSpy).not.toHaveBeenCalled();
+    act(() => useStore.getState().select('src/b.ts'));
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('files named like object keys are neither expanded nor badged by inheritance', () => {
+    useStore.getState().apply(hello([file('constructor', [sym('a')]), file('__proto__', [sym('b')]), file('toString')]));
+    mount();
+    for (const n of ['constructor', '__proto__']) {
+      const row = byData('file', n)!;
+      expect(row.getAttribute('aria-expanded')).toBe('false');
+      expect(row.querySelector('.badge')).toBeNull();
+    }
+    act(() => byData('file', 'constructor')!.click());
+    expect(byData('file', 'constructor')!.getAttribute('aria-expanded')).toBe('true');
+  });
+});
+
 describe('FileTree lazy keys', () => {
   let real: typeof treeKeysLoader.load;
   beforeEach(() => { real = treeKeysLoader.load; });
@@ -1000,6 +1031,29 @@ describe('FileTree lazy keys', () => {
     expect(byData('dir', 'a')!.getAttribute('aria-expanded')).toBe('true');
     await act(async () => { resolve(); await gate; await loadTreeKeys(); });
     expect(byData('dir', 'a')!.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('a failed load is reported once and the next folder click tries again', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let fail = true;
+    treeKeysLoader.reset();
+    treeKeysLoader.load = () => (fail ? Promise.reject(new Error('offline')) : real());
+    try {
+      useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts')]));
+      mount();
+      await act(async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); });
+      act(() => byData('dir', 'a')!.click());
+      await act(async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); });
+      expect(byData('dir', 'a')!.getAttribute('aria-expanded')).toBe('true');
+      expect(err).toHaveBeenCalledTimes(1);
+      fail = false;
+      act(() => byData('dir', 'a')!.click());
+      await act(async () => { await loadTreeKeys(); });
+      expect(byData('dir', 'a')!.getAttribute('aria-expanded')).toBe('false');
+      expect(err).toHaveBeenCalledTimes(1);
+    } finally {
+      err.mockRestore();
+    }
   });
 
   it('retries after a failed load on the next key', async () => {

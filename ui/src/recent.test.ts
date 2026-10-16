@@ -20,3 +20,11 @@ describe('recent window', () => {
     }, now)).toEqual({ 'a.ts': 'new', 'b.ts': 'edited' });
   });
 });
+
+describe('live badges', () => {
+  it('have no prototype, so a file named like an object key has no badge', () => {
+    const live = liveRecent({}, Date.now());
+    expect(Object.getPrototypeOf(live)).toBeNull();
+    expect(live['constructor']).toBeUndefined();
+  });
+});

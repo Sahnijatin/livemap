@@ -649,11 +649,17 @@ describe('history and rewind', () => {
 describe('expanded files', () => {
   it('a file named like an object key toggles like any other', () => {
     useStore.getState().reset();
+    // `expanded` has no prototype, so plain reads see only real entries.
+    expect(Object.getPrototypeOf(useStore.getState().expanded)).toBeNull();
     for (const name of ['constructor', 'toString', '__proto__']) {
+      expect(useStore.getState().expanded[name]).toBeUndefined();
       useStore.getState().toggle(name);
-      expect(Object.hasOwn(useStore.getState().expanded, name) && useStore.getState().expanded[name]).toBe(true);
+      expect(Object.getPrototypeOf(useStore.getState().expanded)).toBeNull();
+      expect(useStore.getState().expanded[name]).toBe(true);
       useStore.getState().toggle(name);
       expect(useStore.getState().expanded[name]).toBe(false);
     }
+    useStore.getState().apply({ type: 'change', files: [], removed: [], change: change('constructor', 'modified') });
+    expect(Object.getPrototypeOf(useStore.getState().expanded)).toBeNull();
   });
 });
