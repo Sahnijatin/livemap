@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../store';
 import { file, sym, change, emptyDomain, event, session } from '../fixtures';
-import { FileTree, loadTreeKeys, treeKeysLoader } from './FileTree';
+import { FileTree } from './FileTree';
 import { rowRenderProbe } from './FileRow';
 import { DIR_BATCH, ROW_BUDGET, dirKey, moreKey } from '../treeModel';
 
@@ -27,7 +27,6 @@ function mount() {
   renders.length = 0;
 }
 
-beforeAll(async () => { await loadTreeKeys(); });
 beforeEach(() => {
   vi.useFakeTimers();
   localStorage.clear();
@@ -426,7 +425,7 @@ describe('FileTree folders', () => {
     act(() => dir('c')!.click());
     expect(localStorage.getItem('livemap:tree:/p/shop')).toBeNull(); // saved after a 300 ms pause
     act(() => { vi.advanceTimersByTime(300); });
-    expect(stored()).toEqual([['a/b', false]]); // c is open again, its default: not stored
+    expect(stored()).toEqual([['a/b', false], ['c', true]]);
     act(() => root.unmount());
     root = createRoot(host);
     localStorage.setItem('livemap:tree:/p/shop', JSON.stringify([['a/b', false], ['c', false], ['gone', true], ['bad', 3]]));
@@ -1050,14 +1049,31 @@ describe('FileTree round 7', () => {
     expect(host.querySelectorAll('.frow.pop')).toHaveLength(0);
   });
 
-  it('a folder set back to its default is not stored', () => {
+  it('every folder choice is stored, one equal to the default too', () => {
     useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts')]));
     mount();
-    act(() => dir('a')!.click()); // closed: stored
+    act(() => dir('a')!.click());
     act(() => dir('b')!.click());
-    act(() => dir('b')!.click()); // open again: the default, so not stored
+    act(() => dir('b')!.click()); // open again: the default, still stored as chosen
     act(() => { vi.advanceTimersByTime(300); });
-    expect(stored()).toEqual([['a', false]]);
+    expect(stored()).toEqual([['a', false], ['b', true]]);
+  });
+
+  it('a double click on a folder closes and opens it again', () => {
+    useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts')]));
+    mount();
+    act(() => dir('a')!.click());
+    act(() => dir('a')!.click());
+    expect(dir('a')!.getAttribute('aria-expanded')).toBe('true');
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(byData('file', 'a/x.ts')).not.toBeNull();
+  });
+
+  it('while indexing, big or not follows the index total the engine reports', () => {
+    useStore.getState().apply({ type: 'indexing', done: 0, total: 20_000 });
+    useStore.getState().apply({ ...hello([file('a/x.ts'), file('b/y.ts')]), indexing: true });
+    mount();
+    expect(dir('a')!.getAttribute('aria-expanded')).toBe('false');
   });
 });
 
@@ -1100,6 +1116,21 @@ describe('FileTree round 8', () => {
     expect(byData('file', 'a/b/x.ts')).toBeNull();
   });
 
+  it('typeahead starts fresh in each tree, whatever was typed in another', () => {
+    useStore.getState().apply(hello([file('lib/b.ts'), file('src/a.ts')]));
+    mount();
+    act(() => byData('file', 'src/a.ts')!.focus());
+    act(() => { (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true, cancelable: true })); });
+    act(() => root.unmount());
+    root = createRoot(host);
+    act(() => root.render(<FileTree />)); // at once: well inside the typeahead window
+    act(() => byData('file', 'src/a.ts')!.focus());
+    let notPrevented = true;
+    act(() => { notPrevented = (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: 'l', bubbles: true, cancelable: true })); });
+    expect(notPrevented).toBe(false); // "l", not "xl"
+    expect((document.activeElement as HTMLElement).dataset.nav).toBe(dirKey('lib'));
+  });
+
   it('typeahead takes AltGr characters', () => {
     useStore.getState().apply(hello([file('@types/x.d.ts'), file('src/a.ts')]));
     mount();
@@ -1109,78 +1140,3 @@ describe('FileTree round 8', () => {
   });
 });
 
-describe('FileTree lazy keys', () => {
-  let real: typeof treeKeysLoader.load;
-  beforeEach(() => { real = treeKeysLoader.load; });
-  afterEach(async () => { treeKeysLoader.load = real; treeKeysLoader.reset(); await loadTreeKeys(); });
-  const focused = () => (document.activeElement as HTMLElement).dataset.nav;
-  const press = (k: string) => act(() => { (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })); });
-
-  it('ignores keys pressed before the handler loads, and handles those after', async () => {
-    let resolve!: () => void;
-    const gate = new Promise<void>(r => { resolve = r; });
-    treeKeysLoader.reset();
-    treeKeysLoader.load = () => gate.then(real);
-    useStore.getState().apply(hello([file('a.ts'), file('b.ts'), file('c.ts')]));
-    mount();
-    act(() => byData('file', 'a.ts')!.focus());
-    press('ArrowDown');
-    await act(async () => { resolve(); await gate; await loadTreeKeys(); });
-    expect(focused()).toBe('a.ts'); // not replayed
-    press('ArrowDown');
-    expect(focused()).toBe('b.ts');
-  });
-
-  it('a folder clicked before the deferred code loads opens or closes once it has', async () => {
-    let resolve!: () => void;
-    const gate = new Promise<void>(r => { resolve = r; });
-    treeKeysLoader.reset();
-    treeKeysLoader.load = () => gate.then(real);
-    useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts')]));
-    mount();
-    act(() => byData('dir', 'a')!.click());
-    expect(byData('dir', 'a')!.getAttribute('aria-expanded')).toBe('true');
-    await act(async () => { resolve(); await gate; await loadTreeKeys(); });
-    expect(byData('dir', 'a')!.getAttribute('aria-expanded')).toBe('false');
-  });
-
-  it('a failed load is reported once and the next folder click tries again', async () => {
-    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-    let fail = true;
-    treeKeysLoader.reset();
-    treeKeysLoader.load = () => (fail ? Promise.reject(new Error('offline')) : real());
-    try {
-      useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts')]));
-      mount();
-      await act(async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); });
-      act(() => byData('dir', 'a')!.click());
-      await act(async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); });
-      expect(byData('dir', 'a')!.getAttribute('aria-expanded')).toBe('true');
-      expect(err).toHaveBeenCalledTimes(1);
-      fail = false;
-      act(() => byData('dir', 'a')!.click());
-      await act(async () => { await loadTreeKeys(); });
-      expect(byData('dir', 'a')!.getAttribute('aria-expanded')).toBe('false');
-      expect(err).toHaveBeenCalledTimes(1);
-    } finally {
-      err.mockRestore();
-    }
-  });
-
-  it('retries after a failed load on the next key', async () => {
-    let calls = 0;
-    treeKeysLoader.reset();
-    treeKeysLoader.load = () => (++calls === 1 ? Promise.reject(new Error('offline')) : real());
-    useStore.getState().apply(hello([file('a.ts'), file('b.ts')]));
-    mount();
-    await act(async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); }); // the first load fails
-    expect(calls).toBe(1);
-    act(() => byData('file', 'a.ts')!.focus());
-    press('ArrowDown'); // retries; this key itself is not replayed
-    expect(calls).toBe(2);
-    await act(async () => { await loadTreeKeys(); });
-    expect(focused()).toBe('a.ts');
-    press('ArrowDown');
-    expect(focused()).toBe('b.ts');
-  });
-});

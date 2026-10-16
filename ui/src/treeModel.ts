@@ -303,7 +303,7 @@ export function parseTreeState(raw: string | null): Map<string, boolean> {
 }
 
 /** Stored choices beyond this many drop the oldest. */
-export const MAX_STORED = 2000;
+const MAX_STORED = 2000;
 
 /** The newest `max` choices as [path, open] pairs. */
 export function serializeTreeState(state: DirState, max = MAX_STORED): string {

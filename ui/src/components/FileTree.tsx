@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import clsx from 'clsx';
-import { useStore } from '../store';
+import { arrivals, useStore } from '../store';
 import { NARROW_QUERY, isNarrow, useMedia } from '../media';
 import { INERT, afterSelect, shownLayout } from '../panels';
 import { prefersReducedMotion } from '../scroll';
@@ -13,7 +13,7 @@ import {
   saveTreeState, visibleItems, type Activity, type DirState, type Item, type Row,
 } from '../treeModel';
 import { FileRow, MidName } from './FileRow';
-import type { TreeContext } from './treeDeferred';
+import { showPicked, toggleDir as toggleIn, treeKeyDown, type TreeContext } from './treeActions';
 import { CollapseButton } from './Dock';
 import { usePrefersReducedMotion } from '../motion';
 import { Chevron, SearchIcon } from './icons';
@@ -39,26 +39,6 @@ const ACTIVITY: Record<Activity, string> = { now: 'being written', edited: 'edit
 export type Session = { picked: ReadonlySet<string>; closed: ReadonlySet<string>; agentAt: string | null; blocked?: string | null };
 export type Moving = { kind: 'fold' | 'unfold'; until: number; rows: Item[] };
 
-type KeysModule = typeof import('./treeDeferred');
-/** The tree's key handling and folder toggling, a chunk of its own that loads after first paint. */
-let keys: KeysModule | null = null;
-let loading: Promise<KeysModule | null> | null = null;
-/** How the key chunk is fetched (tests swap it), and `reset` to forget it. */
-export const treeKeysLoader = {
-  load: (): Promise<KeysModule> => import('./treeDeferred'),
-  reset(): void { keys = null; loading = null; reported = false; },
-};
-let reported = false;
-/** The deferred code, loading it once; a failed load is logged once, resolves null, and the next call tries again. */
-export function loadTreeKeys(): Promise<KeysModule | null> {
-  if (keys) return Promise.resolve(keys);
-  return (loading ??= treeKeysLoader.load().then(m => (keys = m), e => {
-    loading = null;
-    if (!reported) { reported = true; console.error('LiveMap: the file tree could not load its folder and key handling', e); }
-    return null;
-  }));
-}
-
 export function FileTree() {
   const files = useStore(s => s.files);
   const projectRoot = useStore(s => s.root);
@@ -69,6 +49,11 @@ export function FileTree() {
   const recent = useStore(s => s.recent);
   const changes = useStore(s => s.changes);
   const helloAt = useStore(s => s.helloAt);
+  /** A row pops while its file has just arrived (after the hello's first second), never for a folder opening. */
+  const popsAt = (path: string, now: number): boolean => {
+    const t = arrivals.get(path);
+    return t !== undefined && t > helloAt + 1000 && now - t < POP_MS;
+  };
   const panel = useStore(s => s.panel);
   const collapsed = useStore(s => shownLayout(s).collapsed.files);
   // Below 1080 px a closed slide-over is off screen, and wider a collapsed panel is hidden: keep it out of the tab order.
@@ -89,7 +74,8 @@ export function FileTree() {
     let f = refs.current.get(k);
     if (!f) {
       f = el => {
-        if (el) rowEls.current.set(k, el); else rowEls.current.delete(k);
+        if (el) rowEls.current.set(k, el);
+        else if (refs.current.get(k) === f) { rowEls.current.delete(k); refs.current.delete(k); } // not a remount's newer callback
       };
       refs.current.set(k, f);
     }
@@ -113,22 +99,13 @@ export function FileTree() {
   const closedNow = filterClosed.q === q ? filterClosed.dirs : NO_PATHS;
   const { root: tree, layers } = useMemo(() => buildTree(files, q), [files, q]);
   const fileCount = useMemo(() => Object.keys(files).length, [files]);
-  // When each file arrived: 0 for files there at the hello (or when the tree mounted), else when it first showed up.
-  // A row pops only for a file that just arrived, never because a folder opened or Show more revealed it.
-  const helloFiles = useStore(s => s.helloFiles);
-  const arrived = useRef<{ files: typeof files | null; at: Map<string, number> }>({ files: null, at: new Map() });
-  if (arrived.current.files !== files) {
-    const first = arrived.current.files === null;
-    const t = Date.now();
-    const at = arrived.current.at;
-    for (const p of at.keys()) if (!(p in files)) at.delete(p); // a removed file that comes back pops again
-    for (const p in files) if (!at.has(p)) at.set(p, first || helloFiles.has(p) || t < helloAt + 1000 ? 0 : t);
-    arrived.current.files = files;
-  }
-  // Big or not: taken from the first files seen, held while indexing, decided once more when the index finishes.
+  // Big or not: taken from the first state seen (the index total while indexing), held while indexing, and decided
+  // once more when the index finishes.
   const indexing = useStore(s => s.indexing !== null);
+  // The engine reports how many files the running index will hold; without it, the files seen so far count.
+  const indexTotal = useStore(s => s.indexing?.total ?? 0);
   const [bigAt, setBigAt] = useState<{ big: boolean; final: boolean } | null>(null);
-  if (!bigAt?.final && fileCount > 0 && (!indexing || !bigAt)) setBigAt({ big: fileCount >= BIG_PROJECT, final: !indexing });
+  if (!bigAt?.final && fileCount > 0 && (!indexing || !bigAt)) setBigAt({ big: (indexing && indexTotal > 0 ? indexTotal : fileCount) >= BIG_PROJECT, final: !indexing });
   const big = bigAt ? bigAt.big : fileCount >= BIG_PROJECT;
 
   const pending = useRef<DirState | null>(null);
@@ -198,9 +175,7 @@ export function FileTree() {
   useEffect(() => {
     const path = useStore.getState().selected;
     if (path === null) return;
-    // Opening its folders is deferred code (loaded by now; else it waits). The reveal waits for the row.
-    if (keys) keys.showPicked(path, ctx.current!);
-    else void loadTreeKeys().then(m => m?.showPicked(path, ctx.current!));
+    showPicked(path, ctx.current!);
     if (selects !== ownSelect.current) setReveal({ path, at: Date.now(), q: latest.current.q });
   }, [selects]);
   const rowOpen = useCallback((row: Row) => row.forceOpen || !!expanded[row.file.path], [expanded]);
@@ -214,8 +189,6 @@ export function FileTree() {
     () => visibleItems(tree, dirOpen, rowOpen, dirLimit, pins),
     [tree, dirOpen, rowOpen, dirLimit, pins],
   );
-  // Ref callbacks of rows no longer rendered are dropped after each commit (see refFor).
-  useEffect(() => { for (const k of refs.current.keys()) if (!rowEls.current.has(k)) refs.current.delete(k); });
   const dirItems = useMemo(() => {
     const byDir = new Map<string, Extract<Item, { kind: 'dir' }>>();
     for (const it of openItems) if (it.kind === 'dir') byDir.set(it.node.path, it);
@@ -223,7 +196,7 @@ export function FileTree() {
   }, [openItems]);
   // Rows of folding folders render until the fold ends, but are never part of keyboard navigation.
   // Every folding folder that is not open again draws closed, one inside a closing parent's saved rows too (with
-  // no rows of its own there: see toggleDir in treeDeferred).
+  // no rows of its own there: see toggleDir in treeActions).
   const folding = useMemo(() => {
     const f = new Set<string>();
     for (const [d, m] of moving) if (m.kind === 'fold' && !dirItems.get(d)?.open) f.add(d);
@@ -294,7 +267,7 @@ export function FileTree() {
   }, []);
 
 
-  useEffect(() => { void loadTreeKeys(); }, []);
+  const typed = useRef({ text: '', at: 0 });
   const ctx = useRef<TreeContext | null>(null);
   ctx.current = {
     navKeys,
@@ -309,14 +282,12 @@ export function FileTree() {
     setMoving,
     big,
     dirs,
-    indexing,
+    typed: typed.current,
     focus: k => rowEls.current.get(k)?.focus(),
     toggle: el => (el.dataset.dir !== undefined ? toggleDir(el.dataset.dir) : onToggle(el.dataset.file!)),
   };
-  // Opening and closing folders lives in the deferred chunk too (loaded by the time anyone clicks; else it waits).
-  const toggleDir = (dir: string) => (keys ? keys.toggleDir(dir, ctx.current!) : void loadTreeKeys().then(m => m?.toggleDir(dir, ctx.current!)));
-  // Keys before the handler has loaded do nothing; a key after a failed load tries again.
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => (keys ? keys.treeKeyDown(e, ctx.current!) : void loadTreeKeys());
+  const toggleDir = (dir: string) => toggleIn(dir, ctx.current!);
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => treeKeyDown(e, ctx.current!);
 
   const now = Date.now();
   const renderItem = (item: Item, kids: Block[]): ReactNode => {
@@ -386,7 +357,7 @@ export function FileTree() {
         selected={selected === path}
         badge={badge}
         target={path === targetPath}
-        pop={now - (arrived.current.at.get(path) ?? 0) < POP_MS}
+        pop={popsAt(path, now)}
         tags={change ? cachedTags(row.file, change) : EMPTY_TAGS}
         activeKey={active !== null && (active === path || active.startsWith(`${path}\0`)) ? active : null}
         onSelect={onSelect}

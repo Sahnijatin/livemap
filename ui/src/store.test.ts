@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { ApiRoute, DomainIndex } from '@shared/domain.js';
-import { useStore, liveGeneration, MAX_CHANGES, MAX_EVENTS, CENTER_TABS, loadTab, depKey, tableKey, fieldKey, routeBaseKey } from './store';
+import { arrivals, useStore, liveGeneration, MAX_CHANGES, MAX_EVENTS, CENTER_TABS, loadTab, depKey, tableKey, fieldKey, routeBaseKey } from './store';
 import { LARGE_PROJECT } from './map/mapModel';
 import { file, change, event, session, emptyDomain } from './fixtures';
 import { restHistorySource, setHistorySource, type HistorySource } from './history';
@@ -684,5 +684,20 @@ describe('routes by file', () => {
     expect(Object.getPrototypeOf(useStore.getState().summaries.files)).toBeNull();
     expect(useStore.getState().summaries.files['constructor']).toEqual({ hash: 'h', summary: 'S' });
     expect(useStore.getState().summaries.files['toString']).toBeUndefined();
+  });
+});
+
+describe('file arrivals', () => {
+  it('records when a file first arrives after the hello, and forgets a removed one', () => {
+    useStore.getState().reset();
+    useStore.getState().apply({ type: 'hello', root: '/p', name: 'p', files: [file('a.ts')], changes: [], usedBy: [], domain: emptyDomain(), indexing: false, events: [], sessions: [], control: { paused: false, flags: [] } });
+    expect(arrivals.has('a.ts')).toBe(false);
+    useStore.getState().apply({ type: 'files', files: [file('b.ts')], removed: [] });
+    const at = arrivals.get('b.ts')!;
+    expect(at).toBeGreaterThan(0);
+    useStore.getState().apply({ type: 'files', files: [file('b.ts', [])], removed: [] }); // an update is not an arrival
+    expect(arrivals.get('b.ts')).toBe(at);
+    useStore.getState().apply({ type: 'files', files: [], removed: ['b.ts'] });
+    expect(arrivals.has('b.ts')).toBe(false);
   });
 });

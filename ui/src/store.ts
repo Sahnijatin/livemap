@@ -4,7 +4,7 @@ import type { HistoryStatus, UsedByEntry, WireMessage } from '@shared/protocol.j
 import { patchChanges, withFileSummary, type ProjectState } from '@shared/state.js';
 import { emptySummaries, type SummariesState } from '@shared/summaries.js';
 import type { AgentEvent, AgentSession, ChangeSummary, ControlState, Dep, FileModel } from '@shared/types.js';
-import { LARGE_PROJECT, codeFileCount, edgeBaseline, type Level } from './map/mapModel';
+import { LARGE_PROJECT, codeFileCount, edgeBaseline, type Level } from './map/mapBase';
 import { historySource, type HistoryRecord, type HistoryState, type LiveState } from './history';
 import { loadLayout, saveLayout, type Panel, type PanelLayout } from './panelLayout';
 
@@ -274,10 +274,20 @@ const freshDomain = () => ({ domain: emptyDomainIndex(), domainBase: baseOf(empt
  * Files after upserting and removing; clears the selection if its file is gone. A live deletion of the selected file
  * also ends its peek, so the file coming back does not reopen the inspector; a played (historical) one does not.
  */
+/**
+ * When each file arrived after the hello (path to time): files the live project gains, recorded as they come so the
+ * file tree can pop just those rows. A hello or past state starts it over; a removed file is forgotten.
+ */
+export const arrivals = new Map<string, number>();
+
 function upsertFiles(st: StoreState, upserts: FileModel[], removed: string[]): Pick<StoreState, 'files' | 'selected' | 'peek'> {
   const files = dict(st.files);
-  for (const p of removed) delete files[p];
-  for (const f of upserts) files[f.path] = f;
+  const now = Date.now();
+  for (const p of removed) { delete files[p]; arrivals.delete(p); }
+  for (const f of upserts) {
+    if (!files[f.path]) arrivals.set(f.path, now);
+    files[f.path] = f;
+  }
   const selected = st.selected && files[st.selected] ? st.selected : null;
   return { files, selected, peek: !replaying && st.selected && !selected ? null : st.peek };
 }
@@ -292,6 +302,7 @@ function recordRecent(recent: StoreState['recent'], c: ChangeSummary): void {
  * baselines, so nothing that arrives with it animates in. View state is the caller's business.
  */
 function replaceData(msg: ProjectState, st: StoreState) {
+  arrivals.clear();
   const files = dict<FileModel>();
   for (const f of msg.files) files[f.path] = f;
   const changes = msg.changes.slice(-MAX_CHANGES);

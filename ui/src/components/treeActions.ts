@@ -1,9 +1,6 @@
-/**
- * The file tree's code that first paint does not need, in a chunk of its own (FileTree loads it on mount): key
- * handling, and opening and closing folders.
- */
+/** The file tree's actions on its state: key handling, opening and closing folders, and showing a picked file. */
 import type { Dispatch, SetStateAction } from 'react';
-import { MAX_STORED, NO_PATHS, ancestors, closedAbove, dirKey, editSet as edit, type DirState, type Item } from '../treeModel';
+import { NO_PATHS, ancestors, closedAbove, dirKey, editSet as edit, type DirState, type Item } from '../treeModel';
 import type { Moving, Session } from './FileTree';
 
 /** Folder unfold and fold (height and fade), matching `.dgroup.unfold/.fold` in styles.css. */
@@ -17,15 +14,13 @@ export interface KeyPress { key: string; ctrlKey: boolean; metaKey: boolean; alt
 
 type Set_<T> = Dispatch<SetStateAction<T>>;
 
-/** What the deferred tree code reads and sets in FileTree. */
+/** What the tree actions read and set in FileTree. */
 export interface TreeContext {
   dirItems: ReadonlyMap<string, Extract<Item, { kind: 'dir' }>>;
   q: string;
   reduced: boolean;
   big: boolean;
   dirs: DirState;
-  /** The first index is still running: the default may change when it ends, so every choice is stored. */
-  indexing: boolean;
   setFilterClosed: Set_<{ q: string; dirs: ReadonlySet<string> }>;
   setDirs: Set_<DirState>;
   setSession: Set_<Session>;
@@ -39,10 +34,10 @@ export interface TreeContext {
   focus(key: string): void;
   /** Opens or closes the folder or file row. */
   toggle(el: HTMLElement): void;
+  /** What was typed for typeahead and when, per tree. */
+  typed: { text: string; at: number };
 }
 
-/** What was typed for typeahead, and when (one tree on the page). */
-const typed = { text: '', at: 0 };
 
 const namesCache = new WeakMap<Item[], Map<string, string[]>>();
 /** Lowercase names per row, built once per row list: a file's name, or each folder of a compact row ("app" finds src/app). */
@@ -93,7 +88,7 @@ export function treeKeyDown(e: KeyPress, c: TreeContext): void {
       // matches no row.
       if (e.key.length !== 1 || ' []'.includes(e.key) || e.metaKey || e.ctrlKey !== e.altKey) return;
       const now = Date.now();
-      const t = typed;
+      const t = c.typed;
       t.text = now - t.at < TYPEAHEAD_MS ? t.text + e.key.toLowerCase() : e.key.toLowerCase();
       t.at = now;
       const names = namesFor(c.items);
@@ -123,12 +118,10 @@ export function toggleDir(dir: string, c: TreeContext): void {
     });
   } else {
     // A chain opens and closes as a whole, so each of its folders keeps the state when the chain splits.
-    // A folder set back to its default (open below BIG_PROJECT files) is not stored, except while indexing; the
-    // oldest go past the cap.
+    // Every choice is stored as made, so a later default (big or not) never undoes it; serializeTreeState caps them.
     c.setDirs(d => {
       const next = new Map(d);
-      for (const p of chain) { next.delete(p); if (c.indexing || open !== c.big) next.set(p, !open); } // re-added last: the newest choices are kept longest
-      for (const k of next.keys()) { if (next.size <= MAX_STORED) break; next.delete(k); }
+      for (const p of chain) { next.delete(p); next.set(p, !open); } // re-added last: the newest choices are kept longest
       return next;
     });
     // The user's choice replaces a reveal, and a close holds against the agent for the session.

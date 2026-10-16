@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { CENTER_TABS, useStore, type CenterTab } from '../store';
-import { codeFileCount } from '../map/mapModel';
+import { codeFileCount } from '../map/mapBase';
 import { LEAVING, useLeaving } from '../motion';
 import { NARROW_QUERY, useMedia } from '../media';
 import { INERT } from '../panels';
