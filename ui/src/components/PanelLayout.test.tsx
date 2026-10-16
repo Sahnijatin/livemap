@@ -234,7 +234,7 @@ describe('docked panels at 1080 px and wider', () => {
     expect(app().style.getPropertyValue('--right-w')).toBe('1252px');
     expect(wbtn().getAttribute('aria-label')).toBe('Restore inspector width');
     expect(wbtn().title).toBe('Restore inspector width');
-    expect(stored()).toMatchObject({ w: { files: null, inspector: 448 }, wide: true });
+    expect(stored()).toMatchObject({ w: { files: null, inspector: 448 }, wide: { w: { files: null, inspector: 448 }, last: 'inspector' } });
     // It follows the window while widened.
     act(() => resize(1440));
     expect(now('Resize inspector')).toBe(1416 - 444 - 200);
@@ -244,11 +244,12 @@ describe('docked panels at 1080 px and wider', () => {
     act(() => wbtn().click());
     expect([now('Resize project panel'), now('Resize inspector')]).toEqual([272, 448]);
     expect(wbtn().getAttribute('aria-label')).toBe('Widen inspector');
-    expect(stored()).toMatchObject({ w: { inspector: 448 }, wide: false });
+    expect(stored().w.inspector).toBe(448);
+    expect(stored().wide).toBeUndefined();
   });
 
   it('a reload keeps the widened state and the width to restore', async () => {
-    localStorage.setItem(LAYOUT_KEY, JSON.stringify({ w: { inspector: 500 }, wide: true }));
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify({ w: { inspector: 500 }, last: 'inspector', wide: { w: { files: null, inspector: 500 } } }));
     useStore.getState().reset();
     hello();
     resize(1920);
@@ -279,25 +280,85 @@ describe('docked panels at 1080 px and wider', () => {
     pointer(insp, 'pointerup', 1000);
     expect(now('Resize inspector')).toBe(1052);
     expect(wbtn().getAttribute('aria-label')).toBe('Widen inspector');
-    expect(stored()).toMatchObject({ w: { inspector: 1052 }, wide: false });
+    expect(stored().w.inspector).toBe(1052);
+    expect(stored().wide).toBeUndefined();
     act(() => resize(2200));
     expect(now('Resize inspector')).toBe(1052);
 
     act(() => wbtn().click());
     key(insp, 'ArrowRight');
     expect(now('Resize inspector')).toBe(2176 - 444 - 200 - 16);
-    expect(stored().wide).toBe(false);
+    expect(stored().wide).toBeUndefined();
     // End while widened: the same width, no longer widened.
     act(() => wbtn().click());
     key(insp, 'End');
     expect(now('Resize inspector')).toBe(1532);
-    expect(stored()).toMatchObject({ w: { inspector: 1532 }, wide: false });
+    expect(stored().w.inspector).toBe(1532);
+    expect(stored().wide).toBeUndefined();
     // A double-click still resets to the default width, and ends the widened state.
     key(insp, 'ArrowRight', { shiftKey: true });
     act(() => wbtn().click());
     act(() => { insp.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); });
     expect(now('Resize inspector')).toBe(384);
-    expect(stored()).toMatchObject({ w: { inspector: null }, wide: false });
+    expect(stored().w.inspector).toBeNull();
+    expect(stored().wide).toBeUndefined();
+  });
+
+  it('Widen then Restore puts back exactly the layout it replaced (files 400, inspector 600, files resized last)', async () => {
+    const before = { w: { files: 400, inspector: 600 }, collapsed: { files: false, inspector: false }, last: 'files', at: 1176 };
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(before));
+    useStore.getState().reset();
+    hello();
+    resize(1200);
+    await mount();
+    const widths = () => [now('Resize project panel'), now('Resize inspector')];
+    expect(widths()).toEqual([400, 332]);
+    act(() => wbtn().click());
+    expect(widths()).toEqual([200, 532]);
+    act(() => wbtn().click());
+    expect(widths()).toEqual([400, 332]);
+    expect(stored()).toEqual(before);
+  });
+
+  it('collapsing a widened inspector keeps its width while it slides away', async () => {
+    resize(1920);
+    await mount();
+    act(() => wbtn().click());
+    expect(app().style.getPropertyValue('--right-w')).toBe('1252px');
+    act(() => btn('Hide inspector').click());
+    expect(app().classList.contains('right-collapsed')).toBe(true);
+    expect(app().style.getPropertyValue('--right-w')).toBe('1252px');
+    expect(app().style.getPropertyValue('--left-w')).toBe('272px');
+  });
+
+  it('only the Widen button glides: a key or drag that ends the widened state does not', async () => {
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify({ last: 'inspector', wide: { w: { files: null, inspector: null } } }));
+    useStore.getState().reset();
+    hello();
+    resize(1920);
+    await mount();
+    expect(app().classList.contains('glide')).toBe(false);
+    key(sep('Resize inspector'), 'ArrowRight', { shiftKey: true });
+    expect(stored().wide).toBeUndefined();
+    expect(app().classList.contains('glide')).toBe(false);
+    act(() => wbtn().click());
+    expect(app().classList.contains('glide')).toBe(true);
+  });
+
+  it('a drag that starts widened writes the new width on its first pointermove', async () => {
+    resize(1920);
+    await mount();
+    act(() => wbtn().click());
+    const insp = sep('Resize inspector');
+    pointer(insp, 'pointerdown', 800);
+    let seen = '';
+    act(() => {
+      insp.dispatchEvent(new MouseEvent('pointermove', { clientX: 900, button: 0, bubbles: true, cancelable: true }));
+      // Before React renders: the store subscriber has already written it.
+      seen = app().style.getPropertyValue('--right-w');
+    });
+    expect(seen).toBe('1152px');
+    pointer(insp, 'pointerup', 900);
   });
 
   it('Widen is disabled when the inspector is within 24 px of its reach, and stores nothing', async () => {

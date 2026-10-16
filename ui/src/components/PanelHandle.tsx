@@ -6,7 +6,7 @@ import { LIMITS, saveLayout, type Panel, type PanelLayout } from '../panelLayout
 /**
  * The drag handle on a docked panel's inner edge (1080 px and wider): drag or arrow keys resize (Shift: 64 px), Home
  * and End go to the minimum and to the widest the box allows, Enter collapses, a double-click restores the default.
- * On the inspector, a resize or a reset ends the widened state (see WidenButton).
+ * A resize or a reset on either handle ends the widened state (see WidenButton).
  * What the user sees is what is stored: the panel's drawn width, and it becomes the panel the other gives way to.
  * A drag saves once, when it ends; a lost pointer capture or a window blur ends it too.
  */
@@ -21,16 +21,18 @@ export function PanelHandle({ panel }: { panel: Panel }) {
 
   const set = (w: number | null, save = true) => {
     const s = useStore.getState();
-    // The box is remembered: in a smaller one the inspector gives way first (fitLayout). Resizing the inspector ends
-    // its widened state: the new width is the one kept.
-    s.setLayout({ ...s.layout, w: { ...s.layout.w, [panel]: w }, last: panel, at: s.dock.width, ...(panel === 'inspector' && { wide: false }) }, save);
+    // Either handle ends the widened state without a restore: the inspector keeps the width it is drawn at (unless
+    // this is its handle). The box is remembered: in a smaller one the inspector gives way first (fitLayout).
+    const { wide, ...l } = s.layout;
+    const base = wide ? { ...l.w, inspector: drawn(s).fit.inspector } : l.w;
+    s.setLayout({ ...l, w: { ...base, [panel]: w }, last: panel, at: s.dock.width }, save);
   };
   /** Draws the panel at `d`, within reach; nothing happens (or is saved) when that is the width drawn now. */
   const draw = (d: number, save = true) => {
     // The drawn width now, not at this render: several moves can arrive before React renders.
     const { fit: f, reach: r } = drawn(useStore.getState());
     const t = Math.max(min, Math.min(r[panel], Math.round(d)));
-    if (t !== f[panel] || (panel === 'inspector' && useStore.getState().layout.wide)) set(t, save);
+    if (t !== f[panel] || useStore.getState().layout.wide) set(t, save);
   };
   const end = () => {
     const d = g.current;

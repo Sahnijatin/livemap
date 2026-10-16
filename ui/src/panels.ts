@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { isGated, useStore, type StoreState } from './store';
 import { NARROW_QUERY, isNarrow, isPhone } from './media';
 import { typingIn } from './keys';
-import { fitLayout, reach, type Panel as Side, type PanelLayout } from './panelLayout';
+import { fitLayout, reach, restoreWide, widen, type Panel as Side, type PanelLayout } from './panelLayout';
 
 type Panel = NonNullable<StoreState['panel']>;
 
@@ -132,4 +132,14 @@ export function useSlideOvers(): void {
       mq?.removeEventListener?.('change', onChange);
     };
   }, []);
+}
+
+/** How long Widen and Restore glide (matches `.app.glide`, .45 s, with a little slack). */
+export const GLIDE_MS = 500;
+
+/** The Widen inspector button: widens the docked inspector, or restores the layout Widen replaced. Both glide. */
+export function toggleWide(): void {
+  const s = useStore.getState();
+  useStore.setState({ glideUntil: Date.now() + GLIDE_MS });
+  s.setLayout(s.layout.wide ? restoreWide(s.layout) : widen(s.layout));
 }

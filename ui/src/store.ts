@@ -127,6 +127,8 @@ export interface StoreState {
   selects: number;
   /** The `.app` box width and the viewport width the docked layout fits, and whether a panel edge is being dragged. */
   dock: { width: number; vw: number; dragging: boolean };
+  /** Until when (Date.now()) the docked columns glide after Widen or Restore; a handle never sets it. */
+  glideUntil: number;
   /** Agent activity: the last 2,000 events, sessions by id, and pause and flag state. */
   events: AgentEvent[];
   sessions: Record<string, AgentSession>;
@@ -232,6 +234,7 @@ const initial = {
   panel: null,
   peek: null as string | null,
   selects: 0,
+  glideUntil: 0,
   events: [],
   sessions: {},
   control: { paused: false, flags: [] } as ControlState,

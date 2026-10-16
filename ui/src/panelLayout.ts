@@ -8,11 +8,14 @@ export interface PanelLayout {
   collapsed: Record<Panel, boolean>;
   /** The panel the user resized last: when the box is too narrow, the other one gives way first. */
   last?: Panel;
-  /** The inspector is widened: drawn at its reach. `w.inspector` stays the width to restore. */
-  wide?: boolean;
+  /** The inspector is widened (drawn at its reach): what Widen replaced, which Restore puts back. */
+  wide?: Snapshot;
   /** The `.app` box width when a handle last set a width: in a smaller box the inspector gives way first. */
   at?: number;
 }
+
+/** The part of a layout Widen replaces and Restore puts back. */
+export type Snapshot = Pick<PanelLayout, 'w' | 'last' | 'at'>;
 
 export const LAYOUT_KEY = 'livemap:layout';
 /** The inspector has no fixed maximum: it reaches as far as the center minimum and the project panel's minimum allow. */
@@ -31,15 +34,19 @@ const limit = (p: Panel, w: number): number => Math.max(LIMITS[p][0], Math.min(L
 
 /**
  * The widths to draw in an `.app` box `width` px wide (`vw`, the viewport, picks the defaults). In the box a handle
- * last set a width in (`at`), or a wider one: each set width, and when the shown panels would squeeze the center below
- * CENTER_MIN, the panel not resized last gives way first (down to its minimum), then the other, so the handle in use
- * wins. In a smaller box (a window resize, a reload on a smaller screen): what was drawn in that box, with the
- * inspector giving way first down to its default width, then the same rules. A widened inspector asks for the whole
- * box. Nothing shrunk here is stored.
+ * last set a width in (`at`; a layout without one counts as set in this box), or a wider one: each set width, and
+ * when the shown panels would squeeze the center below CENTER_MIN, the panel not resized last gives way first (down to
+ * its minimum), then the other, so the handle in use wins. In a smaller box (a window resize, a reload on a smaller
+ * screen): what was drawn in that box, with the inspector giving way first down to its default width, then the same
+ * rules. A widened inspector asks for the whole box; collapsed, it keeps that width while it slides away. Nothing
+ * shrunk here is stored.
  */
 export function fitLayout(l: PanelLayout, width: number, vw: number): Record<Panel, number> {
-  const wide = !!l.wide && !l.collapsed.inspector;
-  const want = { files: limit('files', l.w.files ?? defaultWidth('files', vw)), inspector: wide ? Math.max(LIMITS.inspector[0], width) : limit('inspector', l.w.inspector ?? defaultWidth('inspector', vw)) };
+  if (l.wide && l.collapsed.inspector) {
+    const open = fitLayout({ ...l, collapsed: { ...l.collapsed, inspector: false } }, width, vw);
+    return { files: fitLayout({ ...l, wide: undefined }, width, vw).files, inspector: open.inspector };
+  }
+  const want = { files: limit('files', l.w.files ?? defaultWidth('files', vw)), inspector: l.wide ? Math.max(LIMITS.inspector[0], width) : limit('inspector', l.w.inspector ?? defaultWidth('inspector', vw)) };
   const shown = (l.last === 'files' ? (['inspector', 'files'] as const) : (['files', 'inspector'] as const)).filter(p => !l.collapsed[p]);
   /** Fits `from` in `box`; with a `floor`, the inspector first gives way down to it. */
   const squeeze = (from: Record<Panel, number>, box: number, floor?: number) => {
@@ -54,9 +61,24 @@ export function fitLayout(l: PanelLayout, width: number, vw: number): Record<Pan
     }
     return out;
   };
-  const at = l.at ?? Infinity;
-  if (wide || width >= at) return squeeze(want, width);
-  return squeeze(at === Infinity ? want : squeeze(want, at), width, Math.max(LIMITS.inspector[0], defaultWidth('inspector', vw)));
+  const at = l.at ?? width;
+  if (l.wide || width >= at) return squeeze(want, width);
+  return squeeze(squeeze(want, at), width, Math.max(LIMITS.inspector[0], defaultWidth('inspector', vw)));
+}
+
+/** Widens the inspector: the handle in use wins, so the project panel gives way. Remembers what Restore puts back. */
+export const widen = (l: PanelLayout): PanelLayout => ({ ...l, last: 'inspector', wide: { w: l.w, last: l.last, at: l.at } });
+
+/** Puts back the layout Widen replaced. */
+export function restoreWide(l: PanelLayout): PanelLayout {
+  const { wide, ...rest } = l;
+  if (!wide) return l;
+  const out: PanelLayout = { ...rest, w: wide.w };
+  delete out.last;
+  delete out.at;
+  if (wide.last) out.last = wide.last;
+  if (wide.at !== undefined) out.at = wide.at;
+  return out;
 }
 
 /** The widest `p` can be drawn in this box: its limit, or what the center minimum and the other panel at its minimum leave. */
@@ -65,6 +87,9 @@ export function reach(l: PanelLayout, p: Panel, width: number): number {
   const other = l.collapsed[o] ? 0 : LIMITS[o][0] + GAP;
   return Math.max(LIMITS[p][0], Math.min(LIMITS[p][1], width - CENTER_MIN - GAP - other));
 }
+
+const readW = (p: Panel, w: unknown): number | null => (typeof w === 'number' && Number.isFinite(w) ? limit(p, w) : null);
+const readAt = (at: unknown): number | undefined => (typeof at === 'number' && Number.isFinite(at) && at > 0 ? Math.round(at) : undefined);
 
 /** A stored layout; anything unreadable falls back to the defaults, widths are clamped to their limits. */
 export function parseLayout(raw: string | null): PanelLayout {
@@ -77,13 +102,20 @@ export function parseLayout(raw: string | null): PanelLayout {
   }
   if (!v || typeof v !== 'object') return l;
   for (const p of ['files', 'inspector'] as const) {
-    const w = v.w?.[p];
-    if (typeof w === 'number' && Number.isFinite(w)) l.w[p] = limit(p, w);
+    l.w[p] = readW(p, v.w?.[p]);
     l.collapsed[p] = v.collapsed?.[p] === true;
   }
   if (v.last === 'files' || v.last === 'inspector') l.last = v.last;
-  if (typeof v.wide === 'boolean') l.wide = v.wide;
-  if (typeof v.at === 'number' && Number.isFinite(v.at) && v.at > 0) l.at = Math.round(v.at);
+  const at = readAt(v.at);
+  if (at !== undefined) l.at = at;
+  const snap = v.wide as { w?: Record<string, unknown>; last?: unknown; at?: unknown } | null | undefined;
+  if (snap && typeof snap === 'object' && !Array.isArray(snap)) {
+    const wide: Snapshot = { w: { files: readW('files', snap.w?.files), inspector: readW('inspector', snap.w?.inspector) } };
+    if (snap.last === 'files' || snap.last === 'inspector') wide.last = snap.last;
+    const sat = readAt(snap.at);
+    if (sat !== undefined) wide.at = sat;
+    l.wide = wide;
+  }
   return l;
 }
 

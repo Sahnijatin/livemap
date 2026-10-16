@@ -96,14 +96,11 @@
   /* At 1080 px and wider the Files and Inspector buttons show state with their icon's filled side, not a pressed background. */
   @media (min-width:1080px) { .iconbtn[data-panel-opener][aria-expanded=true]:not(:hover) { background:transparent; } }
   .iconbtn svg { width:17px; height:17px; }
-  .iconbtn.hidebtn { width:26px; height:26px; border-radius:8px; color:var(--ink3); }
-  .iconbtn.hidebtn svg { width:15px; height:15px; }
-  .iconbtn.hidebtn:hover { color:var(--ink2); }
-  /* The inspector's Widen button: the hide button's size, its own spacing (see .ins-bar). */
-  .iconbtn.widebtn { width:26px; height:26px; border-radius:8px; color:var(--ink3); }
-  .iconbtn.widebtn svg { width:15px; height:15px; }
-  .iconbtn.widebtn:hover { color:var(--ink2); }
-  .iconbtn.widebtn:disabled { opacity:.4; cursor:default; background:transparent; }
+  /* The small icon buttons in a docked panel's header (hide, and the inspector's Widen); hidden below 1080 px. */
+  .iconbtn.barbtn { width:26px; height:26px; border-radius:8px; color:var(--ink3); }
+  .iconbtn.barbtn svg { width:15px; height:15px; }
+  .iconbtn.barbtn:hover { color:var(--ink2); }
+  .iconbtn.barbtn:disabled { opacity:.4; cursor:default; background:transparent; }
 
   /* sidebar */
   .sidebar { border-radius:20px; display:flex; flex-direction:column; min-height:0; box-shadow:var(--shadow); overflow:hidden; }
@@ -979,7 +976,7 @@
     .insp { position:fixed; right:calc(var(--gutter) + var(--sar)); top:calc(var(--gutter) * 2 + 56px + var(--sat)); bottom:calc(var(--gutter) + var(--sab)); width:min(380px,calc(100vw - var(--gutter) * 2 - var(--sal) - var(--sar))); z-index:25; transform:translateX(110%); transition:transform .55s var(--ease); background:var(--glass-strong); }
     .insp.open { transform:none; box-shadow:var(--shadow-lg); }
     .sidebar:focus, .insp:focus { outline:0; }
-    .iconbtn.hidebtn, .iconbtn.widebtn { display:none; }
+    .iconbtn.barbtn { display:none; }
     /* Condensed toolbar: chips show their avatar (name in the tooltip), search shows its icon and shortcut. */
     .toolbar { gap:8px; padding:0 8px 0 12px; }
     .brand span { display:none; }
