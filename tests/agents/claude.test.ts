@@ -165,10 +165,11 @@ describe('ClaudeTailer', () => {
       fs.appendFileSync(file, fixture()[0] + '\n');
       await waitFor(() => got.length === 2, 1000);
       expect(t0.lastActiveAt).toBeGreaterThan(active);
-      const t1 = Date.now();
-      fs.appendFileSync(file, fixture()[0] + '\n');
-      await waitFor(() => got.length === 3, 1000);
-      expect(Date.now() - t1).toBeLessThan(200);
+      // Growth reset the pace: the next 150 ms polls at about 10 ms, not once at the 250 ms idle pace.
+      // Counting polls, not timing one read, keeps this true on a slow runner.
+      const s0 = stat.mock.calls.length;
+      await sleep(150);
+      expect(stat.mock.calls.length - s0).toBeGreaterThanOrEqual(4);
     } finally {
       open.mockRestore();
       stat.mockRestore();
