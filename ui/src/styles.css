@@ -876,13 +876,14 @@
   .kb svg { width:10px; height:10px; }
   .apiv { position:relative; flex:1; min-height:0; display:flex; flex-direction:column; }
   .ap-scroll { flex:1; min-height:0; overflow:auto; padding:16px 24px 64px; overscroll-behavior:contain; }
-  .ap-bar { display:flex; align-items:center; gap:12px; margin:-4px 0 30px; }
+  .ap-bar { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; margin:-4px 0 30px; }
   .ap-filter { display:flex; align-items:center; gap:8px; width:min(320px,100%); height:36px; padding:0 12px; border-radius:12px; color:var(--ink3); box-shadow:var(--shadow); transition:box-shadow .25s var(--ease); }
   .ap-filter:focus-within { box-shadow:0 0 0 3px var(--blue-t),var(--shadow); color:var(--blue); }
   .ap-filter input { flex:1; min-width:0; border:0; outline:0; background:none; color:var(--ink); font:13px var(--sans); }
   .ap-filter input::placeholder { color:var(--ink3); }
   .ap-filter input::-webkit-search-cancel-button { filter:grayscale(1); opacity:.6; }
   .ap-count { font-size:12.5px; color:var(--ink3); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .ap-hint { flex-basis:100%; margin:0; padding:0 2px; font-size:12px; color:var(--ink3); }
   .ap-none { margin:32px 0; text-align:center; color:var(--ink3); font-size:13.5px; }
   .ap-board { position:relative; margin:0 auto; padding-top:30px; animation:fin .55s var(--ease) both; }
   .lane-h { position:absolute; top:0; display:flex; align-items:baseline; gap:7px; font:600 11.5px var(--sans); letter-spacing:.07em; text-transform:uppercase; color:var(--ink3); white-space:nowrap; }
@@ -891,7 +892,6 @@
   .ap-edges { position:absolute; left:0; top:0; overflow:visible; pointer-events:none; animation:wipe 1s var(--ease) .1s both; }
   @keyframes wipe { from { clip-path:inset(0 100% 0 0); } to { clip-path:inset(0 0 0 0); } }
   .ap-edges .e { fill:none; stroke:color-mix(in srgb,var(--ink3) 42%,transparent); stroke-width:1.6; transition:stroke .3s,opacity .3s,stroke-width .3s; }
-  .ap-edges .e.dim { opacity:.12; }
   .ap-edges .e.flow { stroke:var(--blue); stroke-width:2.4; stroke-dasharray:6 8; animation:flow .9s linear infinite; }
   @keyframes flow { to { stroke-dashoffset:-28; } }
   .ap { position:absolute; left:0; top:0; height:44px; display:flex; align-items:center; gap:8px; padding:0 12px; border-radius:14px; border:1px solid var(--hair); background:var(--card); box-shadow:var(--shadow); color:var(--ink); font:12.5px var(--mono); text-align:left; white-space:nowrap; cursor:pointer; transition:opacity .4s var(--ease),box-shadow .3s var(--ease),scale .5s var(--spring); }
@@ -926,10 +926,28 @@
   .apiv.tight .ap-service .ap-s, .apiv.tight .ap-handler .ap-s { display:none; }
   .apiv.tight .ap-service .ap-t { max-width:none; }
   .ap-route .ap-t { flex-shrink:1; }
+  .ap.ap-route { flex-direction:column; align-items:stretch; justify-content:center; gap:2px; }
+  .ap-pick { display:flex; align-items:center; gap:8px; min-width:0; padding:0; border:0; outline:0; background:none; color:inherit; font:inherit; text-align:left; cursor:pointer; }
+  .ap-file { align-self:flex-start; max-width:100%; padding:0 1px; border:0; border-radius:4px; background:none; color:var(--ink3); font:10.5px/13px var(--mono); overflow:hidden; text-overflow:ellipsis; cursor:pointer; transition:color .2s; }
+  .ap-file:hover { color:var(--blue); text-decoration:underline; text-underline-offset:2px; }
+  .ap-file:focus-visible { outline:2px solid var(--blue); outline-offset:1px; }
+  .ap-route:has(.ap-pick:focus-visible) { box-shadow:0 0 0 2px var(--blue),0 0 0 6px var(--blue-t),var(--shadow-lg); }
+  .ap.picked { background:color-mix(in srgb,var(--blue) 7%,var(--card)); box-shadow:0 0 0 2px var(--blue),var(--shadow-lg); }
+  .ap-gh { position:absolute; left:0; top:0; height:28px; display:flex; align-items:center; gap:7px; padding:0 2px; border:0; background:none; color:var(--ink2); cursor:pointer; transition:color .2s; }
+  .ap-gh:hover { color:var(--ink); }
+  .ap-gh:focus-visible { outline:2px solid var(--blue); outline-offset:2px; border-radius:8px; }
+  .ap-gh .chev { width:12px; height:12px; color:var(--ink3); flex-shrink:0; transition:transform .35s var(--ease); }
+  .ap-gh.open .chev { transform:rotate(90deg); }
+  .ap-gk { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:600 12px var(--mono); }
+  .ap-gn { flex-shrink:0; padding:1px 7px; border-radius:999px; background:var(--hair); color:var(--ink3); font:600 10.5px var(--sans); font-variant-numeric:tabular-nums; }
+  .ap-gh::after { content:""; flex:1; min-width:12px; height:1px; background:var(--hair); }
   .apiv.stacked .ap-scroll { padding:12px 12px 32px; }
-  .apiv.stacked .cv-hint { position:static; order:-1; max-width:none; margin:0; padding:10px 14px 0; background:none; backdrop-filter:none; -webkit-backdrop-filter:none; font-size:11.5px; }
   .apiv.stacked .ap-bar { margin-bottom:14px; }
-  .ap-chains { display:flex; flex-direction:column; gap:12px; }
+  .apiv.stacked .ap-filter { flex:1; width:auto; }
+  .apiv.stacked .ap-hint { font-size:11.5px; }
+  .ap-chains { display:flex; flex-direction:column; gap:18px; }
+  .ap-grp { display:flex; flex-direction:column; gap:10px; }
+  .ap-chains .ap-gh { position:relative; width:100%; }
   .ap-chain { animation:fin .5s var(--ease) both; }
   .ap-chains .ap { position:relative; width:100%; }
   .ap-links { position:relative; display:flex; flex-direction:column; gap:6px; margin:6px 0 0 18px; padding-left:14px; }
