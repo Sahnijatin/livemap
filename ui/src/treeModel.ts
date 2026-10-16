@@ -43,7 +43,7 @@ export function cachedTags(file: FileModel, change: ChangeSummary): Map<string, 
  */
 export const symKey = (path: string, s: CodeSymbol): string => `${path}\0s\0${s.qname}:${s.line}`;
 export const dirKey = (dir: string): string => `\0d\0${dir}`;
-export const moreKey = (dir: string): string => `\0m\0${dir}`;
+export const moreKey = (dir: string, part: 'dirs' | 'files' = 'files'): string => `\0${part === 'dirs' ? 'M' : 'm'}\0${dir}`;
 
 const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 /** Case-insensitive natural order (item2 before item10); names that differ only by case keep a fixed order. */
@@ -154,21 +154,22 @@ export function dirActivity(live: Record<string, LiveBadge>, target: string | nu
 export type Item =
   | { kind: 'dir'; node: DirNode; chain: string[]; label: string; level: number; open: boolean; up: string | null }
   | { kind: 'file'; row: Row; open: boolean; level: number; up: string | null }
-  | { kind: 'more'; dir: string; shown: number; hidden: number; level: number };
+  | { kind: 'more'; dir: string; part: 'dirs' | 'files'; shown: number; hidden: number; level: number };
 
 /**
- * What the tree renders, depth first. Root's children always render. An open folder renders its subfolders (as
- * compact chains), then its files: up to its own limit (`dirLimit`, set by "Show more") or, without one, up to
- * DIR_BATCH, while the shared budget of ROW_BUDGET rows (folders and files) lasts. The budget goes level by level
- * (breadth first), so a deep subtree never hides the files of a shallower folder. A folder with rows left over gets
- * a "more" item. Pinned files, and the folders that hold them, render even past the cap. `navKeys` lists the
- * focusable rows in order, including visible symbol rows.
+ * What the tree renders, depth first. The project root's children are listed like any open folder's children. An
+ * open folder renders its subfolders (as compact chains), then its files, each up to its own limit (set by "Show
+ * more", keyed by `moreKey(folder, part)`) or, without one, up to DIR_BATCH rows for both together, while the shared
+ * budget of ROW_BUDGET rows (folders and files) lasts. The budget goes level by level (breadth first), so a deep
+ * subtree never hides the files of a shallower folder. Hidden subfolders get a "more" item after the last shown
+ * subfolder, hidden files one after the last shown file. Pinned files, and the folders that hold them, render even
+ * past the cap. `navKeys` lists the focusable rows in order, including visible symbol rows.
  */
 export function visibleItems(
   root: DirNode,
   dirOpen: (paths: string[]) => boolean,
   rowOpen: (row: Row) => boolean,
-  dirLimit: ReadonlyMap<string, number>,
+  limits: ReadonlyMap<string, number>,
   pins: Iterable<string> = [],
 ): { items: Item[]; navKeys: string[] } {
   const pinned = new Set(pins);
@@ -182,13 +183,12 @@ export function visibleItems(
   const queue: DirNode[] = [root];
   for (let qi = 0; qi < queue.length; qi++) {
     const node = queue[qi];
-    const explicit = dirLimit.get(node.path);
-    const limit = explicit ?? DIR_BATCH;
-    const dirsShown = Math.min(node.dirs.length, explicit !== undefined ? limit : Math.max(0, Math.min(limit, budget)));
-    if (explicit === undefined) budget -= dirsShown;
-    const cap = explicit !== undefined ? limit - dirsShown : Math.max(0, Math.min(limit - dirsShown, budget));
-    const filesShown = Math.min(node.rows.length, cap);
-    if (explicit === undefined) budget -= filesShown;
+    const dirsSet = limits.get(moreKey(node.path, 'dirs'));
+    const filesSet = limits.get(moreKey(node.path));
+    const dirsShown = Math.min(node.dirs.length, dirsSet ?? Math.max(0, Math.min(DIR_BATCH, budget)));
+    if (dirsSet === undefined) budget -= dirsShown;
+    const filesShown = Math.min(node.rows.length, filesSet ?? Math.max(0, Math.min(DIR_BATCH - dirsShown, budget)));
+    if (filesSet === undefined) budget -= filesShown;
     const subs: Sub[] = [];
     for (let i = 0; i < node.dirs.length; i++) {
       const d = node.dirs[i];
@@ -203,6 +203,11 @@ export function visibleItems(
   // Pass 2, depth first: the rows in display order.
   const items: Item[] = [];
   const navKeys: string[] = [];
+  const more = (dir: string, part: 'dirs' | 'files', shown: number, hidden: number, level: number) => {
+    if (hidden <= 0) return;
+    items.push({ kind: 'more', dir, part, shown, hidden, level });
+    navKeys.push(moreKey(dir, part));
+  };
   const walk = (node: DirNode, level: number, up: string | null) => {
     const { dirsShown, filesShown, subs } = plans.get(node)!;
     let extra = 0;
@@ -214,6 +219,7 @@ export function visibleItems(
       navKeys.push(key);
       if (open) walk(tail, level + 1, key);
     }
+    more(node.path, 'dirs', dirsShown, node.dirs.length - dirsShown - extra, level);
     const fileUp = node.path === '' ? null : dirKey(node.path);
     let extraFiles = 0;
     for (let i = 0; i < node.rows.length; i++) {
@@ -225,12 +231,7 @@ export function visibleItems(
       navKeys.push(row.file.path);
       if (ro) for (const { sym } of row.symbols) navKeys.push(symKey(row.file.path, sym));
     }
-    const shown = dirsShown + filesShown;
-    const total = node.dirs.length + node.rows.length;
-    if (shown + extra + extraFiles < total) {
-      items.push({ kind: 'more', dir: node.path, shown, hidden: total - shown - extra - extraFiles, level });
-      navKeys.push(moreKey(node.path));
-    }
+    more(node.path, 'files', filesShown, node.rows.length - filesShown - extraFiles, level);
   };
   walk(root, 1, null);
   return { items, navKeys };
@@ -276,7 +277,7 @@ export const treeKey = (root: string): string => `livemap:tree:${root}`;
 /** Stored choices beyond this many drop the oldest. */
 const MAX_STORED = 2000;
 
-/** Stored choices as [path, open] pairs, oldest first; an object (the first format) is read too. Anything else is ignored. */
+/** Stored choices as [path, open] pairs, oldest first; anything else is ignored. */
 export function parseTreeState(raw: string | null): Map<string, boolean> {
   const out = new Map<string, boolean>();
   let v: unknown;
@@ -285,11 +286,7 @@ export function parseTreeState(raw: string | null): Map<string, boolean> {
   } catch {
     return out;
   }
-  if (Array.isArray(v)) {
-    for (const e of v) if (Array.isArray(e) && typeof e[0] === 'string' && typeof e[1] === 'boolean') out.set(e[0], e[1]);
-  } else if (v && typeof v === 'object') {
-    for (const [k, b] of Object.entries(v as Record<string, unknown>)) if (typeof b === 'boolean') out.set(k, b);
-  }
+  if (Array.isArray(v)) for (const e of v) if (Array.isArray(e) && typeof e[0] === 'string' && typeof e[1] === 'boolean') out.set(e[0], e[1]);
   return out;
 }
 

@@ -132,8 +132,30 @@ describe('visibleItems', () => {
     expect(more.map(m => [m.dir, m.shown, m.hidden])).toEqual([['d0', 200, 100], ['d1', 200, 100], ['d2', 200, 100], ['d3', 200, 100], ['d4', 193, 107], ['d5', 0, 300], ['d6', 0, 300]]);
     const closed = visibleItems(root, () => false, () => false, new Map());
     expect(closed.items.map(label)).toEqual(['d0/', 'd1/', 'd2/', 'd3/', 'd4/', 'd5/', 'd6/']);
-    const limited = visibleItems(root, allOpen, () => false, new Map([['d6', DIR_BATCH * 2]]));
+    const limited = visibleItems(root, allOpen, () => false, new Map([[moreKey('d6'), DIR_BATCH * 2]]));
     expect(limited.items.filter(i => i.kind === 'file' && i.row.file.path.startsWith('d6/'))).toHaveLength(300);
+  });
+
+  it('puts a folder\'s "more folders" row after its last shown folder and "more files" after its last file', () => {
+    const paths: string[] = [];
+    for (let i = 0; i < 250; i++) paths.push(`x/s${String(i).padStart(3, '0')}/a.ts`, `x/f${String(i).padStart(3, '0')}.ts`);
+    const { root } = tree(paths);
+    const onlyX = (p: string[]) => p[p.length - 1] === 'x';
+    const list = visibleItems(root, onlyX, () => false, new Map([[moreKey('x'), 10]])).items;
+    const at = (pred: (i: Item) => boolean) => list.findIndex(pred);
+    const lastDir = list.map(i => i.kind === 'dir' && i.node.path.startsWith('x/')).lastIndexOf(true);
+    const lastFile = list.map(i => i.kind === 'file').lastIndexOf(true);
+    const moreDirs = at(i => i.kind === 'more' && i.part === 'dirs');
+    const moreFiles = at(i => i.kind === 'more' && i.part === 'files');
+    expect(moreDirs).toBe(lastDir + 1);
+    expect(moreFiles).toBe(lastFile + 1);
+    expect(list[moreDirs]).toMatchObject({ dir: 'x', shown: 200, hidden: 50 });
+    expect(list[moreFiles]).toMatchObject({ dir: 'x', shown: 10, hidden: 240 });
+    expect(new Set([moreKey('x', 'dirs'), moreKey('x')]).size).toBe(2);
+    // "Show more folders" raises the folder cap only.
+    const more = visibleItems(root, onlyX, () => false, new Map([[moreKey('x', 'dirs'), 400], [moreKey('x'), 10]])).items;
+    expect(more.filter(i => i.kind === 'dir')).toHaveLength(251);
+    expect(more.filter(i => i.kind === 'file')).toHaveLength(10);
   });
 
   it('renders pinned rows and the folders that hold them past the cap', () => {
@@ -228,12 +250,12 @@ describe('splitName', () => {
 describe('stored folder state', () => {
   beforeEach(() => globalThis.localStorage?.clear());
 
-  it('reads [path, open] pairs and the older object format, ignoring anything else', () => {
+  it('reads [path, open] pairs, ignoring anything else', () => {
     expect(parseTreeState(null)).toEqual(new Map());
     expect(parseTreeState('nope')).toEqual(new Map());
     expect(parseTreeState('[1,2]')).toEqual(new Map());
     expect([...parseTreeState('[["b",true],["2023",false],["x",1],[3,true],["c"]]')]).toEqual([['b', true], ['2023', false]]);
-    expect([...parseTreeState('{"a":true,"b":false,"c":1,"d":"x"}')]).toEqual([['a', true], ['b', false]]);
+    expect(parseTreeState('{"a":true,"b":false}')).toEqual(new Map());
     expect([...parseTreeState('[["constructor",true],["__proto__",false],["toString",true]]')]).toEqual([['constructor', true], ['__proto__', false], ['toString', true]]);
     expect(treeKey('/p/shop')).toBe('livemap:tree:/p/shop');
   });

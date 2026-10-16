@@ -112,10 +112,10 @@ describe('FileTree render cap', () => {
     expect(DIR_BATCH).toBe(200);
     expect(rows()).toBe(200);
     const more = () => navEl(moreKey('big'));
-    expect(more()!.textContent).toBe('Show 200 more (1,000 hidden)');
+    expect(more()!.textContent).toBe('Show 200 more files (1,000 hidden)');
     for (let i = 0; i < 4; i++) act(() => more()!.click());
     expect(rows()).toBe(1000);
-    expect(more()!.textContent).toBe('Show 200 more (200 hidden)');
+    expect(more()!.textContent).toBe('Show 200 more files (200 hidden)');
     act(() => more()!.click());
     expect(rows()).toBe(1200);
     expect(more()).toBeNull();
@@ -130,7 +130,7 @@ describe('FileTree render cap', () => {
     expect(ROW_BUDGET).toBe(1000);
     expect(rows() + 7).toBe(ROW_BUDGET); // the 7 folder rows count against the budget too
     expect(host.querySelectorAll('.dir')).toHaveLength(7);
-    expect(navEl(moreKey('d6'))!.textContent).toBe('Show 200 more (300 hidden)');
+    expect(navEl(moreKey('d6'))!.textContent).toBe('Show 200 more files (300 hidden)');
     act(() => navEl(moreKey('d6'))!.click());
     expect(host.querySelectorAll('[data-file^="d6/"]')).toHaveLength(200);
   });
@@ -429,7 +429,7 @@ describe('FileTree folders', () => {
     expect(stored()).toEqual([['a/b', false], ['c', true]]);
     act(() => root.unmount());
     root = createRoot(host);
-    localStorage.setItem('livemap:tree:/p/shop', JSON.stringify({ 'a/b': false, c: false, gone: true, bad: 3 }));
+    localStorage.setItem('livemap:tree:/p/shop', JSON.stringify([['a/b', false], ['c', false], ['gone', true], ['bad', 3]]));
     mount();
     expect(host.querySelector('[data-file="a/b/x.ts"]')).toBeNull();
     expect(host.querySelector('[data-file="a/y.ts"]')).not.toBeNull();
@@ -774,12 +774,40 @@ describe('FileTree round 3', () => {
     expect(scrollSpy).not.toHaveBeenCalled();
   });
 
-  it('drops a reveal whose row never showed', () => {
-    useStore.getState().apply(hello([file('a/x.ts')]));
+  it('scrolls to a file the agent is creating once it is indexed', () => {
+    useStore.getState().apply(hello([file('src/a.ts')]));
     mount();
-    act(() => useStore.getState().select('gone/z.ts')); // not in the tree (a file from another point in history)
-    act(() => useStore.getState().apply({ type: 'files', files: [file('gone/z.ts')], removed: [] }));
+    target('src/new.ts'); // the tool starts before the file exists
     expect(scrollSpy).not.toHaveBeenCalled();
+    act(() => useStore.getState().apply({ type: 'files', files: [file('src/new.ts')], removed: [] }));
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    expect((scrollSpy.mock.contexts[0] as HTMLElement).dataset.file).toBe('src/new.ts');
+  });
+
+  it('drops a waiting reveal once the user closes the folder that hides it', () => {
+    useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts')]));
+    mount();
+    act(() => useStore.getState().select('a/new.ts')); // not indexed yet
+    act(() => dir('a')!.click());
+    act(() => { vi.advanceTimersByTime(400); });
+    act(() => useStore.getState().apply({ type: 'files', files: [file('a/new.ts')], removed: [] }));
+    act(() => dir('a')!.click());
+    act(() => { vi.advanceTimersByTime(60_000); });
+    expect(scrollSpy).not.toHaveBeenCalled();
+  });
+
+  it('saves folder choices when the page is hidden', () => {
+    useStore.getState().apply(hello([file('a/x.ts'), file('b/y.ts')]));
+    mount();
+    act(() => dir('a')!.click());
+    expect(stored()).toBeNull();
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    try {
+      act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    } finally {
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    }
+    expect(stored()).toEqual([['a', false]]);
   });
 
   it('typeahead takes any printable character', () => {
@@ -819,7 +847,7 @@ describe('FileTree lazy keys', () => {
   const focused = () => (document.activeElement as HTMLElement).dataset.nav;
   const press = (k: string) => act(() => { (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })); });
 
-  it('replays keys pressed while the handler loads, in order', async () => {
+  it('ignores keys pressed before the handler loads, and handles those after', async () => {
     let resolve!: () => void;
     const gate = new Promise<void>(r => { resolve = r; });
     treeKeysLoader.reset();
@@ -828,10 +856,10 @@ describe('FileTree lazy keys', () => {
     mount();
     act(() => byData('file', 'a.ts')!.focus());
     press('ArrowDown');
-    press('ArrowDown');
-    expect(focused()).toBe('a.ts');
     await act(async () => { resolve(); await gate; await loadTreeKeys(); });
-    expect(focused()).toBe('c.ts');
+    expect(focused()).toBe('a.ts'); // not replayed
+    press('ArrowDown');
+    expect(focused()).toBe('b.ts');
   });
 
   it('retries after a failed load on the next key', async () => {
@@ -843,9 +871,11 @@ describe('FileTree lazy keys', () => {
     await act(async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); }); // the first load fails
     expect(calls).toBe(1);
     act(() => byData('file', 'a.ts')!.focus());
-    press('ArrowDown'); // retries, and is replayed once loaded
+    press('ArrowDown'); // retries; this key itself is not replayed
     expect(calls).toBe(2);
     await act(async () => { await loadTreeKeys(); });
+    expect(focused()).toBe('a.ts');
+    press('ArrowDown');
     expect(focused()).toBe('b.ts');
   });
 });

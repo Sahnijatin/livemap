@@ -13,7 +13,7 @@ import {
   saveTreeState, visibleItems, type Activity, type DirState, type Item, type Row,
 } from '../treeModel';
 import { FileRow, MidName } from './FileRow';
-import type { KeyPress, TreeKeyContext } from './treeKeys';
+import type { TreeKeyContext } from './treeKeys';
 import { CollapseButton } from './Dock';
 import { usePrefersReducedMotion } from '../motion';
 import { Chevron, SearchIcon } from './icons';
@@ -25,7 +25,7 @@ const FOLD_MS = 360;
 const USER_SCROLL_HOLD_MS = 5000;
 /** Scroll events this soon after our own scrollIntoView are the animation, not the user. */
 const SELF_SCROLL_MS = 900;
-/** Folder choices are saved this long after the last change (and right away when the page is hidden). */
+/** Folder choices are saved this long after the last change, and right away when the page is hidden or closed. */
 const SAVE_MS = 300;
 const EMPTY_TAGS = new Map<string, SymbolTag>();
 const NO_LIMITS: ReadonlyMap<string, number> = new Map();
@@ -37,8 +37,6 @@ const edit = (set: ReadonlySet<string>, add: readonly string[], del: readonly st
   for (const d of del) next.delete(d);
   return next;
 };
-/** Own keys only: a file named `constructor` is not a stored entry. */
-const own = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
 /** A closed folder's activity dot: its label, and the title as "A file in this folder <title>". */
 const ACTIVITY: Record<Activity, [string, string]> = { now: ['being written', 'is being written'], edited: ['edited', 'was edited'], new: ['new', 'is new'] };
 /**
@@ -62,11 +60,6 @@ export function loadTreeKeys(): Promise<KeysModule | null> {
   if (keys) return Promise.resolve(keys);
   return (loading ??= treeKeysLoader.load().then(m => (keys = m), () => { loading = null; return null; }));
 }
-/** Keys pressed while the handler loads, replayed in order once it has. */
-const MAX_QUEUED = 20;
-
-/** A string as a quoted CSS attribute value; any path (newlines included) yields a valid selector. */
-const attr = (s: string): string => (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&').replace(/\n/g, '\\a '));
 
 export function FileTree() {
   const files = useStore(s => s.files);
@@ -89,6 +82,11 @@ export function FileTree() {
   const selfScrollUntil = useRef(0);
   const [reveal, setReveal] = useState<string | null>(null);
   const treeRef = useRef<HTMLDivElement>(null);
+  /** Mounted rows by nav key (ids can hold a NUL, which a CSS selector cannot match). */
+  const rowEls = useRef(new Map<string, HTMLElement>());
+  const register = useCallback((k: string, el: HTMLElement | null) => {
+    if (el) rowEls.current.set(k, el); else rowEls.current.delete(k);
+  }, []);
   const born = useRef(new Map<string, number>());
   const [focused, setFocused] = useState<string | null>(null);
   // App keys this component by project, so every piece of state here belongs to one project.
@@ -113,7 +111,6 @@ export function FileTree() {
   const [bigAt, setBigAt] = useState<boolean | null>(null);
   if (bigAt === null && !indexing && fileCount > 0) setBigAt(fileCount >= BIG_PROJECT);
   const big = bigAt ?? fileCount >= BIG_PROJECT;
-  const state = dirs;
 
   const pending = useRef<DirState | null>(null);
   const flush = useCallback(() => {
@@ -128,16 +125,18 @@ export function FileTree() {
     return () => window.clearTimeout(t);
   }, [dirs, flush]);
   useEffect(() => {
+    const hidden = () => { if (document.visibilityState === 'hidden') flush(); }; // mobile browsers may not fire pagehide
     window.addEventListener('pagehide', flush);
-    return () => { window.removeEventListener('pagehide', flush); flush(); };
+    document.addEventListener('visibilitychange', hidden);
+    return () => { window.removeEventListener('pagehide', flush); document.removeEventListener('visibilitychange', hidden); flush(); };
   }, [flush]);
-  const latest = useRef({ state, big, closed: session.closed });
-  latest.current = { state, big, closed: session.closed };
+  const latest = useRef({ dirs, big, closed: session.closed });
+  latest.current = { dirs, big, closed: session.closed };
   /** Shows a file the user selected: opens the closed folders above it for this session, even ones they closed. */
   const showPicked = useCallback((path: string) => {
     const above = ancestors(path);
     setSession(s => {
-      const need = closedAbove(path, latest.current.state, latest.current.big, s.picked);
+      const need = closedAbove(path, latest.current.dirs, latest.current.big, s.picked);
       const unclose = above.filter(a => s.closed.has(a));
       if (!need.length && !unclose.length) return s;
       return { ...s, picked: edit(s.picked, need), closed: edit(s.closed, [], unclose) };
@@ -148,8 +147,8 @@ export function FileTree() {
   const agentDirs = useMemo(() => {
     const at = session.agentAt;
     if (at === null) return NO_DIRS;
-    return edit(NO_DIRS, closedAbove(at, state, big, session.picked).filter(a => !session.closed.has(a)));
-  }, [session, state, big]);
+    return edit(NO_DIRS, closedAbove(at, dirs, big, session.picked).filter(a => !session.closed.has(a)));
+  }, [session, dirs, big]);
   const revealed = useMemo(() => (agentDirs.size ? edit(session.picked, [...agentDirs]) : session.picked), [session.picked, agentDirs]);
 
   const activity = useMemo(() => dirActivity(live, targetPath), [live, targetPath]);
@@ -157,8 +156,8 @@ export function FileTree() {
   const dirOpen = useCallback((paths: string[]): boolean => {
     // A filter shows every folder above a match, except those closed during it.
     if (q) return !closedNow.has(paths[paths.length - 1]);
-    return chainOpen(paths, state, big, revealed);
-  }, [q, closedNow, state, big, revealed]);
+    return chainOpen(paths, dirs, big, revealed);
+  }, [q, closedNow, dirs, big, revealed]);
 
   // Auto-reveal: open the target's folders, then scroll its row into view. Never selects or focuses.
   // During the hold after a user scroll the latest target waits, and is revealed when the hold ends.
@@ -183,7 +182,7 @@ export function FileTree() {
     showPicked(path);
     setReveal(path);
   }, [selects, showPicked]);
-  const rowOpen = useCallback((row: Row) => row.forceOpen || (own(expanded, row.file.path) && expanded[row.file.path]), [expanded]);
+  const rowOpen = useCallback((row: Row) => row.forceOpen || (Object.hasOwn(expanded, row.file.path) && expanded[row.file.path]), [expanded]);
   const pins = useMemo(() => {
     const out = Object.keys(live);
     if (selected !== null) out.push(selected);
@@ -224,14 +223,18 @@ export function FileTree() {
     }, Math.max(0, soonest - Date.now()));
     return () => window.clearTimeout(t);
   }, [moving]);
+  // A reveal waits for its row (a file the agent is creating shows once indexed), unless a user close hides it.
   useEffect(() => {
     if (reveal === null) return;
-    const el = treeRef.current?.querySelector<HTMLElement>(`[data-file="${attr(reveal)}"]`);
-    setReveal(null); // a row that did not show (hidden by a filter, or not in the tree) is not waited for
-    if (!el) return;
+    const el = rowEls.current.get(reveal);
+    if (!el) {
+      if (ancestors(reveal).some(a => (q ? closedNow : session.closed).has(a))) setReveal(null);
+      return;
+    }
+    setReveal(null);
     selfScrollUntil.current = Date.now() + SELF_SCROLL_MS;
     el.scrollIntoView?.({ block: 'nearest', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
-  }, [reveal, items, q]);
+  }, [reveal, items, q, closedNow, session.closed]);
   // Wheel and touch are always the user; a plain scroll event is the user unless it is our own smooth scroll.
   const markUser = () => { userScrolledAt.current = Date.now(); setReveal(null); };
   const onScroll = () => { if (Date.now() > selfScrollUntil.current) markUser(); };
@@ -242,8 +245,8 @@ export function FileTree() {
     el.addEventListener('scrollend', end);
     return () => el.removeEventListener('scrollend', end);
   }, []);
-  const showMore = (dir: string, shown: number) =>
-    setLimits(l => ({ q, byDir: new Map(l.q === q ? l.byDir : NO_LIMITS).set(dir, shown + DIR_BATCH) }));
+  const showMore = (k: string, shown: number) =>
+    setLimits(l => ({ q, byDir: new Map(l.q === q ? l.byDir : NO_LIMITS).set(k, shown + DIR_BATCH) }));
   const navSet = useMemo(() => new Set(navKeys), [navKeys]);
   const wanted = focused ?? selected;
   const active = wanted !== null && navSet.has(wanted) ? wanted : navKeys[0] ?? null;
@@ -251,7 +254,7 @@ export function FileTree() {
   const onSelect = useCallback((path: string) => {
     const s = useStore.getState();
     s.select(path);
-    if (!(own(s.expanded, path) && s.expanded[path])) s.toggle(path);
+    if (!(Object.hasOwn(s.expanded, path) && s.expanded[path])) s.toggle(path);
     afterSelect();
   }, []);
   const onToggle = useCallback((path: string) => useStore.getState().toggle(path), []);
@@ -298,31 +301,20 @@ export function FileTree() {
     navKeys,
     navSet,
     items: openItems,
-    // Ids hold a NUL, which a CSS selector cannot match, so rows are found by comparing.
-    focus: k => [...(treeRef.current?.querySelectorAll<HTMLElement>('[data-nav]') ?? [])].find(e => e.dataset.nav === k)?.focus(),
+    focus: k => rowEls.current.get(k)?.focus(),
     toggle: el => (el.dataset.dir !== undefined ? toggleDir(el.dataset.dir) : onToggle(el.dataset.file!)),
   };
-  const queued = useRef<KeyPress[]>([]);
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (keys) return keys.treeKeyDown(e, keyCtx.current!);
-    // Not loaded yet (or it failed: this retries): keep the key, and keep arrows from scrolling meanwhile.
-    if (queued.current.push({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, preventDefault() {} }) > MAX_QUEUED) queued.current.shift();
-    if (/^(Arrow|Home$|End$)/.test(e.key)) e.preventDefault();
-    void loadTreeKeys().then(m => {
-      const replay = queued.current.splice(0);
-      // Replayed only while focus is still in the tree.
-      if (m) for (const k of replay) if (treeRef.current?.contains(document.activeElement)) m.treeKeyDown(k, keyCtx.current!);
-    });
-  };
+  // Keys before the handler has loaded do nothing; a key after a failed load tries again.
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => (keys ? keys.treeKeyDown(e, keyCtx.current!) : void loadTreeKeys());
 
   const animateFrom = helloAt + 1000;
   const now = Date.now();
   const renderItem = (item: Item, kids: Block[]): ReactNode => {
     if (item.kind === 'more') {
-      const k = moreKey(item.dir);
+      const k = moreKey(item.dir, item.part);
       return (
-        <button type="button" key={k} className="more-rows" style={{ ['--d' as string]: item.level - 1 }} data-nav={k} tabIndex={active === k ? 0 : -1} onClick={() => showMore(item.dir, item.shown)}>
-          Show {Math.min(item.hidden, DIR_BATCH).toLocaleString()} more ({item.hidden.toLocaleString()} hidden)
+        <button type="button" key={k} ref={el => register(k, el)} className="more-rows" style={{ ['--d' as string]: item.level - 1 }} data-nav={k} tabIndex={active === k ? 0 : -1} onClick={() => showMore(k, item.shown)}>
+          Show {Math.min(item.hidden, DIR_BATCH).toLocaleString()} more {item.part === 'dirs' ? 'folders' : 'files'} ({item.hidden.toLocaleString()} hidden)
         </button>
       );
     }
@@ -345,6 +337,7 @@ export function FileTree() {
           aria-level={level}
           aria-expanded={open}
           aria-selected={false}
+          ref={el => register(k, el)}
           data-nav={k}
           data-dir={dir}
           data-up={up ?? undefined}
@@ -367,7 +360,7 @@ export function FileTree() {
     const { row } = item;
     const path = row.file.path;
     if (!born.current.has(path)) born.current.set(path, now < animateFrom ? 0 : now);
-    const badge = own(live, path) ? live[path] : undefined;
+    const badge = Object.hasOwn(live, path) ? live[path] : undefined;
     const change = badge ? latestChange(changes, path) : undefined;
     return (
       <FileRow
@@ -389,6 +382,7 @@ export function FileTree() {
         onSelect={onSelect}
         onToggle={onToggle}
         onSymbol={onSymbol}
+        register={register}
       />
     );
   };
