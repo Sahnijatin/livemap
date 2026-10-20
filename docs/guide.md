@@ -15,7 +15,7 @@ How to run LiveMap and what each part of the UI does. For agent setup see [agent
 livemap [dir=.] [--port N] [--no-open] [--pull[=SEC]] [--no-history] [--summaries]
 livemap init [dir=.] [--agents claude,codex,cursor] [--remove]
 livemap export [dir=.] [--session ID] [--no-code] [--out FILE]
-livemap sn [dir=.] --scope NAMESPACE|SYS_ID [--instance NAME] [--nexus URL] [--port N] [--no-open] [--no-history] [--mirror-only]
+livemap sn [dir=.] --scope NAMESPACE|SYS_ID [--instance NAME] [--nexus URL] [--skyforge-log FILE|none] [--log-window SECONDS] [--port N] [--no-open] [--no-history] [--mirror-only]
 livemap mcp-proxy --upstream URL [--header NAME=VALUE]... [--timeout SEC] | --upstream-cmd "COMMAND"
 ```
 
@@ -67,6 +67,8 @@ Mirrors a ServiceNow application scope to files, then runs LiveMap on them. It r
 | `--scope NAMESPACE\|SYS_ID` | required | The scope to mirror: its namespace (`x_snc_cc_offering`) or the sys_id of its `sys_scope` record. |
 | `--instance NAME` | the instance nexus is set to | Sent to nexus as the `X-SN-Instance` header. |
 | `--nexus URL` | `http://127.0.0.1:3006/mcp` | nexus's MCP endpoint. LiveMap tries Streamable HTTP first, then SSE. |
+| `--skyforge-log FILE\|none` | `~/.skyforge/skyforge-mcp.log` | SkyForge's MCP log, used to attribute past changes to SkyForge tool calls. `none` skips it. |
+| `--log-window SECONDS` | `60` | How far apart a log line and a change can be and still match (1 to 3600). |
 | `--port N` | `4317` | As for `livemap`. |
 | `--no-open` | the browser opens | As for `livemap`. |
 | `--no-history` | history is recorded | As for `livemap`. |
@@ -81,6 +83,20 @@ On the map, a portal links to its home page, a page to its layout, a layout to t
 Credential records (`sys_auth_profile*`, `oauth_entity*`, `discovery_credentials`) are listed by name only, fields named like passwords, secrets, tokens or keys are never written, and system properties are read without their values. The `.livemap` folder is readable only by you. When `dir` is inside a git repository, LiveMap adds `.livemap/` to its `.gitignore`; elsewhere it leaves `.gitignore` alone.
 
 A second `livemap sn` on the same folder updates the mirror in place: unchanged files are not rewritten, and files of records that are gone or renamed are removed.
+
+#### History import
+
+After the mirror, LiveMap reads the scope's change history and writes it to `.livemap/sn/<scope>.history.json`, one dated event per saved version, oldest first, with the ServiceNow user who made it. It reads `sys_update_version`, and for records with no versions it falls back to `sys_update_xml`. Only times, names and authors are kept: update payloads are parsed for those and dropped, system property payloads are never read, and credential records are skipped.
+
+Each event is then matched to SkyForge's log (`--skyforge-log`):
+
+| Confidence | When |
+|---|---|
+| `log` | One tool call within the window names the record: its sys_id for an update or delete, or its table and name for a create. |
+| `likely` | Several calls name it, or calls only share its table and time. All candidates are kept. A table and time match is never `log`. |
+| `history` | No call matches. The event keeps its ServiceNow author. |
+
+The log has no session id and cuts arguments at about 100 characters, so names that SkyForge redacts (business rules, script includes) can only match on table and time. The command prints how many versions it imported, how many log lines it read, and how many events matched, were ambiguous or matched nothing.
 
 ### `livemap mcp-proxy`
 

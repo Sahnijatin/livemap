@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
-import { startMockNexus, type MockNexus } from '../helpers/mock-nexus';
+import { loadFixture, startMockNexus, type MockNexus } from '../helpers/mock-nexus';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../..');
@@ -17,11 +17,11 @@ let proc: ChildProcess | undefined;
 let out = '';
 let url: string;
 
-function startSn(dir: string, nexusUrl: string): Promise<string> {
+function startSn(dir: string, nexusUrl: string, logFile: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const p = spawn(process.execPath, [
       path.join(root, 'dist/cli.js'), 'sn', dir, '--scope', 'x_snc_cc_offering', '--instance', 'inmorphisdemo3',
-      '--nexus', nexusUrl, '--no-open', '--port', '0',
+      '--nexus', nexusUrl, '--skyforge-log', logFile, '--no-open', '--port', '0',
     ], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, LIVEMAP_HOME: home } });
     proc = p;
     const timer = setTimeout(() => { p.kill('SIGKILL'); reject(new Error(`livemap sn did not print a URL:\n${out}`)); }, 60_000);
@@ -40,7 +40,10 @@ test.beforeAll(async () => {
   tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-sn-e2e-')));
   home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-sn-home-')));
   nexus = await startMockNexus();
-  url = await startSn(tmp, nexus.url);
+  // The fixture's SkyForge log lines, so the run never reads a real ~/.skyforge log.
+  const log = path.join(home, 'skyforge-mcp.log');
+  fs.writeFileSync(log, `${loadFixture().mcpLogExcerpt.lines.join('\n')}\n`);
+  url = await startSn(tmp, nexus.url, log);
 });
 
 test.afterAll(async () => {
@@ -71,6 +74,9 @@ test('livemap sn: mirrors the BharatBank scope and shows it in the Map and Schem
   expect(out).toContain('Instance: inmorphisdemo3 (brazil patch1)');
   expect(out).toMatch(/Scope: Credit Card Offering \(x_snc_cc_offering, sys_id 5f0+1\)/);
   expect(out).toMatch(/Pulled 1,683 records in \d+ classes/);
+  expect(out).toMatch(/Versions imported: 183 \(0 from sys_update_version, 183 from sys_update_xml\) for 111 records/);
+  expect(out).toMatch(/SkyForge log: 400 lines parsed \(\d+ write calls\)/);
+  expect(out).toContain('Attribution: 30 matched, 12 ambiguous (12 on table and time only), 141 unmatched (16% matched; window 60 s).');
   expect(out).toContain('LiveMap is watching x_snc_cc_offering on inmorphisdemo3');
   await page.goto(url);
   await expect(page.getByText('x_snc_cc_offering on inmorphisdemo3').first()).toBeVisible();

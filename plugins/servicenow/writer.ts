@@ -9,10 +9,11 @@ import type { Manifest } from './mirror.js';
 
 export const SN_DIR = path.join('.livemap', 'sn');
 /** Files next to the mirror that LiveMap's own watcher must not index. */
-const LOCAL_IGNORE = '# LiveMap ServiceNow state, not part of the mirror\n*.manifest.json\nstate.json\n';
+const LOCAL_IGNORE = '# LiveMap ServiceNow state, not part of the mirror\n*.manifest.json\n*.history.json\nstate.json\n';
 
 export const snRoot = (projectDir: string): string => path.join(projectDir, SN_DIR);
 export const manifestPath = (root: string, scope: string): string => path.join(root, `${scope}.manifest.json`);
+export const historyPath = (root: string, scope: string): string => path.join(root, `${scope}.history.json`);
 
 export interface StoredManifest extends Manifest { files: string[] }
 
@@ -90,4 +91,15 @@ export function ensureGitignored(projectDir: string): 'added' | 'present' | 'not
   if (text.split(/\r?\n/).some(l => /^\/?\.livemap\/?(\*\*)?$/.test(l.trim()))) return 'present';
   fs.writeFileSync(file, `${text}${text && !text.endsWith('\n') ? '\n' : ''}.livemap/\n`);
   return 'added';
+}
+
+/** Writes a scope's imported history (see history.ts) next to its manifest; false when it was unchanged. */
+export function writeHistory(root: string, scope: string, history: unknown): boolean {
+  mkdirPrivate(root);
+  writeIfChanged(path.join(root, '.gitignore'), LOCAL_IGNORE);
+  return writeIfChanged(historyPath(root, scope), `${JSON.stringify(history, null, 2)}\n`);
+}
+
+export function readHistory<T>(root: string, scope: string): T | null {
+  try { return JSON.parse(fs.readFileSync(historyPath(root, scope), 'utf8')) as T; } catch { return null; }
 }

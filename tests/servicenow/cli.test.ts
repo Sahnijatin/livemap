@@ -7,6 +7,7 @@ import { pullScope, resolveScope } from '../../plugins/servicenow/backfill.js';
 import { layoutMirror } from '../../plugins/servicenow/mirror.js';
 import { NexusClient, DEFAULT_NEXUS_URL } from '../../plugins/servicenow/nexus.js';
 import { recordResolver } from '../../plugins/servicenow/records.js';
+import { DEFAULT_SKYFORGE_LOG } from '../../plugins/servicenow/skyforge-log.js';
 import { snRoot, writeMirror } from '../../plugins/servicenow/writer.js';
 import { AgentHub } from '../../src/agents/hub.js';
 import { Attributor } from '../../src/agents/attribution.js';
@@ -19,11 +20,22 @@ const fail = (m: string): never => { throw new Error(m); };
 
 describe('parseSnArgs', () => {
   it('reads every option, with = or a space', () => {
-    expect(parseSnArgs(['proj', '--scope', 'x_snc_cc_offering', '--instance=inmorphisdemo3', '--nexus', 'http://127.0.0.1:4000/mcp', '--port=0', '--no-open', '--no-history', '--mirror-only'], fail))
-      .toEqual({ dir: 'proj', scope: 'x_snc_cc_offering', instance: 'inmorphisdemo3', nexus: 'http://127.0.0.1:4000/mcp', port: 0, open: false, history: false, mirrorOnly: true });
+    expect(parseSnArgs(['proj', '--scope', 'x_snc_cc_offering', '--instance=inmorphisdemo3', '--nexus', 'http://127.0.0.1:4000/mcp', '--port=0', '--no-open', '--no-history', '--mirror-only',
+      '--skyforge-log', 'D:\\logs\\mcp.log', '--log-window=90'], fail))
+      .toEqual({
+        dir: 'proj', scope: 'x_snc_cc_offering', instance: 'inmorphisdemo3', nexus: 'http://127.0.0.1:4000/mcp', port: 0, open: false, history: false, mirrorOnly: true,
+        skyforgeLog: 'D:\\logs\\mcp.log', logWindowSec: 90,
+      });
   });
-  it('defaults nexus, port, open and history', () => {
-    expect(parseSnArgs(['--scope', 'x_a'], fail)).toMatchObject({ dir: '.', nexus: DEFAULT_NEXUS_URL, port: 4317, open: true, history: true, mirrorOnly: false });
+  it('defaults nexus, port, open, history and the SkyForge log', () => {
+    expect(parseSnArgs(['--scope', 'x_a'], fail)).toMatchObject({
+      dir: '.', nexus: DEFAULT_NEXUS_URL, port: 4317, open: true, history: true, mirrorOnly: false,
+      skyforgeLog: DEFAULT_SKYFORGE_LOG, logWindowSec: 60,
+    });
+    expect(DEFAULT_SKYFORGE_LOG).toBe(path.join(os.homedir(), '.skyforge', 'skyforge-mcp.log'));
+    expect(parseSnArgs(['--scope', 'x_a', '--skyforge-log', 'none'], fail).skyforgeLog).toBeNull();
+    expect(() => parseSnArgs(['--scope', 'x', '--log-window', '0'], fail)).toThrow(/invalid --log-window/);
+    expect(() => parseSnArgs(['--scope', 'x', '--log-window', '5m'], fail)).toThrow(/invalid --log-window/);
   });
   it('requires --scope, and rejects bad values and unknown options', () => {
     expect(() => parseSnArgs([], fail)).toThrow(/--scope is required/);
