@@ -366,6 +366,17 @@ describe('ApiView', () => {
     expect(get.classList.contains('picked')).toBe(true);
   });
 
+  it('Esc from the body still clears a pick while the inspector peeks', () => {
+    mount();
+    const get = routeCard('GET', '/api/orders');
+    pick(get);
+    act(() => useStore.getState().select(ORD));
+    expect(useStore.getState().peek).toBe(ORD);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    expect(key(document.body, 'Escape')).toBe(false);
+    expect(get.classList.contains('picked')).toBe(false);
+  });
+
   it('Esc in another input outside the view leaves the pick alone', () => {
     mount();
     pick(routeCard('GET', '/api/orders'));

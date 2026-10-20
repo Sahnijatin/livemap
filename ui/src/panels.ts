@@ -14,7 +14,7 @@ export const PANELS: Record<Side, { name: string; key: string; id: string }> = {
 
 type Shown = Pick<StoreState, 'layout' | 'peek' | 'selected' | 'files'>;
 /** A selection shows a collapsed inspector while the peeked file is the selected one and exists. */
-export const peeking = (s: Shown): boolean => s.peek !== null && s.peek === s.selected && !!s.files[s.selected];
+const peeking = (s: Shown): boolean => s.peek !== null && s.peek === s.selected && !!s.files[s.selected];
 
 /**
  * The docked layout as drawn: the user's, with a collapsed inspector shown while peeking, at its normal width (a

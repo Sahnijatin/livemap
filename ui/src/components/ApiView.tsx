@@ -3,7 +3,6 @@ import clsx from 'clsx';
 import type { ApiRoute, DomainIndex } from '@shared/domain.js';
 import { routeBaseKey, useStore } from '../store';
 import { isNarrow } from '../media';
-import { peeking } from '../panels';
 import { baseName } from '../recent';
 import {
   LANE_KINDS, buildFlows, flowGraph, groupFlows, handlerKey, midTrunc, placeLanes, routeKey, serviceKey, tableKey,
@@ -487,9 +486,8 @@ function Flows({ domain }: { domain: DomainIndex }) {
     const onWinKey = (e: globalThis.KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
       if (document.activeElement && document.activeElement !== document.body) return;
-      // An open slide-over panel or a peeking inspector takes Esc first.
-      const s = useStore.getState();
-      if (s.panel || peeking(s)) return;
+      // An open slide-over panel takes Esc first (the panels close it).
+      if (useStore.getState().panel) return;
       if (escapeRef.current()) e.preventDefault();
     };
     window.addEventListener('keydown', onWinKey, true);
