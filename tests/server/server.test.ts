@@ -110,13 +110,18 @@ describe('startServer: binding and ports', () => {
   });
 
   it('falls back to the next port when the requested one is occupied', async () => {
-    // Ask the OS for a free port P whose neighbour P+1 is also free, then occupy P.
+    // Find a free port P whose neighbour P+1 is also free, then occupy P. P comes from below the OS's ephemeral
+    // range: macOS hands out ephemeral ports in order, so a test running in parallel could take P+1 otherwise.
     let blocker: net.Server | null = null;
     let p = 0;
     for (let attempt = 0; attempt < 20 && !blocker; attempt++) {
       const b = net.createServer();
-      await new Promise<void>(r => b.listen(0, '127.0.0.1', () => r()));
-      p = (b.address() as net.AddressInfo).port;
+      p = 20000 + Math.floor(Math.random() * 10000);
+      const held = await new Promise<boolean>(r => {
+        b.once('error', () => r(false));
+        b.listen(p, '127.0.0.1', () => r(true));
+      });
+      if (!held) continue;
       const probe = net.createServer();
       const free = await new Promise<boolean>(r => {
         probe.once('error', () => r(false));
