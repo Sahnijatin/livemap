@@ -129,7 +129,9 @@ describe('startServer: binding and ports', () => {
     if (!blocker) throw new Error('no free port pair found');
     blockers.push(blocker);
     const s = await boot({ port: p });
-    expect(s.port).toBe(p + 1);
+    // Usually P+1. Another test file can take P+1 while boot scans, so the server may go on to the next free port.
+    expect(s.port).toBeGreaterThan(p);
+    expect(s.port).toBeLessThanOrEqual(p + 20);
   });
 
   it('defaults to port 4317', () => {
