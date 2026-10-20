@@ -14,7 +14,9 @@ export const REDACTED = '[redacted]';
  * Secret keys, matched on the key lowercased with `_` and `-` removed, so `client_secret`, `clientSecret`,
  * `refresh-token`, `X-Api-Key` and `db_password` all match.
  */
-const SECRET_KEY = /(password|passwd|passphrase|pwd|token|secret|apikey|privatekey|credentials?|cookie|authorization|auth)\d*$/;
+const SECRET_KEY = /(password|passwd|passphrase|pwd|token|secret|apikey|privatekey|credentials?|cookie)\d*$/;
+/** `auth` and `authorization` count only as whole keys: `requires_auth` and `oauth_enabled` are flags, not secrets. */
+const AUTH_KEYS = new Set(['auth', 'authorization']);
 /** Keys that hold code: a script can embed a password, so its value never leaves the proxy. */
 const SCRIPT_KEY = /(script|condition)$/;
 /** Keys that hold headers: every value under them is redacted. */
@@ -28,7 +30,7 @@ const MAX_DEPTH = 32;
 const MAX_ERROR = 300;
 
 const norm = (k: string) => k.replace(/[_-]/g, '').toLowerCase();
-export const isSecretKey = (k: string): boolean => SECRET_KEY.test(norm(k));
+export const isSecretKey = (k: string): boolean => SECRET_KEY.test(norm(k)) || AUTH_KEYS.has(norm(k));
 export const isScriptKey = (k: string): boolean => SCRIPT_KEY.test(norm(k));
 export const isSecretTable = (t: string | undefined): boolean => !!t && SECRET_TABLE.test(t);
 
@@ -165,7 +167,7 @@ export interface CaptureEvent {
 }
 
 /** Tools whose results say who the session is or which update set is current: their results are always read. */
-export const CONTEXT_TOOLS = new Set(['sn_session_context', 'sn_get_instance_info', 'sn_update_set_manage', 'sn_ensure_active_update_set', 'sn_switch_application_scope']);
+export const CONTEXT_TOOLS = new Set(['sn_session_context', 'sn_get_instance_info', 'sn_update_set_manage', 'sn_update_set_query', 'sn_ensure_active_update_set', 'sn_switch_application_scope']);
 const USER_KEYS = ['user_name', 'username', 'userName', 'user_id', 'user'];
 const SYS_ID = /^[0-9a-f]{32}$/i;
 
@@ -197,7 +199,7 @@ function updateSetOf(payload: unknown): UpdateSetRef | undefined {
  * What a session has said about itself so far: its instance, its ServiceNow user (from `sn_session_context`
  * or `sn_get_instance_info` results), and its current update set. SkyForge changes the current set with
  * `sn_update_set_manage` (`create`, `switch`), `sn_ensure_active_update_set` and
- * `sn_switch_application_scope`; `sn_update_set_manage` `current` reads it back.
+ * `sn_switch_application_scope`; `sn_update_set_manage` and `sn_update_set_query` with `current` read it back.
  */
 export class SessionContext {
   instance?: string;
@@ -233,6 +235,11 @@ export class SessionContext {
           const name = r?.name ?? str(a.name);
           set(sysId || name ? { ...(sysId ? { sysId } : {}), ...(name ? { name } : {}) } : { unknown: true });
         }
+        return;
+      }
+      case 'sn_update_set_query': {
+        // A read; with action=current its result names the session's current set.
+        if (str(a.action)?.toLowerCase() === 'current') set(fromResult());
         return;
       }
       case 'sn_ensure_active_update_set': {

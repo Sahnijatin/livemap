@@ -103,7 +103,7 @@ The proxy passes messages through as they came, in both directions: the tool lis
 After a call's answer has gone to the client, the proxy sends a short record of it to each running `livemap sn` for the same instance. The record has the tool, its arguments, the records it names, any new sys_ids in its result, the session's current update set and ServiceNow user, its start and end, and whether it worked.
 
 These values are replaced with `[redacted]` before anything is sent:
-- passwords, tokens, secrets, keys, cookies, credentials and authorization fields, however the field is spelled
+- passwords, tokens, secrets, keys, cookies and credentials, however the field is spelled, and fields named `auth` or `authorization`
 - script and condition bodies
 - every header value
 - secrets written as `key=value` inside any text

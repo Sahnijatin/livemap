@@ -1,10 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { HookPoster, liveRuntimes } from '../../src/proxy/poster.js';
+import { HookPoster, liveRuntimes, normalizeInstance, runInstances } from '../../src/proxy/poster.js';
 import { argNames, buildCapture, isSecretTable, outcome, redact, redactText, REDACTED, SessionContext, type CallInput } from '../../src/proxy/capture.js';
 import { escapeCmd, needsShell, quoteForCmd } from '../../src/proxy/proxy.js';
 import { parseProxyArgs } from '../../src/proxy/cli.js';
@@ -157,10 +157,12 @@ describe('review fixes: gateway reads, redaction gaps', () => {
   });
 
   it('matches camelCase and other secret spellings', () => {
-    const keys = ['accessToken', 'clientSecret', 'refreshToken', 'pwd', 'passphrase', 'cookie', 'Set-Cookie', 'private_key', 'credential', 'credentials', 'X-Api-Key', 'basic_auth', 'password2'];
+    const keys = ['accessToken', 'clientSecret', 'refreshToken', 'pwd', 'passphrase', 'cookie', 'Set-Cookie', 'private_key', 'credential', 'credentials', 'X-Api-Key', 'password2', 'auth', 'Authorization', 'X-Auth-Token'];
     const out = redact(Object.fromEntries(keys.map((k) => [k, 'v']))) as Record<string, unknown>;
     for (const k of keys) expect(out[k], k).toBe(REDACTED);
-    expect(redact({ author: 'a', tokenizer_name: 'b', table: 'c' })).toEqual({ author: 'a', tokenizer_name: 'b', table: 'c' });
+    // Only whole auth/authorization keys: flags that merely end in "auth" stay.
+    const flags = { author: 'a', tokenizer_name: 'b', table: 'c', requires_auth: true, oauth: 'enabled', basic_auth: 'false', oauth_enabled: true };
+    expect(redact(flags)).toEqual(flags);
   });
 
   it('redacts the value of a secret name-value pair', () => {
@@ -291,5 +293,79 @@ describe('mcp-proxy --timeout', () => {
     expect(parseProxyArgs(['--upstream', 'http://x/mcp', '--timeout', '1200'], err).timeoutMs).toBe(1_200_000);
     expect(() => parseProxyArgs(['--upstream', 'http://x/mcp', '--timeout', '0'], err)).toThrow(/timeout/);
     expect(() => parseProxyArgs(['--upstream-cmd', 'x', '--timeout', '5'], err)).toThrow(/only apply/);
+  });
+});
+
+describe('sn_update_set_query (live shape)', () => {
+  const live = { success: true, data: { active: true, sys_id: '3'.repeat(32), name: 'CC offers rebuild', description: 'x', state: 'in progress', created_at: '2026-07-16 16:50:00', created_by: 'admin', artifact_count: 79 }, metadata: {} };
+
+  it('is a read, and action=current teaches the session its current set, called directly', () => {
+    const ctx = new SessionContext();
+    const e = buildCapture(call({ name: 'sn_update_set_query', args: { action: 'current' }, result: text(live) }), ctx);
+    expect(ctx.updateSet).toEqual({ sysId: '3'.repeat(32), name: 'CC offers rebuild' });
+    const evs = captureEvents(JSON.parse(JSON.stringify(e)) as Record<string, unknown>, 10_000);
+    expect(evs[0].tool).toMatchObject({ name: 'sn_update_set_query', access: 'read' });
+  });
+
+  it('the same through tool_execute, wrapped as {success, tool, result}', () => {
+    const ctx = new SessionContext();
+    const e = buildCapture(call({ name: 'nexus_ses_ebf63bf49ffeGGE3hEhWQuinBE_tool_execute', args: { tool: 'sn_update_set_query', args: { action: 'current' } }, result: text({ success: true, tool: 'sn_update_set_query', result: live }) }), ctx);
+    expect(ctx.updateSet).toEqual({ sysId: '3'.repeat(32), name: 'CC offers rebuild' });
+    const evs = captureEvents(JSON.parse(JSON.stringify(e)) as Record<string, unknown>, 10_000);
+    expect(evs[0].tool).toMatchObject({ name: 'tool_execute', inner: 'sn_update_set_query', access: 'read' });
+  });
+
+  it('other query actions do not move the current set', () => {
+    const ctx = new SessionContext();
+    ctx.updateSet = { sysId: '1'.repeat(32) };
+    buildCapture(call({ name: 'sn_update_set_query', args: { action: 'list' }, result: text(live) }), ctx);
+    expect(ctx.updateSet).toEqual({ sysId: '1'.repeat(32) });
+  });
+});
+
+describe('poster instance names', () => {
+  it('normalizes aliases and full hosts', () => {
+    for (const v of ['DevTest', 'devtest.service-now.com', 'https://devtest.service-now.com/', 'devtest.service-now.com:443']) expect(normalizeInstance(v), v).toBe('devtest');
+  });
+
+  it('matches a full host against a short manifest name, and falls back to every run when none matches', async () => {
+    const got: number[] = [];
+    const servers = await Promise.all([0, 1].map(async (i) => {
+      const s = http.createServer((_req, res) => { got.push(i); res.writeHead(200).end('{}'); });
+      await new Promise<void>((r) => s.listen(0, '127.0.0.1', () => r()));
+      return s;
+    }));
+    try {
+      const runs = servers.map((s, i) => ({ root: `/r${i}/.livemap/sn`, port: (s.address() as AddressInfo).port, token: 't', pid: process.pid }));
+      const inst: Record<string, string[]> = { '/r0/.livemap/sn': ['devtest'], '/r1/.livemap/sn': ['prod'] };
+      const a = new HookPoster({ runtimes: () => runs, instance: 'https://DevTest.service-now.com', instancesOf: (e) => inst[e.root] });
+      a.send({ x: 1 });
+      await a.flushed();
+      expect(got).toEqual([0]);
+      got.length = 0;
+      const b = new HookPoster({ runtimes: () => runs, instance: 'alias-nobody-knows', instancesOf: (e) => inst[e.root] });
+      b.send({ x: 1 });
+      await b.flushed();
+      expect(got.sort()).toEqual([0, 1]);
+    } finally {
+      for (const s of servers) await new Promise<void>((r) => s.close(() => r()));
+    }
+  });
+
+  it('reads manifests once and again only when one changes', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-man-'));
+    try {
+      const file = path.join(root, 'x_app.manifest.json');
+      fs.writeFileSync(file, JSON.stringify({ instance: 'DevTest.service-now.com' }));
+      const e = { root, port: 1, token: 't', pid: 1 };
+      expect(runInstances(e)).toEqual(['devtest']);
+      const spy = vi.spyOn(fs, 'readFileSync');
+      expect(runInstances(e)).toEqual(['devtest']);
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
+      fs.writeFileSync(file, JSON.stringify({ instance: 'prod' }));
+      fs.utimesSync(file, new Date(), new Date(Date.now() + 5000));
+      expect(runInstances(e)).toEqual(['prod']);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 });

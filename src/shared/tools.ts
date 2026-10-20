@@ -137,6 +137,8 @@ const SERVICENOW_RULES: ToolRule[] = [
     access: (a) => (UPDATE_SET_READS.has(lowerAction(a) ?? '') ? 'read' : 'write'),
     targets: (a) => recordTargetsOf(a, { table: 'sys_update_set', nameKeys: [...NAME_KEYS, ...UPDATE_SET_KEYS] }),
   },
+  // Reads update sets; `current` returns the session's current set as {success, data: {sys_id, name, ...}}.
+  { match: 'sn_update_set_query', access: 'read' },
   // Makes the named update set current, creating it when missing.
   { match: 'sn_ensure_active_update_set', access: 'write', targets: (a) => recordTargetsOf(a, { table: 'sys_update_set' }) },
   // Changes the session's application scope (and with create_update_set, its current update set): no app record changes.

@@ -130,6 +130,14 @@ export class HttpStatusError extends Error {
   }
 }
 
+/** The upstream's answer ended without a response for every request in it. */
+export class IncompleteAnswerError extends Error {
+  constructor() {
+    super('the upstream ended its answer without a response');
+    this.name = 'IncompleteAnswerError';
+  }
+}
+
 /** A failed send, with the ids of the responses that still reached the client before it failed. */
 type SendError = Error & { delivered?: Set<string> };
 
@@ -202,6 +210,8 @@ export class HttpEndpoint implements Endpoint {
       sink(msg, bytes);
     };
     const { ac, done } = this.timed();
+    // The session this message went out on: a 404 for an old one means another request already re-opened it.
+    const sentOn = this.sessionId;
     try {
       const res = await fetch(this.url, {
         method: 'POST',
@@ -210,11 +220,12 @@ export class HttpEndpoint implements Endpoint {
         signal: ac.signal,
       });
       const sid = res.headers.get('mcp-session-id');
-      const stale = res.status === 404 && !!this.sessionId && !items(m).some((x) => x.method === 'initialize');
+      const stale = res.status === 404 && !!sentOn && !items(m).some((x) => x.method === 'initialize');
       if (stale && mayRetry && this.initParams !== undefined) {
         await res.body?.cancel().catch(() => {});
         done();
-        await this.reinit();
+        if (this.reiniting) await this.reiniting;
+        else if (this.sessionId === sentOn) await this.reinit();
         return await this.post(m, false, sink);
       }
       if (sid) this.sessionId = sid;
@@ -234,6 +245,8 @@ export class HttpEndpoint implements Endpoint {
           track(parsed, Buffer.byteLength(text));
         }
       }
+      // A stream or body that ended cleanly without an answer would leave the client waiting for ever.
+      if ([...requests].some((id) => !delivered.has(id))) throw new IncompleteAnswerError();
     } catch (e) {
       // An answer that already reached the client stands; only the requests left unanswered fail.
       if ([...requests].every((id) => delivered.has(id)) && requests.size) return;
@@ -266,18 +279,39 @@ export class HttpEndpoint implements Endpoint {
       const text = data.join('\n');
       try { sink(JSON.parse(text), Buffer.byteLength(text)); } catch { /* not JSON: nothing to forward */ }
     };
+    // Text since the last event is kept as chunks. Only each new chunk (with the 3 characters before it, a
+    // separator may span chunks) is scanned for the blank line that ends an event, and the chunks are joined
+    // once per event: a large event read in many chunks costs linear time.
+    const sep = /\r?\n\r?\n/g;
+    let parts: string[] = [];
+    let tail = '';
+    const take = (text: string) => {
+      sep.lastIndex = 0;
+      if (!sep.exec(tail + text)) {
+        parts.push(text);
+        tail = (tail + text).slice(-3);
+        return;
+      }
+      let all = parts.join('') + text;
+      parts = [];
+      for (;;) {
+        sep.lastIndex = 0;
+        const cut = sep.exec(all);
+        if (!cut) break;
+        flush(all.slice(0, cut.index));
+        all = all.slice(cut.index + cut[0].length);
+      }
+      if (all) parts.push(all);
+      tail = all.slice(-3);
+    };
     try {
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let cut: RegExpExecArray | null;
-        while ((cut = /\r?\n\r?\n/.exec(buf))) {
-          flush(buf.slice(0, cut.index));
-          buf = buf.slice(cut.index + cut[0].length);
-        }
+        take(dec.decode(value, { stream: true }));
         if (enough()) break;
       }
+      buf = parts.join('');
       if (buf.trim()) flush(buf);
     } finally {
       reader.cancel().catch(() => {});
@@ -310,17 +344,31 @@ export class HttpEndpoint implements Endpoint {
   /** A new upstream session: the client's initialize replayed under an internal id, its answer kept here. */
   private reinit(): Promise<void> {
     this.reiniting ??= (async () => {
+      // The old id is kept until the new session is open: if this fails, later requests still carry it, get
+      // 404 again, and try again (without any id they would get 400 and never re-open).
+      const old = this.sessionId;
       this.sessionId = undefined;
       this.stream?.abort();
       this.stream = undefined;
       const id = `livemap-proxy-reinit-${++this.reinits}`;
-      await this.post({ jsonrpc: '2.0', id, method: 'initialize', params: this.initParams }, false, (msg) => {
-        for (const x of items(msg)) {
-          const v = rec(x.result).protocolVersion;
-          if (x.id === id && typeof v === 'string') this.protocolVersion = v;
-        }
-      });
-      await this.post({ jsonrpc: '2.0', method: 'notifications/initialized' }, false, () => {});
+      try {
+        await this.post({ jsonrpc: '2.0', id, method: 'initialize', params: this.initParams }, false, (msg, bytes) => {
+          const rest: Msg[] = [];
+          for (const x of items(msg)) {
+            if (isResponse(x) && x.id === id) {
+              const v = rec(x.result).protocolVersion;
+              if (typeof v === 'string') this.protocolVersion = v;
+            } else rest.push(x);
+          }
+          // The server's own requests and notifications on this stream are the client's to answer.
+          for (const x of rest) this.deliver(x, bytes);
+        });
+        if (!this.sessionId) throw new Error('the upstream gave no session id');
+        await this.post({ jsonrpc: '2.0', method: 'notifications/initialized' }, false, (msg, bytes) => this.deliver(msg, bytes));
+      } catch (e) {
+        this.sessionId = old;
+        throw e;
+      }
     })().finally(() => { this.reiniting = undefined; });
     return this.reiniting;
   }
@@ -446,6 +494,7 @@ export function errorFor(err: unknown, upstreamName: string): { code: number; me
     } catch { /* not JSON */ }
     return { code: INTERNAL_ERROR, message: `The upstream MCP server (${upstreamName}) answered HTTP ${err.status}` };
   }
+  if (err instanceof IncompleteAnswerError) return { code: INTERNAL_ERROR, message: `The upstream MCP server (${upstreamName}) ended its answer without a response` };
   const why = err instanceof Error && err.message ? `: ${err.message.split('\n')[0].slice(0, 200)}` : '';
   return { code: UPSTREAM_UNREACHABLE, message: `The upstream MCP server (${upstreamName}) did not take the request${why}` };
 }
@@ -468,10 +517,6 @@ export function runProxy(o: ProxyOptions): Promise<void> {
       o.debug?.(`${extra.cancelled ? 'cancelled' : 'done'} ${ev.innerTool ?? ev.tool} ok=${ev.ok}`);
       if (!own) o.capture(ev);
     } catch { /* capture must never affect the call */ }
-  };
-
-  const reply = (id: unknown, error: { code: number; message: string; data?: unknown }) => {
-    o.client.send({ jsonrpc: '2.0', id, error }).catch(() => {});
   };
 
   const fromClient = (m: unknown) => {
@@ -500,11 +545,15 @@ export function runProxy(o: ProxyOptions): Promise<void> {
       }
     } catch { /* bookkeeping only */ }
     o.upstream.send(m).catch((err: SendError) => {
+      const errors: Msg[] = [];
       for (const x of list) {
         if (!isRequest(x) || err?.delivered?.has(idKey(x.id))) continue;
         pending.delete(idKey(x.id));
-        reply(x.id, errorFor(err, o.upstreamName));
+        errors.push({ jsonrpc: '2.0', id: x.id, error: errorFor(err, o.upstreamName) });
       }
+      if (!errors.length) return;
+      // A batch is answered as one array, as JSON-RPC asks.
+      o.client.send(Array.isArray(m) ? errors : errors[0]).catch(() => {});
     });
   };
 

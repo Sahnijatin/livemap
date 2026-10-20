@@ -39,18 +39,36 @@ export function liveRuntimes(dir: string = runtimeDir()): RuntimeEntry[] {
 /** A LiveMap that serves a ServiceNow mirror (`livemap sn` runs on `<project>/.livemap/sn`). */
 export const isServiceNowRun = (e: RuntimeEntry): boolean => /[\\/]\.livemap[\\/]sn$/.test(e.root);
 
-/** The instances a `livemap sn` run mirrors, from the manifests in its root. Empty when it cannot tell. */
+/**
+ * An instance name as one key: lowercased, without a scheme, path, port or the `.service-now.com` suffix,
+ * so `DevTest`, `devtest.service-now.com` and `https://devtest.service-now.com/` agree.
+ */
+export function normalizeInstance(v: string): string {
+  return v.trim().toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/[/:].*$/, '').replace(/\.service-now\.com$/, '');
+}
+
+const manifestCache = new Map<string, { stamp: string; instances: string[] }>();
+
+/**
+ * The instances a `livemap sn` run mirrors, from the manifests in its root, normalized. Manifests are parsed
+ * again only when one changes (by name and mtime). Empty when it cannot tell.
+ */
 export function runInstances(e: RuntimeEntry): string[] {
   try {
+    const names = fs.readdirSync(e.root).filter((n) => n.endsWith('.manifest.json')).sort();
+    const stamp = names.map((n) => { try { return `${n}:${fs.statSync(path.join(e.root, n)).mtimeMs}`; } catch { return n; } }).join('|');
+    const hit = manifestCache.get(e.root);
+    if (hit && hit.stamp === stamp) return hit.instances;
     const out = new Set<string>();
-    for (const n of fs.readdirSync(e.root)) {
-      if (!n.endsWith('.manifest.json')) continue;
+    for (const n of names) {
       try {
         const m = JSON.parse(fs.readFileSync(path.join(e.root, n), 'utf8')) as { instance?: unknown };
-        if (typeof m.instance === 'string' && m.instance) out.add(m.instance.toLowerCase());
-      } catch { /* being rewritten */ }
+        if (typeof m.instance === 'string' && m.instance) out.add(normalizeInstance(m.instance));
+      } catch { /* being rewritten: the next stamp differs */ }
     }
-    return [...out];
+    const instances = [...out];
+    manifestCache.set(e.root, { stamp, instances });
+    return instances;
   } catch {
     return [];
   }
@@ -60,7 +78,10 @@ export interface PosterOptions {
   /** Which runs get events (default: ServiceNow mirror runs). */
   accept?: (e: RuntimeEntry) => boolean;
   runtimes?: () => RuntimeEntry[];
-  /** The instance the proxy serves: runs that mirror another instance get nothing. Unknown: every run. */
+  /**
+   * The instance the proxy serves: runs that mirror another instance get nothing. Unknown, or no run matches
+   * it (an alias the manifests spell differently): every run.
+   */
   instance?: string;
   /** The instances a run mirrors (default: read from its manifests). */
   instancesOf?: (e: RuntimeEntry) => string[];
@@ -88,7 +109,7 @@ export class HookPoster {
   constructor(opts: PosterOptions = {}) {
     this.accept = opts.accept ?? isServiceNowRun;
     this.runtimes = opts.runtimes ?? (() => liveRuntimes());
-    this.instance = opts.instance?.toLowerCase() || undefined;
+    this.instance = opts.instance ? normalizeInstance(opts.instance) || undefined : undefined;
     this.instancesOf = opts.instancesOf ?? runInstances;
     this.timeoutMs = opts.timeoutMs ?? POST_TIMEOUT_MS;
     this.queueMax = opts.queueMax ?? QUEUE_MAX;
@@ -110,16 +131,20 @@ export class HookPoster {
     return new Promise((resolve) => this.idle.push(resolve));
   }
 
-  private matchesInstance(e: RuntimeEntry): boolean {
-    if (!this.instance) return true;
-    const mine = this.instancesOf(e);
-    return !mine.length || mine.includes(this.instance);
+  /** The runs for this proxy's instance: those that mirror it or cannot tell; all of them when none matches. */
+  private forInstance(runs: RuntimeEntry[]): RuntimeEntry[] {
+    if (!this.instance) return runs;
+    const mine = runs.filter((e) => {
+      const theirs = this.instancesOf(e).map(normalizeInstance);
+      return !theirs.length || theirs.includes(this.instance as string);
+    });
+    return mine.length ? mine : runs;
   }
 
   private targets(): RuntimeEntry[] {
     const now = Date.now();
     if (now - this.runsAt > RUNS_TTL_MS) {
-      try { this.runs = this.runtimes().filter((e) => this.accept(e) && this.matchesInstance(e)); } catch { this.runs = []; }
+      try { this.runs = this.forInstance(this.runtimes().filter((e) => this.accept(e))); } catch { this.runs = []; }
       this.runsAt = now;
     }
     return this.runs;

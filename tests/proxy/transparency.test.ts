@@ -9,6 +9,8 @@ import { PassThrough } from 'node:stream';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { ChildEndpoint, HttpEndpoint, LineEndpoint, runProxy, type Endpoint } from '../../src/proxy/proxy.js';
+
+const TIME_SCALE = Number(process.env.LIVEMAP_TIME_SCALE) || 1;
 import type { CaptureEvent } from '../../src/proxy/capture.js';
 import { startMockUpstream, SYS_ID_NEW, type MockUpstream } from '../helpers/mock-upstream.js';
 
@@ -39,7 +41,7 @@ function rawClient(upstream: Endpoint, maxLine?: number) {
 }
 
 /** An HTTP upstream that answers every POST with what `answer` returns: status, content type and raw body. */
-async function rawUpstream(answer: (body: unknown) => { status: number; type?: string; body: string; headers?: Record<string, string> }) {
+async function rawUpstream(answer: (body: unknown, headers: http.IncomingHttpHeaders) => { status: number; type?: string; body: string; headers?: Record<string, string> }) {
   const seen: unknown[] = [];
   const s = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -48,7 +50,7 @@ async function rawUpstream(answer: (body: unknown) => { status: number; type?: s
       if (req.method !== 'POST') { res.writeHead(405).end(); return; }
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || 'null') as unknown;
       seen.push(body);
-      const a = answer(body);
+      const a = answer(body, req.headers);
       res.writeHead(a.status, { ...(a.type ? { 'content-type': a.type } : {}), ...(a.headers ?? {}) }).end(a.body);
     });
   });
@@ -201,5 +203,161 @@ describe('stdio upstream', () => {
     const c = rawClient(new ChildEndpoint(process.execPath, ['-e', script]));
     await c.done;
     expect(c.got).toEqual([note]);
+  });
+});
+
+describe('re-review fixes', () => {
+  const ok = (id: unknown) => JSON.stringify({ jsonrpc: '2.0', id, result: {} });
+  const init = { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } };
+
+  it('an SSE answer that ends without the response gets an error, after the messages it did carry', async () => {
+    const note = { jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: 1, progress: 1 } };
+    const u = await rawUpstream(() => ({ status: 200, type: 'text/event-stream', body: `data: ${JSON.stringify(note)}\n\n` }));
+    const c = rawClient(new HttpEndpoint(u.url, {}));
+    c.send({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'x' } });
+    await until(() => c.got.length === 2);
+    expect(c.got[0]).toEqual(note);
+    expect(c.got[1]).toMatchObject({ id: 9, error: { code: -32603, message: expect.stringContaining('without a response') } });
+  });
+
+  it('an empty JSON body gets an error too', async () => {
+    const u = await rawUpstream(() => ({ status: 200, type: 'application/json', body: '' }));
+    const c = rawClient(new HttpEndpoint(u.url, {}));
+    c.send({ jsonrpc: '2.0', id: 10, method: 'ping' });
+    await until(() => c.got.length === 1);
+    expect(c.got[0]).toMatchObject({ id: 10, error: { code: -32603 } });
+  });
+
+  it('a 30 MB SSE event read in 64 KB chunks is passed on in linear time', async () => {
+    const big = { jsonrpc: '2.0', id: 1, result: { t: 'x'.repeat(30 * 1024 * 1024) } };
+    const event = `data: ${JSON.stringify(big)}\n\n`;
+    const s = http.createServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        let at = 0;
+        const step = () => {
+          while (at < event.length) {
+            const part = event.slice(at, at + 65_536);
+            at += part.length;
+            if (!res.write(part)) { res.once('drain', step); return; }
+          }
+          res.end();
+        };
+        step();
+      });
+    });
+    await new Promise<void>((r) => s.listen(0, '127.0.0.1', () => r()));
+    cleanup.push(() => new Promise<void>((r) => { s.closeAllConnections(); s.close(() => r()); }));
+    const ep = new HttpEndpoint(new URL(`http://127.0.0.1:${(s.address() as AddressInfo).port}/mcp`), {});
+    let bytes = 0;
+    ep.onmessage = (_m, n) => { bytes = n; };
+    const t = Date.now();
+    await ep.send({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} });
+    expect(bytes).toBeGreaterThan(30 * 1024 * 1024);
+    expect(Date.now() - t).toBeLessThan(4000 * TIME_SCALE);
+  }, 30_000);
+
+  it('a failed re-init keeps the old session id, so the next request re-inits again and works', async () => {
+    let valid = new Set<string>();
+    let next = 0;
+    let failInit = 0;
+    const inits: unknown[] = [];
+    const u = await rawUpstream((body, h) => {
+      const m = body as { id?: unknown; method?: string };
+      const sid = h['mcp-session-id'] as string | undefined;
+      if (m.method === 'initialize') {
+        inits.push(m.id);
+        if (failInit > 0) { failInit--; return { status: 500, type: 'text/plain', body: 'starting up' }; }
+        const id = `s${++next}`;
+        valid.add(id);
+        return { status: 200, type: 'application/json', body: JSON.stringify({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'u', version: '1' } } }), headers: { 'mcp-session-id': id } };
+      }
+      if (!sid || !valid.has(sid)) return { status: 404, type: 'application/json', body: JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32001, message: 'Session not found' } }) };
+      if (m.id === undefined) return { status: 202, body: '' };
+      return { status: 200, type: 'application/json', body: ok(m.id) };
+    });
+    const ep = new HttpEndpoint(u.url, {});
+    const c = rawClient(ep);
+    c.send(init);
+    await until(() => c.got.length === 1);
+    c.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    valid = new Set();
+    failInit = 1;
+    c.send({ jsonrpc: '2.0', id: 2, method: 'ping' });
+    await until(() => c.got.length === 2);
+    expect(c.got[1]).toMatchObject({ id: 2, error: { code: -32603 } });
+    expect(ep.sessionId).toBe('s1');
+    c.send({ jsonrpc: '2.0', id: 3, method: 'ping' });
+    await until(() => c.got.length === 3);
+    expect(c.got[2]).toEqual({ jsonrpc: '2.0', id: 3, result: {} });
+    expect(ep.sessionId).toBe('s2');
+    expect(inits.slice(1).every((id) => String(id).startsWith('livemap-proxy-reinit-'))).toBe(true);
+  });
+
+  it('two requests that both hit the stale session start one re-init', async () => {
+    let valid = new Set<string>();
+    let next = 0;
+    const replays: unknown[] = [];
+    const u = await rawUpstream((body, h) => {
+      const m = body as { id?: unknown; method?: string };
+      if (m.method === 'initialize') {
+        if (String(m.id).startsWith('livemap')) replays.push(m.id);
+        const id = `s${++next}`;
+        valid.add(id);
+        return { status: 200, type: 'application/json', body: JSON.stringify({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2025-06-18' } }), headers: { 'mcp-session-id': id } };
+      }
+      if (!valid.has(h['mcp-session-id'] as string)) return { status: 404, body: '' };
+      return m.id === undefined ? { status: 202, body: '' } : { status: 200, type: 'application/json', body: ok(m.id) };
+    });
+    const c = rawClient(new HttpEndpoint(u.url, {}));
+    c.send(init);
+    await until(() => c.got.length === 1);
+    valid = new Set();
+    c.send({ jsonrpc: '2.0', id: 2, method: 'ping' });
+    c.send({ jsonrpc: '2.0', id: 3, method: 'ping' });
+    await until(() => c.got.length === 3);
+    expect(c.got.slice(1).map((g) => (g as { id: number }).id).sort()).toEqual([2, 3]);
+    expect(replays).toHaveLength(1);
+  });
+
+  it('server requests on the re-init answer reach the client', async () => {
+    let valid = new Set<string>();
+    let next = 0;
+    const ask = { jsonrpc: '2.0', id: 'srv-1', method: 'roots/list' };
+    const u = await rawUpstream((body, h) => {
+      const m = body as { id?: unknown; method?: string };
+      if (m.method === 'initialize') {
+        const id = `s${++next}`;
+        valid.add(id);
+        const res = JSON.stringify({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2025-06-18' } });
+        const replay = String(m.id).startsWith('livemap');
+        return replay
+          ? { status: 200, type: 'text/event-stream', body: `data: ${JSON.stringify(ask)}\n\ndata: ${res}\n\n`, headers: { 'mcp-session-id': id } }
+          : { status: 200, type: 'application/json', body: res, headers: { 'mcp-session-id': id } };
+      }
+      if (!valid.has(h['mcp-session-id'] as string)) return { status: 404, body: '' };
+      return m.id === undefined ? { status: 202, body: '' } : { status: 200, type: 'application/json', body: ok(m.id) };
+    });
+    const c = rawClient(new HttpEndpoint(u.url, {}));
+    c.send(init);
+    await until(() => c.got.length === 1);
+    valid = new Set();
+    c.send({ jsonrpc: '2.0', id: 2, method: 'ping' });
+    await until(() => c.got.length === 3);
+    expect(c.got.slice(1)).toEqual([ask, { jsonrpc: '2.0', id: 2, result: {} }]);
+  });
+
+  it('errors for a batch come back as one array', async () => {
+    const dead = http.createServer();
+    await new Promise<void>((r) => dead.listen(0, '127.0.0.1', () => r()));
+    const port = (dead.address() as AddressInfo).port;
+    await new Promise<void>((r) => dead.close(() => r()));
+    const c = rawClient(new HttpEndpoint(new URL(`http://127.0.0.1:${port}/mcp`), {}));
+    c.send([{ jsonrpc: '2.0', id: 1, method: 'ping' }, { jsonrpc: '2.0', method: 'notifications/x' }, { jsonrpc: '2.0', id: 2, method: 'ping' }]);
+    await until(() => c.got.length === 1);
+    const got = c.got[0] as { id: number; error: { code: number } }[];
+    expect(Array.isArray(got)).toBe(true);
+    expect(got.map((g) => [g.id, g.error.code])).toEqual([[1, -32000], [2, -32000]]);
   });
 });
