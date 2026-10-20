@@ -23,6 +23,10 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v 
 const STATE = Symbol.for('livemap.skyforge-plugin.v1');
 /** Bounded memory: past this many entries the oldest are forgotten. */
 const MAX_KEEP = 2000;
+/** Messages whose finished text waits for its role; a message never given a role is forgotten past this. */
+const MAX_HELD = 200;
+/** Idle events of one session closer together than this are one idle. */
+const IDLE_WINDOW_MS = 2000;
 
 interface Call { name: string; args: unknown; start: number }
 interface PluginState {
@@ -32,6 +36,10 @@ interface PluginState {
   contexts: Map<string, SessionContext>;
   roles: Map<string, string>;
   posted: Set<string>;
+  /** Finished text parts whose message role has not arrived yet, by message id. */
+  held: Map<string, Obj[]>;
+  /** When each session last went idle, to send one idle per burst. */
+  idleAt: Map<string, number>;
   inits: number;
 }
 
@@ -44,7 +52,7 @@ function bounded<K>(m: Map<K, unknown> | Set<K>): void {
 
 function state(): PluginState {
   const g = globalThis as unknown as Record<symbol, PluginState | undefined>;
-  g[STATE] ??= { poster: new HookPoster(), calls: new Map(), done: new Set(), contexts: new Map(), roles: new Map(), posted: new Set(), inits: 0 };
+  g[STATE] ??= { poster: new HookPoster(), calls: new Map(), done: new Set(), contexts: new Map(), roles: new Map(), posted: new Set(), held: new Map(), idleAt: new Map(), inits: 0 };
   return g[STATE] as PluginState;
 }
 
@@ -62,6 +70,16 @@ function debug(line: string): void {
 const isNexusTool = (name: string): boolean => toolServer(name) === 'nexus' || /^(sn_|tool_execute$)/.test(baseToolName(name));
 
 const send = (s: PluginState, e: CaptureEvent | TextEvent | undefined) => { if (e) s.poster.send(e); };
+/** Sends a finished assistant text part once (its part id is the text id). */
+function sendPart(s: PluginState, part: Obj, sessionId?: string): void {
+  const id = str(part.id);
+  const end = rec(part.time).end;
+  if (!id || typeof end !== 'number' || s.posted.has(id)) return;
+  s.posted.add(id);
+  bounded(s.posted);
+  send(s, buildText('message', str(part.sessionID) ?? sessionId ?? '', end, str(part.text), id));
+}
+
 const contextOf = (s: PluginState, sessionId: string) => {
   let c = s.contexts.get(sessionId);
   if (!c) { c = new SessionContext(); s.contexts.set(sessionId, c); bounded(s.contexts); }
@@ -111,11 +129,15 @@ export const LivemapSkyforge = async () => {
         const msg = rec(output?.message);
         const id = str(msg.id);
         const sessionId = str(input?.sessionID) ?? str(msg.sessionID);
-        if (!sessionId || (id && s.posted.has(id))) return;
-        if (id) { s.posted.add(id); bounded(s.posted); s.roles.set(id, 'user'); bounded(s.roles); }
+        if (!sessionId) return;
+        const created = typeof rec(msg.time).created === 'number' ? (rec(msg.time).created as number) : undefined;
+        // The message id, or else the session and creation time: either way one prompt is sent once.
+        const textId = id ?? (created !== undefined ? `${sessionId}:${created}` : undefined);
+        if (textId && s.posted.has(textId)) return;
+        if (textId) { s.posted.add(textId); bounded(s.posted); }
+        if (id) { s.roles.set(id, 'user'); bounded(s.roles); s.held.delete(id); }
         const text = (output?.parts ?? []).map(rec).filter((p) => p.type === 'text' && !p.synthetic && !p.ignored).map((p) => str(p.text) ?? '').join('\n');
-        const at = typeof rec(msg.time).created === 'number' ? (rec(msg.time).created as number) : Date.now();
-        send(s, buildText('prompt', sessionId, at, text));
+        send(s, buildText('prompt', sessionId, created ?? Date.now(), text, textId));
       } catch { /* never into SkyForge */ }
     },
     event: async (input: { event?: unknown }) => {
@@ -124,19 +146,37 @@ export const LivemapSkyforge = async () => {
         const props = rec(e.properties);
         if (e.type === 'message.updated') {
           const info = rec(props.info);
-          if (str(info.id) && str(info.role)) { s.roles.set(info.id as string, info.role as string); bounded(s.roles); }
+          const id = str(info.id);
+          const role = str(info.role);
+          if (!id || !role) return;
+          s.roles.set(id, role);
+          bounded(s.roles);
+          // Text that finished before its message said whose it was: send it now, or drop a user's.
+          const waiting = s.held.get(id);
+          s.held.delete(id);
+          if (waiting && role === 'assistant') for (const part of waiting) sendPart(s, part, str(props.sessionID));
         } else if (e.type === 'message.part.updated') {
           const part = rec(props.part);
-          const end = rec(part.time).end;
           const id = str(part.id);
-          if (part.type !== 'text' || typeof end !== 'number' || !id || s.posted.has(id) || part.synthetic) return;
-          if (s.roles.get(str(part.messageID) ?? '') !== 'assistant') return;
-          s.posted.add(id);
-          bounded(s.posted);
-          send(s, buildText('message', str(part.sessionID) ?? str(props.sessionID) ?? '', end, str(part.text)));
+          const messageId = str(part.messageID);
+          if (part.type !== 'text' || typeof rec(part.time).end !== 'number' || !id || !messageId || s.posted.has(id) || part.synthetic) return;
+          const role = s.roles.get(messageId);
+          if (role === 'assistant') sendPart(s, part, str(props.sessionID));
+          else if (role === undefined) {
+            const list = s.held.get(messageId) ?? [];
+            if (!list.some((p) => p.id === id)) list.push({ ...part, ...(str(props.sessionID) && !str(part.sessionID) ? { sessionID: props.sessionID } : {}) });
+            s.held.set(messageId, list);
+            while (s.held.size > MAX_HELD) s.held.delete(s.held.keys().next().value as string);
+          }
         } else if (e.type === 'session.idle') {
           const sessionId = str(props.sessionID);
-          if (sessionId) send(s, buildText('idle', sessionId, Date.now()));
+          if (!sessionId) return;
+          const now = Date.now();
+          const last = s.idleAt.get(sessionId);
+          if (last !== undefined && now - last < IDLE_WINDOW_MS) return;
+          s.idleAt.set(sessionId, now);
+          bounded(s.idleAt);
+          send(s, buildText('idle', sessionId, now));
         }
       } catch { /* never into SkyForge */ }
     },

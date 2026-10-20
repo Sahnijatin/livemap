@@ -18,7 +18,7 @@ livemap export [dir=.] [--session ID] [--no-code] [--out FILE]
 livemap sn [dir=.] --scope NAMESPACE|SYS_ID [--instance NAME] [--nexus URL] [--port N] [--no-open] [--no-history] [--mirror-only]
 livemap mcp-proxy --upstream URL [--header NAME=VALUE]... [--timeout SEC] | --upstream-cmd "COMMAND"
 livemap sn install-plugin [--uninstall]
-livemap sn backfill-sessions --since DATE [--url URL] [--dry-run]
+livemap sn backfill-sessions --since DATE [--url URL] [--limit N] [--dry-run]
 ```
 
 `dir` is the project folder in every command. It defaults to the current folder. `-h` or `--help` prints the usage. Options that take a value also accept `=` (`--port=5000`, `--agents=claude`, `--out=shop.html`).
@@ -144,9 +144,10 @@ Sends SkyForge sessions from before the plugin was installed to the running `liv
 |---|---|---|
 | `--since DATE` | required | Only activity from this date (`2026-10-01`) or time (`2026-10-01T09:00`) on. |
 | `--url URL` | `http://127.0.0.1:4096` | SkyForge's local API. |
+| `--limit N` | `500` | Sends at most this many events, the newest. LiveMap keeps its latest 2,000 agent events in memory, and the default leaves room for the live ones. |
 | `--dry-run` | off | Counts what it would send, and sends nothing. |
 
-Start `livemap sn` first. LiveMap keeps the latest 2,000 agent events in memory, so a long backfill keeps the newest ones.
+Start `livemap sn` first. It prints how many events it found and sent, and how many older ones it left out. LiveMap keeps one copy of each tool call, prompt and message: running the backfill again, or over days the plugin already reported, adds nothing twice.
 
 ### Environment variables
 

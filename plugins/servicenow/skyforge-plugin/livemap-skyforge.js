@@ -247,6 +247,9 @@ var MAX_DEPTH = 32;
 var MAX_ERROR = 300;
 var norm = (k) => k.replace(/[_-]/g, "").toLowerCase();
 var isSecretKey = (k) => SECRET_KEY.test(norm(k)) || AUTH_KEYS.has(norm(k));
+var words = (k) => k.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase().split(/[_\-\s.]+/).filter(Boolean);
+var isAuthWordKey = (k) => words(k).includes("auth");
+var isFlag = (v) => typeof v === "boolean" || v === "true" || v === "false";
 var isScriptKey = (k) => SCRIPT_KEY.test(norm(k));
 var isSecretTable = (t) => !!t && SECRET_TABLE.test(t);
 var SECRET_TEXT = /\b([\w-]*(?:password2?|passwd|passphrase|pwd|token|secret|api[_-]?key|private[_-]?key|credentials?|cookie|authorization))(["']?\s*[:=]\s*["']?)([^\s"',;}&]+)/gi;
@@ -274,7 +277,7 @@ function redact(v, depth = 0) {
   const secretPair = !!pairName && isSecretKey(pairName);
   const out = {};
   for (const [k, x] of Object.entries(o)) {
-    if (isSecretKey(k) || secretPair && PAIR_VALUE_KEYS.includes(k)) out[k] = REDACTED;
+    if (isSecretKey(k) || secretPair && PAIR_VALUE_KEYS.includes(k) || isAuthWordKey(k) && !isFlag(x)) out[k] = REDACTED;
     else if (isScriptKey(k) || HEADER_KEYS.test(norm(k))) out[k] = namesOnly(x, depth + 1);
     else out[k] = redact(x, depth + 1);
   }
@@ -445,11 +448,11 @@ function buildCapture(call, ctx) {
   return ev;
 }
 var MAX_TEXT = 8e3;
-function buildText(kind, sessionId, at, text) {
+function buildText(kind, sessionId, at, text, textId) {
   if (kind === "idle") return { source: "skyforge-plugin", kind, sessionId, at };
   const t = text?.trim();
   if (!t) return void 0;
-  return { source: "skyforge-plugin", kind, sessionId, at, text: redactText(t.length > MAX_TEXT ? t.slice(0, MAX_TEXT) : t) };
+  return { source: "skyforge-plugin", kind, sessionId, at, text: redactText(t.length > MAX_TEXT ? t.slice(0, MAX_TEXT) : t), ...textId ? { textId } : {} };
 }
 
 // src/proxy/poster.ts
@@ -655,6 +658,8 @@ var rec3 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
 var str3 = (v) => typeof v === "string" && v ? v : void 0;
 var STATE = /* @__PURE__ */ Symbol.for("livemap.skyforge-plugin.v1");
 var MAX_KEEP = 2e3;
+var MAX_HELD = 200;
+var IDLE_WINDOW_MS = 2e3;
 function bounded(m) {
   while (m.size > MAX_KEEP) {
     const first = m.keys().next().value;
@@ -663,7 +668,7 @@ function bounded(m) {
 }
 function state() {
   const g = globalThis;
-  g[STATE] ??= { poster: new HookPoster(), calls: /* @__PURE__ */ new Map(), done: /* @__PURE__ */ new Set(), contexts: /* @__PURE__ */ new Map(), roles: /* @__PURE__ */ new Map(), posted: /* @__PURE__ */ new Set(), inits: 0 };
+  g[STATE] ??= { poster: new HookPoster(), calls: /* @__PURE__ */ new Map(), done: /* @__PURE__ */ new Set(), contexts: /* @__PURE__ */ new Map(), roles: /* @__PURE__ */ new Map(), posted: /* @__PURE__ */ new Set(), held: /* @__PURE__ */ new Map(), idleAt: /* @__PURE__ */ new Map(), inits: 0 };
   return g[STATE];
 }
 function debug(line) {
@@ -681,6 +686,14 @@ var isNexusTool = (name) => toolServer(name) === "nexus" || /^(sn_|tool_execute$
 var send = (s, e) => {
   if (e) s.poster.send(e);
 };
+function sendPart(s, part, sessionId) {
+  const id = str3(part.id);
+  const end = rec3(part.time).end;
+  if (!id || typeof end !== "number" || s.posted.has(id)) return;
+  s.posted.add(id);
+  bounded(s.posted);
+  send(s, buildText("message", str3(part.sessionID) ?? sessionId ?? "", end, str3(part.text), id));
+}
 var contextOf = (s, sessionId) => {
   let c = s.contexts.get(sessionId);
   if (!c) {
@@ -742,16 +755,21 @@ var LivemapSkyforge = async () => {
         const msg = rec3(output?.message);
         const id = str3(msg.id);
         const sessionId = str3(input?.sessionID) ?? str3(msg.sessionID);
-        if (!sessionId || id && s.posted.has(id)) return;
-        if (id) {
-          s.posted.add(id);
+        if (!sessionId) return;
+        const created = typeof rec3(msg.time).created === "number" ? rec3(msg.time).created : void 0;
+        const textId = id ?? (created !== void 0 ? `${sessionId}:${created}` : void 0);
+        if (textId && s.posted.has(textId)) return;
+        if (textId) {
+          s.posted.add(textId);
           bounded(s.posted);
+        }
+        if (id) {
           s.roles.set(id, "user");
           bounded(s.roles);
+          s.held.delete(id);
         }
         const text = (output?.parts ?? []).map(rec3).filter((p) => p.type === "text" && !p.synthetic && !p.ignored).map((p) => str3(p.text) ?? "").join("\n");
-        const at = typeof rec3(msg.time).created === "number" ? rec3(msg.time).created : Date.now();
-        send(s, buildText("prompt", sessionId, at, text));
+        send(s, buildText("prompt", sessionId, created ?? Date.now(), text, textId));
       } catch {
       }
     },
@@ -761,22 +779,36 @@ var LivemapSkyforge = async () => {
         const props = rec3(e.properties);
         if (e.type === "message.updated") {
           const info = rec3(props.info);
-          if (str3(info.id) && str3(info.role)) {
-            s.roles.set(info.id, info.role);
-            bounded(s.roles);
-          }
+          const id = str3(info.id);
+          const role = str3(info.role);
+          if (!id || !role) return;
+          s.roles.set(id, role);
+          bounded(s.roles);
+          const waiting = s.held.get(id);
+          s.held.delete(id);
+          if (waiting && role === "assistant") for (const part of waiting) sendPart(s, part, str3(props.sessionID));
         } else if (e.type === "message.part.updated") {
           const part = rec3(props.part);
-          const end = rec3(part.time).end;
           const id = str3(part.id);
-          if (part.type !== "text" || typeof end !== "number" || !id || s.posted.has(id) || part.synthetic) return;
-          if (s.roles.get(str3(part.messageID) ?? "") !== "assistant") return;
-          s.posted.add(id);
-          bounded(s.posted);
-          send(s, buildText("message", str3(part.sessionID) ?? str3(props.sessionID) ?? "", end, str3(part.text)));
+          const messageId = str3(part.messageID);
+          if (part.type !== "text" || typeof rec3(part.time).end !== "number" || !id || !messageId || s.posted.has(id) || part.synthetic) return;
+          const role = s.roles.get(messageId);
+          if (role === "assistant") sendPart(s, part, str3(props.sessionID));
+          else if (role === void 0) {
+            const list = s.held.get(messageId) ?? [];
+            if (!list.some((p) => p.id === id)) list.push({ ...part, ...str3(props.sessionID) && !str3(part.sessionID) ? { sessionID: props.sessionID } : {} });
+            s.held.set(messageId, list);
+            while (s.held.size > MAX_HELD) s.held.delete(s.held.keys().next().value);
+          }
         } else if (e.type === "session.idle") {
           const sessionId = str3(props.sessionID);
-          if (sessionId) send(s, buildText("idle", sessionId, Date.now()));
+          if (!sessionId) return;
+          const now = Date.now();
+          const last = s.idleAt.get(sessionId);
+          if (last !== void 0 && now - last < IDLE_WINDOW_MS) return;
+          s.idleAt.set(sessionId, now);
+          bounded(s.idleAt);
+          send(s, buildText("idle", sessionId, now));
         }
       } catch {
       }

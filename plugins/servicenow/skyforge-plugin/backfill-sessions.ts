@@ -9,7 +9,12 @@ import { HookPoster, isServiceNowRun, liveRuntimes } from '../../../src/proxy/po
 import { baseToolName, toolServer } from '../../../src/shared/tools.js';
 
 export const DEFAULT_SKYFORGE_URL = 'http://127.0.0.1:4096';
-export const BACKFILL_USAGE = 'Usage: livemap sn backfill-sessions --since DATE [--url URL] [--dry-run]';
+export const BACKFILL_USAGE = 'Usage: livemap sn backfill-sessions --since DATE [--url URL] [--limit N] [--dry-run]';
+/**
+ * Events sent per run by default. A tool call becomes two hub events and a prompt or message one, so 500 events
+ * stay within half of LiveMap's 2,000-event ring and never push out what the live session just recorded.
+ */
+export const DEFAULT_LIMIT = 500;
 const REQUEST_TIMEOUT_MS = 15_000;
 
 type Obj = Record<string, unknown>;
@@ -17,7 +22,7 @@ const rec = (v: unknown): Obj => (v && typeof v === 'object' && !Array.isArray(v
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
 
-export interface BackfillArgs { since: number; url: string; dryRun: boolean }
+export interface BackfillArgs { since: number; url: string; dryRun: boolean; limit?: number }
 
 /** A date (`2026-10-01`) or date-time (`2026-10-01T09:00`, local time unless it says otherwise). */
 export function parseSince(v: string): number | undefined {
@@ -29,6 +34,7 @@ export function parseBackfillArgs(argv: string[], onError: (m: string) => never)
   let since: number | undefined;
   let url = DEFAULT_SKYFORGE_URL;
   let dryRun = false;
+  let limit = DEFAULT_LIMIT;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const eq = a.indexOf('=');
@@ -36,11 +42,12 @@ export function parseBackfillArgs(argv: string[], onError: (m: string) => never)
     const take = () => { const v = inline ?? argv[++i]; return v === undefined || (inline === undefined && v.startsWith('--')) ? onError(`${flag} needs a value`) : v; };
     if (flag === '--since') { const v = take(); since = parseSince(v); if (since === undefined) onError(`invalid --since date: ${v}`); }
     else if (flag === '--url') { url = take().replace(/\/+$/, ''); try { new URL(url); } catch { onError(`invalid --url: ${url}`); } }
+    else if (flag === '--limit') { const v = take(); if (!/^\d+$/.test(v) || Number(v) < 1) onError(`invalid --limit: ${v}`); limit = Number(v); }
     else if (a === '--dry-run') dryRun = true;
     else onError(`unknown option: ${a}`);
   }
   if (since === undefined) onError('--since is required (a date like 2026-10-01)');
-  return { since: since as number, url, dryRun };
+  return { since: since as number, url, dryRun, limit };
 }
 
 export interface SessionRef { id: string; instance?: string; source?: string }
@@ -79,14 +86,16 @@ export function sessionEvents(sessionId: string, messages: unknown, since: numbe
     const created = num(rec(info.time).created) ?? 0;
     if (role === 'user') {
       const text = parts.map(rec).filter((p) => p.type === 'text' && !p.synthetic && !p.ignored).map((p) => str(p.text) ?? '').join('\n');
-      if (created >= since) items.push({ at: created, build: () => buildText('prompt', sessionId, created, text) });
+      // Same text id as the plugin sends live (the message id, else session and time), so LiveMap keeps one copy.
+      const textId = str(info.id) ?? `${sessionId}:${created}`;
+      if (created >= since) items.push({ at: created, build: () => buildText('prompt', sessionId, created, text, textId) });
       continue;
     }
     for (const raw of parts) {
       const p = rec(raw);
       if (p.type === 'text' && !p.synthetic) {
         const end = num(rec(p.time).end);
-        if (end !== undefined && end >= since) items.push({ at: end, build: () => buildText('message', sessionId, end, str(p.text)) });
+        if (end !== undefined && end >= since) items.push({ at: end, build: () => buildText('message', sessionId, end, str(p.text), str(p.id)) });
         continue;
       }
       if (p.type !== 'tool') continue;
@@ -126,9 +135,19 @@ async function getJson(url: string): Promise<unknown> {
   }
 }
 
-export interface BackfillResult { sessions: number; calls: number; prompts: number; messages: number; sent: number }
+export interface BackfillResult {
+  /** Sessions with activity since the date. */
+  sessions: number;
+  /** Events found, and how many were sent (the newest, up to the limit). */
+  found: number; sent: number;
+  /** What was sent, by kind. */
+  calls: number; prompts: number; messages: number;
+}
 
-/** Reads the sessions and sends their events. `send` is the delivery (a poster to the running LiveMap). */
+/**
+ * Reads the sessions and sends their events, oldest first, keeping only the newest `limit` (default 500).
+ * `send` is the delivery (a poster to the running LiveMap). LiveMap drops events it already has.
+ */
 export async function backfillSessions(args: BackfillArgs, send: (e: CaptureEvent | TextEvent) => void, get: (url: string) => Promise<unknown> = getJson): Promise<BackfillResult> {
   let refs: SessionRef[];
   try {
@@ -137,18 +156,23 @@ export async function backfillSessions(args: BackfillArgs, send: (e: CaptureEven
     // An older build without analytics: every session, with no instance.
     refs = sessionsOf(await get(`${args.url}/session`));
   }
-  const r: BackfillResult = { sessions: 0, calls: 0, prompts: 0, messages: 0, sent: 0 };
+  const all: { at: number; e: CaptureEvent | TextEvent }[] = [];
+  let sessions = 0;
   for (const ref of refs) {
     let messages: unknown;
     try { messages = await get(`${args.url}/session/${encodeURIComponent(ref.id)}/message`); } catch { continue; }
     const events = sessionEvents(ref.id, messages, args.since, ref.instance);
     if (!events.length) continue;
-    r.sessions++;
-    for (const e of events) {
-      if ('kind' in e) { if (e.kind === 'prompt') r.prompts++; else if (e.kind === 'message') r.messages++; } else r.calls++;
-      send(e);
-      r.sent++;
-    }
+    sessions++;
+    for (const e of events) all.push({ at: 'kind' in e ? e.at : e.start, e });
+  }
+  all.sort((x, y) => x.at - y.at);
+  const keep = all.slice(Math.max(0, all.length - (args.limit ?? DEFAULT_LIMIT)));
+  const r: BackfillResult = { sessions, found: all.length, sent: 0, calls: 0, prompts: 0, messages: 0 };
+  for (const { e } of keep) {
+    if ('kind' in e) { if (e.kind === 'prompt') r.prompts++; else if (e.kind === 'message') r.messages++; } else r.calls++;
+    send(e);
+    r.sent++;
   }
   return r;
 }
@@ -169,6 +193,11 @@ export async function runBackfillSessions(argv: string[]): Promise<void> {
   }
   await poster.flushed();
   const since = new Date(args.since).toISOString().slice(0, 10);
-  say(`Read ${r!.sessions} SkyForge sessions with activity since ${since}: ${r!.calls} tool calls, ${r!.prompts} prompts, ${r!.messages} messages.`);
-  say(args.dryRun ? 'Dry run: nothing was sent.' : `Sent ${r!.sent} events to LiveMap (${runs.map((x) => x.root).join(', ')}).`);
+  const res = r!;
+  say(`Read ${res.sessions} SkyForge sessions with activity since ${since}: ${res.found} events.`);
+  const what = `${res.calls} tool calls, ${res.prompts} prompts, ${res.messages} messages`;
+  const left = res.found - res.sent;
+  const cut = left > 0 ? ` The ${left} older events were left out (--limit ${args.limit ?? DEFAULT_LIMIT}); use a later --since or a larger --limit.` : '';
+  if (args.dryRun) say(`Dry run: would send ${res.sent} events (${what}). Nothing was sent.${cut}`);
+  else say(`Sent ${res.sent} events (${what}) to LiveMap (${runs.map((x) => x.root).join(', ')}). Events LiveMap already had are kept once.${cut}`);
 }

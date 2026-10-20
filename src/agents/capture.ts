@@ -101,10 +101,39 @@ function textEvents(v: Obj, agent: AgentKind, now: number): RawAgentEvent[] {
   return [{ agent, sessionId, at, type: v.kind as 'prompt' | 'message', text }];
 }
 
-/** Records one capture in the hub. Returns false when it was ignored. */
+/** Captures each hub has already recorded, by key, so a repeat (a backfill of sessions the plugin saw live) is dropped. */
+const seen = new WeakMap<AgentHub, Set<string>>();
+/** Keys kept per hub; past this the oldest are forgotten. Well above the hub's 2,000-event ring. */
+export const MAX_SEEN = 20_000;
+
+/**
+ * The identity of a capture: source, session and call id for a tool call, or the text id (message or part id)
+ * for a prompt or message. Idle events and text without an id have none and are never treated as repeats.
+ */
+export function captureKey(v: Obj): string | undefined {
+  const source = str(v.source);
+  const sessionId = str(v.sessionId);
+  if (!source || !sessionId) return undefined;
+  if (typeof v.kind === 'string') {
+    const textId = str(v.textId);
+    return textId && TEXT_KINDS.has(v.kind) ? `${source}\u0000${sessionId}\u0000text\u0000${textId}` : undefined;
+  }
+  const callId = str(v.callId);
+  return callId ? `${source}\u0000${sessionId}\u0000call\u0000${callId}` : undefined;
+}
+
+/** Records one capture in the hub. Returns false when it was ignored (malformed, LiveMap's own, or a repeat). */
 export function ingestCapture(hub: AgentHub, v: Obj, now: number = Date.now()): boolean {
+  const key = captureKey(v);
+  let keys = seen.get(hub);
+  if (!keys) { keys = new Set(); seen.set(hub, keys); }
+  if (key && keys.has(key)) return false;
   const events = captureEvents(v, now);
   if (!events.length) return false;
+  if (key) {
+    keys.add(key);
+    if (keys.size > MAX_SEEN) keys.delete(keys.values().next().value as string);
+  }
   hub.ingestRaw(events, { agent: events[0].agent, cwd: '', hooks: true });
   return true;
 }

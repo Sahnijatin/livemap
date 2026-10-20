@@ -179,7 +179,8 @@ describe('prompts, messages and idle', () => {
     await until(() => bodies.length === 3);
     await quiet();
     expect(bodies.map((b) => [b.kind, b.text])).toEqual([['prompt', 'Build the offer widget, password=[redacted]'], ['message', 'Creating the widget now.'], ['idle', undefined]]);
-    expect(bodies[0]).toEqual(buildText('prompt', 'ses_7', 1000, 'Build the offer widget, password=abc'));
+    expect(bodies[0]).toEqual(buildText('prompt', 'ses_7', 1000, 'Build the offer widget, password=abc', 'msg_u'));
+    expect(bodies[1]).toMatchObject({ kind: 'message', textId: 'p1' });
     const evs = captureEvents(bodies[0], Date.now());
     expect(evs).toEqual([{ agent: 'skyforge', sessionId: 'ses_7', at: 1000, type: 'prompt', text: 'Build the offer widget, password=[redacted]' }]);
   });
@@ -236,5 +237,47 @@ describe('fail open', () => {
     for (const name of Object.keys(h)) {
       for (const a of junk) for (const b of junk) await expect(h[name](a as never, b as never)).resolves.toBeUndefined();
     }
+  });
+});
+
+describe('text ids, idle and late roles', () => {
+  it('a prompt with no message id falls back to session and time, and is sent once', async () => {
+    const h = await mod.LivemapSkyforge();
+    const out = { message: { sessionID: 'ses_11', role: 'user', time: { created: 5000 } }, parts: [{ type: 'text', text: 'hello' }] };
+    await h['chat.message']({ sessionID: 'ses_11' }, out);
+    await h['chat.message']({ sessionID: 'ses_11' }, out);
+    await until(() => bodies.length >= 1);
+    await quiet();
+    expect(bodies).toEqual([{ source: 'skyforge-plugin', kind: 'prompt', sessionId: 'ses_11', at: 5000, text: 'hello', textId: 'ses_11:5000' }]);
+  });
+
+  it('one idle per session within a short window', async () => {
+    const h = await mod.LivemapSkyforge();
+    for (let i = 0; i < 3; i++) await h.event({ event: { type: 'session.idle', properties: { sessionID: 'ses_12' } } });
+    await h.event({ event: { type: 'session.idle', properties: { sessionID: 'ses_13' } } });
+    await until(() => bodies.length >= 2);
+    await quiet();
+    expect(bodies.map((b) => [b.kind, b.sessionId])).toEqual([['idle', 'ses_12'], ['idle', 'ses_13']]);
+  });
+
+  it('assistant text that finished before its role arrived is sent when the role arrives', async () => {
+    const h = await mod.LivemapSkyforge();
+    const part = { id: 'p20', sessionID: 'ses_14', messageID: 'msg_late', type: 'text', text: 'Done with the widget.', time: { start: 1, end: 2 } };
+    await h.event({ event: { type: 'message.part.updated', properties: { sessionID: 'ses_14', part } } });
+    await quiet();
+    expect(bodies).toEqual([]);
+    await h.event({ event: { type: 'message.updated', properties: { sessionID: 'ses_14', info: { id: 'msg_late', role: 'assistant' } } } });
+    await h.event({ event: { type: 'message.updated', properties: { sessionID: 'ses_14', info: { id: 'msg_late', role: 'assistant' } } } });
+    await until(() => bodies.length >= 1);
+    await quiet();
+    expect(bodies).toEqual([{ source: 'skyforge-plugin', kind: 'message', sessionId: 'ses_14', at: 2, text: 'Done with the widget.', textId: 'p20' }]);
+  });
+
+  it('held text of a message that turns out to be the user\'s is dropped', async () => {
+    const h = await mod.LivemapSkyforge();
+    await h.event({ event: { type: 'message.part.updated', properties: { part: { id: 'p21', sessionID: 'ses_15', messageID: 'msg_u3', type: 'text', text: 'mine', time: { start: 1, end: 2 } } } } });
+    await h.event({ event: { type: 'message.updated', properties: { info: { id: 'msg_u3', role: 'user' } } } });
+    await quiet();
+    expect(bodies).toEqual([]);
   });
 });

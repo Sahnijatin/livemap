@@ -9,7 +9,9 @@ import { fileURLToPath } from 'node:url';
 import { installPlugin, pluginTarget } from '../../plugins/servicenow/skyforge-plugin/install.js';
 import { backfillSessions, parseBackfillArgs, parseSince, sessionEvents, sessionsOf } from '../../plugins/servicenow/skyforge-plugin/backfill-sessions.js';
 import type { CaptureEvent, TextEvent } from '../../src/proxy/capture.js';
-import { captureEvents } from '../../src/agents/capture.js';
+import { captureEvents, captureKey, ingestCapture } from '../../src/agents/capture.js';
+import { AgentHub } from '../../src/agents/hub.js';
+import { buildCapture, buildText, SessionContext } from '../../src/proxy/capture.js';
 import { buildOnce } from '../build.js';
 import { withHome } from '../helpers/platform.js';
 
@@ -182,12 +184,62 @@ describe('livemap sn backfill-sessions', () => {
       }
     };
     const a = await run(true);
-    expect(a.r).toEqual({ sessions: 1, calls: 3, prompts: 1, messages: 1, sent: 5 });
+    expect(a.r).toEqual({ sessions: 1, found: 5, sent: 5, calls: 3, prompts: 1, messages: 1 });
     expect((a.sent[2] as CaptureEvent).instance).toBe('devtest');
     const b = await run(false);
     expect(b.r.calls).toBe(3);
     expect((b.sent[2] as CaptureEvent).instance).toBeUndefined();
     expect(seen.every((x) => x.startsWith('GET '))).toBe(true);
     expect(seen).not.toContain('GET /session/ses_m/message');
+  });
+});
+
+describe('no duplicates', () => {
+  const T0 = Date.UTC(2026, 9, 10, 9, 0, 0);
+  const hubs: AgentHub[] = [];
+  afterEach(() => { for (const h of hubs.splice(0)) h.stop(); });
+  const newHub = () => { const h = new AgentHub('/p/.livemap/sn'); hubs.push(h); return h; };
+  const asObj = (e: unknown) => JSON.parse(JSON.stringify(e)) as Record<string, unknown>;
+
+  it('a live capture plus its backfilled copy gives one pair, and a second backfill adds nothing', () => {
+    const hub = newHub();
+    const msgs = messages(T0);
+    const toolPart = (msgs[1].parts as { callID?: string; tool?: string; state?: { input: unknown; output: string; time: { start: number; end: number } } }[])[2];
+    // What the plugin sent live for that call, and for the prompt and the assistant text.
+    const live = buildCapture({ source: 'skyforge-plugin', client: { name: 'skyforge' }, sessionId: 'ses_a', callId: toolPart.callID as string, name: toolPart.tool as string, args: toolPart.state!.input, result: { content: [{ type: 'text', text: toolPart.state!.output }] }, start: T0 + 3000, end: T0 + 3400 }, new SessionContext());
+    expect(ingestCapture(hub, asObj(live))).toBe(true);
+    expect(ingestCapture(hub, asObj(buildText('prompt', 'ses_a', T0, 'Build the card offer widget', 'm1')))).toBe(true);
+    expect(ingestCapture(hub, asObj(buildText('message', 'ses_a', T0 + 1500, 'Making the update set first.', 'p2')))).toBe(true);
+    for (let run = 0; run < 2; run++) for (const e of sessionEvents('ses_a', msgs, T0, 'devtest')) ingestCapture(hub, asObj(e));
+    const evs = hub.events();
+    const count = (f: (e: (typeof evs)[number]) => boolean) => evs.filter(f).length;
+    expect(count((e) => e.tool?.id === 'call_2')).toBe(2);
+    expect(count((e) => e.type === 'tool_start')).toBe(3);
+    expect(count((e) => e.type === 'prompt')).toBe(1);
+    expect(count((e) => e.type === 'message')).toBe(1);
+  });
+
+  it('keys by source, session and call or text id; idle and id-less text are never treated as repeats', () => {
+    expect(captureKey({ source: 'skyforge-plugin', sessionId: 's', callId: 'c' })).not.toBe(captureKey({ source: 'mcp-proxy', sessionId: 's', callId: 'c' }));
+    expect(captureKey({ source: 'skyforge-plugin', sessionId: 's', kind: 'idle' })).toBeUndefined();
+    expect(captureKey({ source: 'skyforge-plugin', sessionId: 's', kind: 'message', text: 'x' })).toBeUndefined();
+    const hub = newHub();
+    const idle = { source: 'skyforge-plugin', sessionId: 's', kind: 'idle', at: T0 };
+    expect(ingestCapture(hub, idle)).toBe(true);
+    expect(ingestCapture(hub, { ...idle, at: T0 + 60_000 })).toBe(true);
+  });
+
+  it('a prompt with no message id gets the same id live and backfilled (session and time)', () => {
+    const msgs = [{ info: { sessionID: 'ses_b', role: 'user', time: { created: T0 } }, parts: [{ type: 'text', text: 'hi' }] }];
+    expect((sessionEvents('ses_b', msgs, 0)[0] as TextEvent).textId).toBe(`ses_b:${T0}`);
+  });
+
+  it('--limit keeps the newest events and says how many were found', async () => {
+    const sent: unknown[] = [];
+    const get = async (url: string) => (url.endsWith('/api/analytics/sessions') ? [{ id: 'ses_a', instance: 'devtest' }] : messages(T0));
+    const r = await backfillSessions({ since: T0, url: 'http://x', dryRun: false, limit: 2 }, (e) => sent.push(e), get);
+    expect(r).toMatchObject({ found: 5, sent: 2, calls: 2, prompts: 0, messages: 0 });
+    expect(sent.map((e) => (e as CaptureEvent).start)).toEqual([T0 + 3000, T0 + 4000]);
+    expect(parseBackfillArgs(['--since', '2026-10-01'], (m) => { throw new Error(m); }).limit).toBe(500);
   });
 });

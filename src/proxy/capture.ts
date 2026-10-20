@@ -31,6 +31,11 @@ const MAX_ERROR = 300;
 
 const norm = (k: string) => k.replace(/[_-]/g, '').toLowerCase();
 export const isSecretKey = (k: string): boolean => SECRET_KEY.test(norm(k)) || AUTH_KEYS.has(norm(k));
+/** The words of a key: `basic_auth`, `proxyAuth` and `auth-string` all have the word `auth`. */
+const words = (k: string): string[] => k.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().split(/[_\-\s.]+/).filter(Boolean);
+/** A key with the word `auth` (`basic_auth`, `http_auth`, `auth_string`): its value is a secret unless it is a plain flag. */
+const isAuthWordKey = (k: string): boolean => words(k).includes('auth');
+const isFlag = (v: unknown): boolean => typeof v === 'boolean' || v === 'true' || v === 'false';
 export const isScriptKey = (k: string): boolean => SCRIPT_KEY.test(norm(k));
 export const isSecretTable = (t: string | undefined): boolean => !!t && SECRET_TABLE.test(t);
 
@@ -68,7 +73,7 @@ export function redact(v: unknown, depth = 0): unknown {
   const secretPair = !!pairName && isSecretKey(pairName);
   const out: Obj = {};
   for (const [k, x] of Object.entries(o)) {
-    if (isSecretKey(k) || (secretPair && PAIR_VALUE_KEYS.includes(k))) out[k] = REDACTED;
+    if (isSecretKey(k) || (secretPair && PAIR_VALUE_KEYS.includes(k)) || (isAuthWordKey(k) && !isFlag(x))) out[k] = REDACTED;
     else if (isScriptKey(k) || HEADER_KEYS.test(norm(k))) out[k] = namesOnly(x, depth + 1);
     else out[k] = redact(x, depth + 1);
   }
@@ -325,15 +330,17 @@ export interface TextEvent {
   sessionId: string;
   at: number;
   text?: string;
+  /** The message or part id, so LiveMap records a prompt or message once however often it is sent. */
+  textId?: string;
 }
 
 /** Longest text sent for one prompt or message. */
 export const MAX_TEXT = 8000;
 
 /** A text event with its secrets cut out and its length capped; undefined when there is no text to send. */
-export function buildText(kind: TextEvent['kind'], sessionId: string, at: number, text?: string): TextEvent | undefined {
+export function buildText(kind: TextEvent['kind'], sessionId: string, at: number, text?: string, textId?: string): TextEvent | undefined {
   if (kind === 'idle') return { source: 'skyforge-plugin', kind, sessionId, at };
   const t = text?.trim();
   if (!t) return undefined;
-  return { source: 'skyforge-plugin', kind, sessionId, at, text: redactText(t.length > MAX_TEXT ? t.slice(0, MAX_TEXT) : t) };
+  return { source: 'skyforge-plugin', kind, sessionId, at, text: redactText(t.length > MAX_TEXT ? t.slice(0, MAX_TEXT) : t), ...(textId ? { textId } : {}) };
 }
