@@ -58,11 +58,15 @@ const LIST_W = 288;
 /** The smallest zoom a first fit uses; cards are unreadable below it. */
 const MIN_FIT = 0.45;
 
-/** The layout direction for the pane and whether it is narrow, read before the first paint and again after resizes settle. */
-function usePaneDirection(): [RefObject<HTMLDivElement>, Direction | null, boolean] {
+/**
+ * The layout direction for the pane, whether it is narrow, and its size (`w`x`h`), read before the first paint and
+ * again after resizes settle.
+ */
+function usePaneDirection(): [RefObject<HTMLDivElement>, Direction | null, boolean, string] {
   const ref = useRef<HTMLDivElement>(null);
   const [dir, setDir] = useState<Direction | null>(null);
   const [narrow, setNarrow] = useState(false);
+  const [size, setSize] = useState('0x0');
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -71,6 +75,7 @@ function usePaneDirection(): [RefObject<HTMLDivElement>, Direction | null, boole
       // Same value: React skips the render, so steady resizes never re-lay out.
       setDir(d => layoutDirection(r.width, r.height, d ?? laidOut ?? 'RIGHT'));
       setNarrow(r.width > 0 && r.width < NARROW_PANE);
+      setSize(`${Math.round(r.width)}x${Math.round(r.height)}`);
     };
     read();
     if (typeof ResizeObserver !== 'function') return;
@@ -82,7 +87,7 @@ function usePaneDirection(): [RefObject<HTMLDivElement>, Direction | null, boole
     ro.observe(el);
     return () => { ro.disconnect(); window.clearTimeout(t); };
   }, []);
-  return [ref, dir, narrow];
+  return [ref, dir, narrow, size];
 }
 
 /** Cards in a plain grid, for tables ELK could not place (the worker failed, crashed or timed out). */
@@ -128,7 +133,9 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
   const rf = useReactFlow();
   const initialized = useNodesInitialized();
   const fitted = useRef(savedViewport !== null);
-  const [paneRef, dir, narrow] = usePaneDirection();
+  /** The first fit until React Flow has run it. */
+  const fitting = useRef<Promise<unknown>>(Promise.resolve());
+  const [paneRef, dir, narrow, paneSize] = usePaneDirection();
   const [focused, setFocused] = useState<string | null>(null);
   const focusedRef = useRef(focused);
   focusedRef.current = focused;
@@ -214,8 +221,8 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
         if (turned) {
           if (laidOut !== null) {
             savedViewport = null;
-            // A focused table is shown again in the new layout; otherwise everything is fitted again.
-            if (focusedRef.current) pending.current = focusedRef.current;
+            // A focused table is framed again in the new layout; otherwise everything is fitted again.
+            if (focusedRef.current) target.current = { key: focusedRef.current, at: null };
             else fitted.current = false;
           }
           laidOut = dir;
@@ -345,26 +352,31 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
 
   // Focus (the table list or the palette): mark the table, zoom to it and its direct relations, and pulse it; one
   // beyond the cap turns on "Show all" first. Requests made before this mount (another tab) are not replayed.
+  // The framing waits for the table's position and is done again whenever the pane settles at another size (the
+  // full-screen list closing, a phone's toolbar), until the user moves the camera; the first fit never overrides it.
   const tableFocus = useStore(s => s.tableFocus);
   const focusSeq = useRef(tableFocus?.seq ?? 0);
-  const pending = useRef<string | null>(null);
+  /** The table to keep framed, and the pane it was last framed in (null: not framed yet). */
+  const target = useRef<{ key: string; at: string | null } | null>(null);
   useEffect(() => {
     if (tableFocus && tableFocus.seq > focusSeq.current) {
       focusSeq.current = tableFocus.seq;
       const k = tableFocus.key;
       if (tables.some(t => tableKey(t) === k)) {
-        pending.current = k;
+        target.current = { key: k, at: null };
         setFocused(k);
         if (!all && !latest.current.some(t => tableKey(t) === k)) setAll(true);
         // On a narrow pane the list covers the canvas: show the canvas, for this view only.
         if (narrow) setShowList(false);
       }
     }
-    const k = pending.current;
-    const p = k ? pos.get(k) : undefined;
-    if (!k || !p) return;
-    pending.current = null;
-    // A focus made before the first fit (a pick while the layout ran) wins over it.
+    const t = target.current;
+    const p = t ? pos.get(t.key) : undefined;
+    const at = `${paneSize}:${beside}`;
+    if (!t || !p || t.at === at) return;
+    const k = t.key;
+    const first = t.at === null;
+    t.at = at;
     fitted.current = true;
     const h = (key: string) => rf.getNode(key)?.measured?.height ?? 160;
     const pane = paneRef.current?.getBoundingClientRect();
@@ -382,13 +394,20 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
       };
       let f = frame([k, ...links.flatMap(l => (l.from === k ? [l.to] : l.to === k ? [l.from] : []))]);
       if (f.zoom < 0.55) f = { ...frame([k]), zoom: 0.8 };
-      void rf.setViewport({ x: left + 24 + w / 2 - f.cx * f.zoom, y: 24 + ht / 2 - f.cy * f.zoom, zoom: f.zoom }, { duration: motion(500) });
+      const vp = { x: left + 24 + w / 2 - f.cx * f.zoom, y: 24 + ht / 2 - f.cy * f.zoom, zoom: f.zoom };
+      // After a first fit still queued in React Flow, which would otherwise land on top of this.
+      void fitting.current.then(() => { if (target.current === t) void rf.setViewport(vp, { duration: motion(first ? 500 : 0) }); });
     }
-    setPulse(k);
-  }, [tableFocus, pos, tables, all, rf, links, beside, paneRef, narrow]);
+    if (first) setPulse(k);
+  }, [tableFocus, pos, tables, all, rf, links, beside, paneRef, narrow, paneSize]);
+  // Without a focus there is nothing to keep framed.
+  useEffect(() => {
+    if (!focused) target.current = null;
+  }, [focused]);
   // A focused table no longer drawn (it left the schema, or "Show top 150" hid it) is no longer focused.
   useEffect(() => {
-    if (focused && pending.current !== focused && !visible.some(t => tableKey(t) === focused)) setFocused(null);
+    const waiting = target.current?.key === focused && target.current.at === null;
+    if (focused && !waiting && !visible.some(t => tableKey(t) === focused)) setFocused(null);
   }, [focused, visible]);
   useEffect(() => {
     if (!pulse) return;
@@ -397,17 +416,19 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
   }, [pulse]);
 
   // Fit once, when the first cards have been measured (and again after the pane turns); afterwards the
-  // user's pan and zoom are kept.
+  // user's pan and zoom are kept. React Flow runs a fitView at its next node update, so `fitting` lets a focus
+  // made meanwhile wait for it instead of being undone by it.
   useEffect(() => {
     if (fitted.current || !initialized || !nodes.length) return;
     fitted.current = true;
+    if (target.current) return;
     // Never fit smaller than a readable zoom; a large schema that would fit smaller starts on its biggest linked group.
     const pane = paneRef.current?.getBoundingClientRect();
     let only: { id: string }[] | undefined;
     if (visible.length > LARGE && pane && pane.width > 0 && fitZoom(visible, pos, pane.width - (beside ? LIST_W : 0), pane.height) < MIN_FIT) {
       only = mainGroup(groups ?? schemaGroups(visible, links)).map(id => ({ id }));
     }
-    rf.fitView({ nodes: only, padding, maxZoom: 1, minZoom: MIN_FIT, duration: 0 });
+    fitting.current = rf.fitView({ nodes: only, padding, maxZoom: 1, minZoom: MIN_FIT, duration: 0 }).catch(() => false);
   }, [initialized, nodes, rf, paneRef, beside, visible, pos, padding, groups, links]);
 
   const onNodesChange = useCallback((changes: NodeChange<TableFlowNode>[]) => {
@@ -444,6 +465,8 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
           onNodeMouseEnter={(_, n) => setHover(n.id)}
           onNodeMouseLeave={() => setHover(null)}
           onPaneClick={() => setFocused(null)}
+          // A camera the user moves (pan, zoom, pinch) is theirs: the focus is no longer framed again.
+          onMoveStart={e => { if (e) target.current = null; }}
           onMoveEnd={(_, vp) => { savedViewport = vp; }}
           defaultViewport={savedViewport ?? undefined}
           nodesConnectable={false}

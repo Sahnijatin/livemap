@@ -495,6 +495,42 @@ describe('SchemaView table list', () => {
     }
   });
 
+  it('a focus is framed again when the pane settles to its final size', async () => {
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: q.includes('prefers-reduced-motion'), media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }));
+    let pane = { width: 390, height: 900 };
+    const observed: { cb: ResizeObserverCallback; el?: Element }[] = [];
+    vi.stubGlobal('ResizeObserver', class {
+      private entry: { cb: ResizeObserverCallback; el?: Element };
+      constructor(cb: ResizeObserverCallback) { this.entry = { cb }; observed.push(this.entry); }
+      observe(el: Element) { this.entry.el = el; }
+      unobserve() {}
+      disconnect() {}
+    });
+    const realRect = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      return this.classList.contains('sv-canvas') ? ({ x: 0, y: 0, top: 0, left: 0, right: pane.width, bottom: pane.height, ...pane } as DOMRect) : realRect.call(this);
+    };
+    // The card's vertical center on the pane (an unmeasured card counts as 160 px tall).
+    const cy = (k: string) => {
+      const m = /translate\(([-\d.e]+)px,\s*([-\d.e]+)px\)\s*scale\(([-\d.e]+)\)/.exec(host.querySelector<HTMLElement>('.react-flow__viewport')!.style.transform)!;
+      return (posOf(k)!.y + 80) * Number(m[3]) + Number(m[2]);
+    };
+    try {
+      await mount(family(LARGE + 4, 'Size'));
+      await act(async () => useStore.getState().focusTable('sizekid2'));
+      await settleLayout();
+      expect(Math.abs(cy('sizekid2') - (24 + (900 - 96) / 2))).toBeLessThan(1);
+      // The pane shrinks once the page settles (a phone's toolbar, a panel): the focused card is framed again.
+      pane = { width: 390, height: 600 };
+      act(() => { for (const o of observed) if (o.el?.classList.contains('sv-canvas')) o.cb([], {} as ResizeObserver); });
+      await act(async () => { await new Promise(r => setTimeout(r, TURN_DEBOUNCE + 30)); });
+      await settleLayout();
+      expect(Math.abs(cy('sizekid2') - (24 + (600 - 96) / 2))).toBeLessThan(1);
+    } finally {
+      Element.prototype.getBoundingClientRect = realRect;
+    }
+  });
+
   it('on a narrow pane any focus shows the canvas, and the list is the main view again next time', async () => {
     const realRect = Element.prototype.getBoundingClientRect;
     Element.prototype.getBoundingClientRect = function (this: Element) {

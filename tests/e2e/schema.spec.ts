@@ -125,3 +125,14 @@ test('phone: the list is the main view; a pick shows the table on the canvas', a
   await page.getByRole('button', { name: 'Diagram' }).click();
   await expect(page.locator('.sv-list')).toHaveCount(0);
 });
+
+test('phone: a pick framed while the pane is still settling is framed again at its final size', async ({ page }) => {
+  // A tall page that shrinks right after the pick, as the pane does when the page is still settling.
+  await page.setViewportSize({ width: 390, height: 2400 });
+  await openSchema(page);
+  await expect(page.locator('.sv-list')).toHaveClass(/\bover\b/);
+  await row(page, 'fam5item0').click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(node(page, 'fam5item0')).toHaveClass(/\bfocus\b/);
+  await expect(node(page, 'fam5item0')).toBeInViewport();
+});
