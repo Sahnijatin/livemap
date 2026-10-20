@@ -59,7 +59,7 @@ jobs:
           path: test-results/
           if-no-files-found: ignore
 
-  # Docs, size budget, browser e2e and the packed-tarball smoke test once, on Ubuntu with Node 22.
+  # Docs, licenses, size budget, browser e2e and the packed-tarball smoke test once, on Ubuntu with Node 22.
   e2e:
     name: E2E, docs, budget and smoke (ubuntu, Node 22)
     runs-on: ubuntu-latest
@@ -77,6 +77,8 @@ jobs:
       - run: npm --prefix ui ci
       - run: npm run build
       - run: npm run docs:check
+      # Every shipped package's license is on the allowlist in scripts/notices.mjs.
+      - run: npm run licenses:check
       - run: npm run budget
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e

@@ -61,11 +61,14 @@ async function serve(bin, fixture) {
 }
 
 async function main() {
-  for (const built of ['dist/grammars', 'dist/ui-export/index.html']) {
+  for (const built of ['dist/grammars', 'dist/ui-export/index.html', 'dist/THIRD_PARTY_NOTICES.md', 'dist/ui/THIRD_PARTY_NOTICES.md', 'dist/ui-export/THIRD_PARTY_NOTICES.md']) {
     check(fs.existsSync(path.join(repo, built)), `${built} is missing; run npm run build first`);
   }
   const [packed] = JSON.parse(execFileSync(npm, ['pack', '--json', '--pack-destination', tmp], { cwd: repo, encoding: 'utf8' }));
   const tarball = path.join(tmp, packed.filename);
+  for (const notices of ['dist/THIRD_PARTY_NOTICES.md', 'dist/ui/THIRD_PARTY_NOTICES.md', 'dist/ui-export/THIRD_PARTY_NOTICES.md']) {
+    check(packed.files.some((f) => f.path === notices), `the package does not include ${notices}`);
+  }
   console.log(`smoke: ${packed.filename}: ${packed.entryCount} files, ${mb(packed.size)} packed, ${mb(packed.unpackedSize)} unpacked`);
 
   const app = path.join(tmp, 'app');

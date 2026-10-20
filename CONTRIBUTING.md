@@ -29,7 +29,7 @@ Run these from the repo root. `npm run build` installs the UI's dependencies fir
 | Command | What it does |
 |---|---|
 | `npm install` | Installs the engine's dependencies. |
-| `npm run build` | Builds the CLI and hook script into `dist/`, the parser grammars into `dist/grammars/`, the UI into `dist/ui/` and the export page into `dist/ui-export/`. |
+| `npm run build` | Builds the CLI and hook script into `dist/`, the parser grammars into `dist/grammars/`, the UI into `dist/ui/`, the export page into `dist/ui-export/`, and `THIRD_PARTY_NOTICES.md` into `dist/`, `dist/ui/` and `dist/ui-export/`. |
 | `node dist/cli.js [dir]` | Runs the built CLI without `npm link`. |
 | `npm test` | Engine, server and CLI unit tests (Vitest). The CLI tests run `npm run build` once first; with `LIVEMAP_TEST_PREBUILT=1` they use an existing `dist/` instead (CI sets it after its build step). |
 | `npm --prefix ui test` | UI unit tests (Vitest with jsdom). |
@@ -38,11 +38,12 @@ Run these from the repo root. `npm run build` installs the UI's dependencies fir
 | `npm run typecheck` | Type-checks the engine. |
 | `npm --prefix ui run typecheck` | Type-checks the UI. |
 | `npm run build && npm run smoke` | Packs the tarball, installs it into a temp project and checks `--help`, `init` and a running server. Prints `smoke: ok`. |
+| `npm run licenses:check` | Checks that every package LiveMap ships has a license on the allowlist in `scripts/notices.mjs`, and that EPL-2.0 packages have a source link. Prints `licenses: ok`. |
 | `npm run build && npm run budget` | Checks that the main UI chunk is at most 82.29 kB gzip (the first-load budget). |
 | `npm run demo` | Builds a sample project, drives a scripted agent session and exports the demo replay. `-- --shots` also captures the README screenshots. Needs `npm run build` first. |
 | `npm run docs:check` | Checks links, anchors, em dashes and CLI flags in the docs. Add `-- --allow-missing-media` while screenshots are not generated yet. `node scripts/check-docs.mjs --self-test` checks the checker. |
 
-CI (`.github/workflows/ci.yml`) runs the build, the typechecks and both unit suites on Ubuntu and macOS with Node 20 and 22, and on Windows with Node 22. The docs check, the size budget, the end-to-end suite and the smoke test run once, on Ubuntu with Node 22. Wall-clock budgets in the engine and UI unit tests are multiplied by `LIVEMAP_TIME_SCALE` (default 1); CI sets it to 2 on Ubuntu and 3 on macOS and Windows.
+CI (`.github/workflows/ci.yml`) runs the build, the typechecks and both unit suites on Ubuntu and macOS with Node 20 and 22, and on Windows with Node 22. The docs check, the license check, the size budget, the end-to-end suite and the smoke test run once, on Ubuntu with Node 22. Wall-clock budgets in the engine and UI unit tests are multiplied by `LIVEMAP_TIME_SCALE` (default 1); CI sets it to 2 on Ubuntu and 3 on macOS and Windows.
 
 Notes on the end-to-end suite:
 
@@ -54,7 +55,7 @@ Notes on the end-to-end suite:
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on every pull request and on pushes to `main`, on Node 20. It installs both packages with `npm ci`, then runs the build, both typechecks, `npm test`, `npm --prefix ui test`, `npm run docs:check`, `npm run budget`, the end-to-end tests (with Chromium from `npx playwright install`) and `npm run smoke`. Run the same commands locally before you open a pull request. When a run fails, it uploads `test-results/` as an artifact.
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `main`, on Node 20. It installs both packages with `npm ci`, then runs the build, both typechecks, `npm test`, `npm --prefix ui test`, `npm run docs:check`, `npm run licenses:check`, `npm run budget`, the end-to-end tests (with Chromium from `npx playwright install`) and `npm run smoke`. Run the same commands locally before you open a pull request. When a run fails, it uploads `test-results/` as an artifact.
 
 ## Repo layout
 
@@ -75,6 +76,10 @@ These apply to docs, UI strings, CLI messages and comments:
 - US spelling: "license", "color", "behavior".
 - Plain, direct sentences. No marketing words.
 - Every flag, default, path and UI string in the docs must match the code. When they disagree, the code wins and the docs get fixed.
+
+## Dependencies and licenses
+
+Every package LiveMap ships (the UI's dependencies, the engine's dependencies and the parser grammars) must have a license on the allowlist in `scripts/notices.mjs`: MIT, ISC, BSD-2-Clause, BSD-3-Clause, Apache-2.0, 0BSD, Unlicense, OFL-1.1 or EPL-2.0. An EPL-2.0 package also needs its source link in `SOURCES`, and a new grammar needs its license and source in `GRAMMAR_SOURCES` and its license text in `scripts/grammar-licenses/`. A dev-only package whose code ends up in the UI build goes in `BUNDLED_DEV`. `npm run licenses:check` fails until they are there.
 
 ## Plans and specs
 

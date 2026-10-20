@@ -16,7 +16,7 @@
   ],
   "scripts": {
     "prebuild": "node scripts/ui-deps.mjs",
-    "build": "tsup && node scripts/copy-grammars.mjs && npm --prefix ui run build && npm --prefix ui run build:export",
+    "build": "tsup && node scripts/copy-grammars.mjs && npm --prefix ui run build && npm --prefix ui run build:export && node scripts/notices.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "test:perf": "vitest run --config vitest.perf.config.ts",
@@ -25,7 +25,8 @@
     "demo": "node scripts/demo.mjs",
     "smoke": "node scripts/smoke-pack.mjs",
     "budget": "node scripts/check-budget.mjs",
-    "plugin:sync": "node scripts/sync-plugin.mjs"
+    "plugin:sync": "node scripts/sync-plugin.mjs",
+    "licenses:check": "node scripts/notices.mjs --check"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.1",
