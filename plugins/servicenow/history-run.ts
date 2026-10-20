@@ -8,8 +8,11 @@
  * ends with the files as they are now.
  *
  * Imported once per scope: the store keeps the import's id apart from its runs, so neither a restart nor the
- * cap brings it back. Saves after it reach the live runs through live polling.
+ * cap brings it back. Saves after it reach the live runs through live polling. A build whose import format is
+ * newer (`HISTORY_IMPORT_FORMAT`) rebuilds the run once, from the events the old import covered.
  */
+import crypto from 'node:crypto';
+import fs from 'node:fs';
 import type { ServerMessage } from '../../src/shared/protocol.js';
 import type { ProjectState } from '../../src/shared/state.js';
 import { emptyState } from '../../src/shared/state.js';
@@ -17,7 +20,13 @@ import type { Attribution, ChangeSummary, FileModel } from '../../src/shared/typ
 import type { DomainIndex } from '../../src/shared/domain.js';
 import type { HistoryStore } from '../../src/history/store.js';
 import type { TimelineDoc, TimelineEvent } from './timeline.js';
-import { readHistory } from './writer.js';
+import { historyPath } from './writer.js';
+
+/**
+ * The version of what an import writes. Bump it when the run's content changes (its attributions, say): a start
+ * on a newer format drops the old back-dated run and imports again.
+ */
+export const HISTORY_IMPORT_FORMAT = 1;
 
 /** The run id of a scope's import: `sn-history-<scope>`. */
 export const historyRunId = (scope: string): string => `sn-history-${scope.replace(/[^\w.-]/g, '_')}`;
@@ -140,27 +149,56 @@ export function buildHistoryRun(input: HistoryRunInput): HistoryRun {
 }
 
 export interface ImportResult {
-  /** `imported`: written now. `already`: imported on an earlier start. `partial`: the history stopped early, so not imported yet. `none`: no history, or nothing in it to show. */
+  /**
+   * `imported`: written now (`rebuilt` when it replaced an older format's run). `already`: imported on an earlier
+   * start. `partial`: the history stopped early, so not imported (or not rebuilt) yet. `none`: no history, or
+   * nothing in it to show.
+   */
   status: 'imported' | 'already' | 'partial' | 'none';
   imported: number;
   skipped: number;
   runId: string;
+  rebuilt: boolean;
+  /** With `partial`: an older format's run is still in place, waiting for a rebuild. */
+  stale?: true;
 }
 
 /**
- * Imports the scope's history into `store` as a back-dated run, once per scope. A partial history (its read
- * stopped at the time budget) is left for a later start that reads all of it.
+ * Imports the scope's history into `store` as a back-dated run, once per scope and import format. A partial
+ * history (its read stopped at the time budget) is left for a later start that reads all of it.
+ *
+ * A rebuild for a newer format takes only the events the old import covered (up to its newest event): later
+ * saves are in the live runs already, from live polling.
  */
-export async function importScopeHistory(store: HistoryStore, opts: { root: string; name: string; scope: string; files: FileModel[]; domainOf?: (files: FileModel[]) => DomainIndex }): Promise<ImportResult> {
+export async function importScopeHistory(store: HistoryStore, opts: { root: string; name: string; scope: string; files: FileModel[]; domainOf?: (files: FileModel[]) => DomainIndex; format?: number }): Promise<ImportResult> {
+  const format = opts.format ?? HISTORY_IMPORT_FORMAT;
   const runId = historyRunId(opts.scope);
-  const none: ImportResult = { status: 'none', imported: 0, skipped: 0, runId };
-  if (store.imported(runId)) return { ...none, status: 'already' };
-  const doc = readHistory<TimelineDoc>(opts.root, opts.scope);
+  const before = store.importInfo(runId);
+  const rebuild = !!before && before.format < format;
+  const none: ImportResult = { status: 'none', imported: 0, skipped: 0, runId, rebuilt: false };
+  if (before && !rebuild) return { ...none, status: 'already' };
+  let text: string;
+  let doc: TimelineDoc;
+  try {
+    text = fs.readFileSync(historyPath(opts.root, opts.scope), 'utf8');
+    doc = JSON.parse(text) as TimelineDoc;
+  } catch {
+    return none;
+  }
   if (!doc || !Array.isArray(doc.events) || !doc.events.length) return none;
-  if (doc.sources?.partial) return { ...none, status: 'partial' };
-  const events = doc.events.filter(e => typeof e.at === 'number');
+  if (doc.sources?.partial) return { ...none, status: 'partial', ...(rebuild ? { stale: true as const } : {}) };
+  const until = rebuild ? before.until ?? lastAtOf(store, runId) : undefined;
+  const events = doc.events.filter(e => typeof e.at === 'number' && (until === undefined || e.at <= until));
   const run = buildHistoryRun({ root: opts.root, name: opts.name, files: opts.files, events, ...(opts.domainOf ? { domainOf: opts.domainOf } : {}) });
   if (!run.records.length) return { ...none, skipped: run.skipped };
-  const written = await store.importRun(runId, run.start, run.records);
-  return written ? { status: 'imported', imported: run.used, skipped: run.skipped, runId } : none;
+  const hash = crypto.createHash('sha256').update(text).digest('hex');
+  const newest = events.reduce((m, e) => Math.max(m, e.at), -Infinity);
+  const written = await store.importRun(runId, run.start, run.records, { format, hash, until: newest });
+  return written ? { status: 'imported', imported: run.used, skipped: run.skipped, runId, rebuilt: rebuild } : none;
+}
+
+/** The time of the last record of run `id`, for an import recorded before imports kept their newest event. */
+function lastAtOf(store: HistoryStore, id: string): number | undefined {
+  const r = store.info().runs.find(x => x.id === id);
+  return r ? store.messages(r.lastSeq, r.lastSeq, 1)[0]?.at : undefined;
 }

@@ -134,6 +134,7 @@ A table and time match (or a background script) counts only when the save's auth
 - Changes keep the match above: `log` and `likely` show as SkyForge. A save that matched no tool call is not agent work: it has no attribution, and keeps the ServiceNow user who saved it.
 - Several records can share a file (a table and its columns). A save of a record whose file is already there is a change to that file.
 - It is added once per scope, and never again: live polling records every save after it. LiveMap notes the import in its history folder, so a restart or the history size cap does not add it twice. With `--no-history` nothing is recorded or added.
+- A newer LiveMap whose import format changed (better attributions, say) rebuilds the back-dated run once. It drops the old run, and any runs recorded before it, then imports again from the saves the old import covered. Later saves stay in the live runs.
 - If the history read stopped early (it is partial), it is not added yet. A later start with the full history adds it.
 - In the timeline, a save that matched no tool call reads "Saved by <user> (version history)", and a marker labeled "Version history ends" shows where the live run starts.
 
