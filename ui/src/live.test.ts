@@ -39,6 +39,17 @@ describe('currentTarget', () => {
     const pull = event({ sessionId: 's1', type: 'tool_start', at: NOW - 2000, tool: { id: 't1', name: 'tool_execute', label: 'x', paths: ['src/w.html'], inner: 'sn_pull_artifact', access: 'read' } });
     expect(currentTarget([pull], [], sess(), NOW)).toBeNull();
   });
+  it('trusts the server\'s access, and reads write names when it is missing (built-in tools, older events)', () => {
+    const call = (name: string, extra: Record<string, unknown> = {}) => event({ sessionId: 's1', type: 'tool_start', at: NOW - 2000, tool: { id: 't1', name, label: name, paths: ['src/a.ts'], ...extra } });
+    expect(currentTarget([call('mcp__nexus__sn_push_artifact', { access: 'write' })], [], sess(), NOW)?.path).toBe('src/a.ts');
+    expect(currentTarget([call('mcp__x__create_thing', { access: 'read' })], [], sess(), NOW)).toBeNull();
+    for (const name of ['MultiEdit', 'apply_patch', 'NotebookEdit', 'mcp__fs__write_file', 'mcp__x__delete_record', 'nexus_ses_ab12_sn_execute_background_script']) {
+      expect(currentTarget([call(name)], [], sess(), NOW)?.path, name).toBe('src/a.ts');
+    }
+    for (const name of ['TodoWrite', 'mcp__nexus__sn_query_table', 'Grep', 'mcp__x__settings_get']) {
+      expect(currentTarget([call(name)], [], sess(), NOW), name).toBeNull();
+    }
+  });
   it('pairs by session and tool id', () => {
     const evs = [start('Edit', ['src/a.ts'], 't1'), start('Edit', ['src/c.ts'], 't2'), end('t2')];
     expect(currentTarget(evs, [], sess(), NOW)?.path).toBe('src/a.ts');
