@@ -381,8 +381,12 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
     const h = (key: string) => rf.getNode(key)?.measured?.height ?? 160;
     const pane = paneRef.current?.getBoundingClientRect();
     if (!pane || !(pane.width > 0)) {
-      const zoom = Math.min(1.5, Math.max(0.8, rf.getViewport().zoom));
-      void rf.setCenter(p.x + NODE_W / 2, p.y + h(k) / 2, { zoom, duration: motion(500) });
+      // No size yet: center the table, also only after a first fit still queued in React Flow.
+      void fitting.current.then(() => {
+        if (target.current !== t) return;
+        const zoom = Math.min(1.5, Math.max(0.8, rf.getViewport().zoom));
+        void rf.setCenter(p.x + NODE_W / 2, p.y + h(k) / 2, { zoom, duration: motion(first ? 500 : 0) });
+      });
     } else {
       // The table with its direct relations when they fit at a readable zoom, else the table alone.
       const left = beside ? LIST_W : 0;
