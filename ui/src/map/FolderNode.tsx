@@ -8,33 +8,27 @@ import { useMapActions } from './MapContext';
 import { Anchors } from './FileNode';
 import { useStore } from '../store';
 import { READ_ONLY_TIP } from '../history';
-import { splitName } from '../treeModel';
+import { MidName } from '../components/FileRow';
+import { nameEnd, nameFit } from './overview';
 
 const midHandle: CSSProperties = { top: '50%', opacity: 0, pointerEvents: 'none' };
 const n = (v: number): string => v.toLocaleString();
 const plural = (v: number, one: string, many: string): string => `${n(v)} ${v === 1 ? one : many}`;
 const slash = (label: string, path: string): string => (path === '' ? label : `${label}/`);
 
-/** The end of a cut folder name keeps whole folders up to this many characters. */
-const TAIL_MAX = 24;
+/** Characters of a folder card's name (15 px semibold in the card's text column). */
+const CARD_CHARS = 19;
+/** About 7 px a character for a region head's name (12 px semibold). */
+const HEAD_CHAR_W = 7;
 
 /**
- * A folder path split for a middle cut: the end is the last folders that fit in `TAIL_MAX` characters
- * (`packages/` + `feature-01-search/src`), or the last folder split by word when it alone is longer (as in the
- * file tree). A short path comes back whole.
+ * A folder name that fits `chars` characters (nameFit): whole, cut in the middle by MidName (the file tree's cut, with
+ * whole trailing folders), or "…" and its end when even the last folder leaves no room for a start.
  */
-export function splitFolder(path: string): [string, string] {
-  if (path.length <= TAIL_MAX) return [path, ''];
-  let k = -1;
-  for (let j = path.lastIndexOf('/'); j > 0 && path.length - j - 1 <= TAIL_MAX; j = path.lastIndexOf('/', j - 1)) k = j + 1;
-  return k > 0 ? [path.slice(0, k), path.slice(k)] : splitName(path, 'dir');
-}
-
-/** A folder name cut in the middle when it does not fit: the start ellipsizes, the end and its slash always show. */
-export function FolderName({ name }: { name: string }) {
-  const end = name.endsWith('/') ? '/' : '';
-  const [head, tail] = splitFolder(end ? name.slice(0, -1) : name);
-  return <span className="fn"><span>{tail ? head : head + end}</span>{tail && <span>{tail + end}</span>}</span>;
+export function FolderName({ name, chars }: { name: string; chars: number }) {
+  const fit = nameFit(name, chars);
+  if (fit.mode === 'end') return <span className="fn end"><span>{`\u2026${nameEnd(name, fit.tailMax)}`}</span></span>;
+  return <MidName name={name} kind="path" tailMax={fit.tailMax} />;
 }
 
 /**
@@ -76,7 +70,7 @@ function FolderNodeView({ id, data }: NodeProps<FolderFlowNode>) {
         <div className="fnm">
           <LayerTile layer={f.layer} className="ic" />
           <span className="ftx">
-            <span className="fl" title={f.label}><FolderName name={slash(f.label, f.path)} /></span>
+            <span className="fl" title={f.label}><FolderName name={slash(f.label, f.path)} chars={CARD_CHARS} /></span>
             <span className="fly">{layer.name}</span>
           </span>
         </div>
@@ -98,14 +92,16 @@ function FolderNodeView({ id, data }: NodeProps<FolderFlowNode>) {
  * A folder region's header (the folder, its layer and counts), a node of its own so it paints above
  * the links that cross the region; in a large project it opens or closes the folder.
  */
-function FolderLabelNodeView({ data }: NodeProps<FolderLabelFlowNode>) {
+function FolderLabelNodeView({ data, width = 0 }: NodeProps<FolderLabelFlowNode>) {
   const { folder: f, large, expanded } = data;
+  // The head's room: the region less its insets and padding, the layer name and, in a large project, the toggle.
+  const chars = Math.floor((width - 44 - (LAYERS[f.layer].name.length * 6 + 5) - (large ? 74 : 0)) / HEAD_CHAR_W);
   const actions = useMapActions();
   return (
     <div className={clsx('mglabel', large && 'large')} style={layerVars(f.layer)} data-folder={f.id}>
       <div className="mg-head">
         <span className="gl" title={f.label}>
-          <FolderName name={slash(f.label, f.path)} /><small>{LAYERS[f.layer].name}</small>
+          <FolderName name={slash(f.label, f.path)} chars={chars} /><small>{LAYERS[f.layer].name}</small>
         </span>
         <span className="mg-ct">{plural(f.counts.files, 'file', 'files')} · {plural(f.counts.symbols, 'symbol', 'symbols')}</span>
       </div>

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  ConnectionMode, ReactFlow, ReactFlowProvider, ViewportPortal, getViewportForBounds, useReactFlow, useStore as useFlowStore, useStoreApi,
+  ConnectionMode, ReactFlow, ReactFlowProvider, ViewportPortal, useOnViewportChange, getViewportForBounds, useReactFlow, useStore as useFlowStore, useStoreApi,
   type Node, type Viewport,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -28,7 +28,7 @@ import { usePins } from './usePins';
 import { useNodeMotion } from './useNodeMotion';
 import { useFollowCamera } from './useFollowCamera';
 import { FOLLOW_MAX_ZOOM, MoveGesture } from './camera';
-import { OVERVIEW_ZOOM, labelWidth, overviewLabels, quantZoom } from './overview';
+import { FAR_ZOOM, LABEL_CHARS, folderBoxes, labelWidth, overviewLabels, quantZoom } from './overview';
 import { layerVars } from '../components/icons';
 
 const nodeTypes = { file: FileNode, folder: FolderNode, folderLabel: FolderLabelNode };
@@ -42,11 +42,7 @@ const FOCUS_MIN_ZOOM = 0.8;
 const FOCUS_MS = 600;
 /** A palette focus waiting for a layout (level switch, folder opening) is dropped after this long. */
 export const FOCUS_WAIT_MS = 3000;
-/**
- * Below this zoom the map drops card shadows and text (`.mapv.far`), which cost frames and cannot be read anyway,
- * and shows overview labels instead.
- */
-export const FAR_ZOOM = OVERVIEW_ZOOM;
+export { FAR_ZOOM };
 
 /**
  * Session memory (not storage), per project: each level's layout, the viewport, when new links first
@@ -107,11 +103,25 @@ function ZoomControls({ fitAll, onZoom }: { fitAll: () => void; onZoom: () => vo
   );
 }
 
-/** Zoomed out: folder labels drawn at their normal screen size over the map, so a big project stays legible. */
-function OverviewLayer({ graph, boxes }: { graph: MapGraph; boxes: Map<string, Box> | null }) {
+/**
+ * Zoomed out: folder labels drawn at their normal screen size over the map, so a big project stays legible. They
+ * follow the drawn nodes (a drag, a layout move), and only those wholly in view at the end of a camera move show.
+ */
+function OverviewLayer({ graph, nodes }: { graph: MapGraph; nodes: MapFlowNode[] }) {
   // A rounded zoom, so this re-renders a few times while zooming out, not every frame.
   const q = useFlowStore(s => (s.transform[2] < FAR_ZOOM ? quantZoom(s.transform[2]) : 0));
-  const labels = useMemo(() => (q && boxes ? overviewLabels(graph.folders, boxes, graph.level, q) : []), [graph, boxes, q]);
+  const size = useFlowStore(s => `${s.width}x${s.height}`);
+  const storeApi = useStoreApi<MapFlowNode, LinkFlowEdge>();
+  const [moves, setMoves] = useState(0);
+  useOnViewportChange({ onEnd: () => setMoves(n => n + 1) });
+  const boxes = useMemo(() => (q ? folderBoxes(nodes) : null), [q, nodes]);
+  const labels = useMemo(() => {
+    if (!q || !boxes) return [];
+    const { transform: [x, y, z], width, height } = storeApi.getState();
+    const view = width > 0 && height > 0 ? { x: -x / z, y: -y / z, w: width / z, h: height / z } : undefined;
+    return overviewLabels(graph.folders, boxes, graph.level, q, view);
+    // `moves` and `size`: the visible area changed.
+  }, [graph, boxes, q, moves, size, storeApi]);
   if (!labels.length) return null;
   return (
     <ViewportPortal>
@@ -122,7 +132,10 @@ function OverviewLayer({ graph, boxes }: { graph: MapGraph; boxes: Map<string, B
           style={{ ...layerVars(l.layer), width: labelWidth(l.text), transform: `translate(${l.x}px,${l.y}px) scale(${1 / q})` }}
           aria-hidden="true"
         >
-          <span className="ovl-t"><FolderName name={l.text} /></span>
+          <span className="ovl-t">
+            <FolderName name={l.text} chars={LABEL_CHARS} />
+            {l.isNew && <i className="ovl-new">New</i>}
+          </span>
         </div>
       ))}
     </ViewportPortal>
@@ -422,7 +435,8 @@ function Canvas({ run, tools }: { run: ElkRun; tools: HTMLElement | null }) {
   // A boolean, so zooming re-renders the map only when it crosses the threshold.
   const far = useFlowStore(s => s.transform[2] < FAR_ZOOM);
   // In a large project the files and functions levels show only open folders.
-  const note = largeNote(graph.level, graph.large, graph.files.length > 0);
+  const open = useMemo(() => new Set(graph.files.map(f => f.folder)).size, [graph]);
+  const note = largeNote(graph.level, graph.large, open, graph.folders.length);
 
   return (
     <MapContext.Provider value={actions}>
@@ -477,16 +491,15 @@ function Canvas({ run, tools }: { run: ElkRun; tools: HTMLElement | null }) {
             proOptions={{ hideAttribution: true }}
             aria-label="Project map"
           >
-            <OverviewLayer graph={graph} boxes={boxes} />
+            <OverviewLayer graph={graph} nodes={nodes} />
           </ReactFlow>
         </div>
-        {/* One stack, so the note, the hint and the zoom buttons never overlap at any width. */}
+        {/* A bar below the canvas (the canvas ends above it), so the note, hint and zoom buttons never cover a card. */}
         <div className="mv-foot">
-          {note && <div className="map-note glass" role="status">{note}</div>}
-          <div className="mv-foot-row">
-            <p className="cv-hint glass">Drag to pan · ⌘ + scroll to zoom · click a card to inspect</p>
-            <ZoomControls fitAll={actions.fitAll} onZoom={userMoved} />
-          </div>
+          {note
+            ? <div className="map-note" role="status">{note}</div>
+            : <p className="cv-hint">Drag to pan · ⌘ + scroll to zoom · click a card to inspect</p>}
+          <ZoomControls fitAll={actions.fitAll} onZoom={userMoved} />
         </div>
       </div>
       {tools && createPortal(<MapTools followPaused={followPaused} />, tools)}

@@ -356,20 +356,25 @@ describe('MapView', () => {
     expect(note()).toBe('Large project: open a folder to see its functions.');
     act(() => useStore.getState().expandMapFolder('dir:d1'));
     await settle();
+    expect(note()).toBe('4 folders are closed.');
+    for (const d of ['dir:d0', 'dir:d2', 'dir:d3', 'dir:d4']) act(() => useStore.getState().expandMapFolder(d));
+    await settle();
     expect(note()).toBeNull();
     act(() => useStore.getState().setMapLevel('folders'));
     await settle();
     expect(note()).toBe('Large project: showing folders. Open one to see its files.');
   });
 
-  it('the notice, the hint and the zoom buttons share one bottom stack, so they never overlap', async () => {
+  it('the notice and the zoom buttons sit in a bar below the canvas, not over it', async () => {
     const many = Array.from({ length: LARGE_PROJECT + 1 }, (_, i) => file(`d${i % 5}/f${i}.ts`, [sym(`f${i}`)]));
     hello(many);
     await mount();
-    const stack = host.querySelector('.mv-foot')!;
-    expect(stack.querySelector('.map-note')).not.toBeNull();
-    expect(stack.querySelector('.mv-foot-row .cv-hint')).not.toBeNull();
-    expect(stack.querySelector('.mv-foot-row .zoomctl')).not.toBeNull();
+    const bar = host.querySelector('.mapv > .mv-foot')!;
+    expect(bar.previousElementSibling?.classList.contains('mv-canvas')).toBe(true);
+    expect(bar.querySelector('.map-note')).not.toBeNull();
+    expect(bar.querySelector('.zoomctl')).not.toBeNull();
+    // The note takes the hint's place.
+    expect(bar.querySelector('.cv-hint')).toBeNull();
   });
 
   it('cuts long folder names in the middle and keeps the full path in the title', async () => {
@@ -384,7 +389,17 @@ describe('MapView', () => {
     await settle();
     const gl = host.querySelector<HTMLElement>(`.mglabel[data-folder="dir:${long}"] .gl`)!;
     expect(gl.title).toBe(long);
-    expect([...gl.querySelectorAll('.fn > span')].map(s => s.textContent)).toEqual(['.agents/skills/supabase-row-', 'level-security/']);
+    expect(gl.querySelector('.fn')!.textContent).toMatch(/level-security\/$/);
+  });
+
+  it('when the start cannot keep 3 characters, a card shows "…" and the end only', async () => {
+    const path = 'packages/notification-hub';
+    hello([...baseFiles(), imp(`${path}/a.ts`, [])]);
+    act(() => useStore.getState().setMapLevel('folders'));
+    await mount();
+    const fn = host.querySelector<HTMLElement>(`.folder[data-folder="dir:${path}"] .fl .fn`)!;
+    expect(fn.classList.contains('end')).toBe(true);
+    expect(fn.textContent).toBe('\u2026notification-hub/');
   });
 });
 

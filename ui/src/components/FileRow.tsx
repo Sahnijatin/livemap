@@ -13,8 +13,8 @@ const PARSE_ERROR_TIP = 'Parse error: showing the last good structure';
  * A name cut in the middle when it does not fit: the start shrinks with an ellipsis, the end always shows. Spaces
  * show as typed (white-space:pre), so line breaks show as ␤ instead of breaking the row.
  */
-export function MidName({ name, kind = 'file' }: { name: string; kind?: 'file' | 'dir' }) {
-  const [head, tail] = splitName(name.replace(/\r\n|[\n\r]/g, '\u2424'), kind);
+export function MidName({ name, kind = 'file', tailMax }: { name: string; kind?: 'file' | 'dir' | 'path'; tailMax?: number }) {
+  const [head, tail] = splitName(name.replace(/\r\n|[\n\r]/g, '\u2424'), kind, tailMax);
   return <span className="fn"><span>{head}</span>{tail && <span>{tail}</span>}</span>;
 }
 

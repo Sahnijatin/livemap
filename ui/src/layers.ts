@@ -59,14 +59,16 @@ const SEGMENT_LAYER: [RegExp, Layer][] = [
 
 const TEST_SEG = /^(test|tests|__tests__|spec)$/;
 const DOCS_SEG = /^(docs|documentation)$/;
+const PACKAGES_SEG = /^(packages|apps|libs|modules)$/;
 /** Coding agents' folders (skills, hooks, rules): tooling, not the app. */
 const AGENT_SEG = /^\.(agents|claude|cursor|codex|gemini|windsurf)$/;
 const CONFIG_LANGS = new Set(['json', 'yaml', 'toml', 'secret']);
 const CONFIG_NAME = /(^|\.)(config|rc)\.[a-z]+$|^\.[a-z]+rc$|^(dockerfile|makefile|\.gitignore|\.dockerignore|\.editorconfig|\.npmrc|\.nvmrc)$/;
 
 /**
- * Heuristic layer for a file from its path. Tests, docs (by extension or a docs folder), data files by
- * extension and config (or an agent folder) come first; then the deepest folder (or file stem) that names a layer wins; else core.
+ * Heuristic layer for a file from its path. Tests, Markdown, data files by extension and config (or an agent
+ * folder) come first; then the deepest folder (or file stem) that names a layer wins; then a top-level docs folder
+ * (or one at the top of a monorepo package, `packages/x/docs`) makes the rest Docs; else core.
  */
 export function layerOf(path: string, file: FileModel): Layer {
   const lower = path.toLowerCase();
@@ -78,7 +80,7 @@ export function layerOf(path: string, file: FileModel): Layer {
   if (sn) return sn;
 
   if (dirs.some(s => TEST_SEG.test(s)) || /\.(test|spec)\./.test(base)) return 'test';
-  if (file.lang === 'markdown' || /\.mdx?$/.test(base) || dirs.some(s => DOCS_SEG.test(s))) return 'docs';
+  if (file.lang === 'markdown' || /\.mdx?$/.test(base)) return 'docs';
   if (file.lang === 'sql' || file.lang === 'prisma' || /\.(sql|prisma)$/.test(base)) return 'data';
   if (CONFIG_LANGS.has(file.lang) || /\.(json|ya?ml|toml|ini)$/.test(base) || CONFIG_NAME.test(base) || dirs.some(s => AGENT_SEG.test(s))) return 'config';
 
@@ -89,7 +91,8 @@ export function layerOf(path: string, file: FileModel): Layer {
       return stemLayer(stem) ?? layer;
     }
   }
-  return stemLayer(stem) ?? 'core';
+  const docsRoot = DOCS_SEG.test(dirs[0] ?? '') || (PACKAGES_SEG.test(dirs[0] ?? '') && DOCS_SEG.test(dirs[2] ?? ''));
+  return stemLayer(stem) ?? (docsRoot ? 'docs' : 'core');
 }
 
 function stemLayer(stem: string): Layer | null {

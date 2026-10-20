@@ -744,16 +744,14 @@
   .sv-cap button { flex-shrink:0; border:0; border-radius:999px; padding:5px 12px; background:var(--blue); color:#fff; font-size:12.5px; font-weight:600; cursor:pointer; transition:transform .25s var(--spring); }
   .sv-cap button:hover { transform:scale(1.04); }
   /* map view: folder regions, file cards and links on a React Flow canvas (prototype .group, .node, .folder, .e, #gfresh) */
-  .mapv { position:relative; flex:1; min-height:0; overflow:hidden; }
+  .mapv { position:relative; flex:1; min-height:0; overflow:hidden; display:flex; flex-direction:column; }
   /* On the busy map the hint sits on glass, so it never runs over cards. */
-  .mapv .cv-hint { padding:6px 12px; border-radius:999px; line-height:16px; box-shadow:var(--shadow); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .mapv .cv-hint { position:static; flex:0 1 auto; min-width:0; max-width:none; line-height:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   /* The note above the hint and the zoom buttons, in flow: none of them can cover another. */
-  .mv-foot { position:absolute; left:12px; right:12px; bottom:12px; z-index:5; display:flex; flex-direction:column; align-items:flex-start; gap:8px; pointer-events:none; }
-  .mv-foot-row { display:flex; align-items:flex-end; gap:10px; width:100%; }
-  .mv-foot .cv-hint { position:static; flex:0 1 auto; min-width:0; max-width:none; }
-  .mv-foot .glass { background:var(--glass-strong); }
-  .mv-foot .zoomctl { position:static; margin-left:auto; flex-shrink:0; pointer-events:auto; }
-  .mv-canvas { position:absolute; inset:0; }
+  .mv-canvas { position:relative; flex:1; min-height:0; }
+  /* The bar under the canvas: the note (or the hint) and the zoom buttons, never over a card. */
+  .mv-foot { position:relative; z-index:5; display:flex; align-items:center; gap:12px; flex-shrink:0; min-height:46px; padding:6px 10px 6px 14px; border-top:1px solid var(--hair); background:color-mix(in srgb,var(--card) 60%,transparent); }
+  .mv-foot .zoomctl { position:static; margin-left:auto; flex-shrink:0; box-shadow:none; border:1px solid var(--hair); }
   .map-defs { position:absolute; width:0; height:0; overflow:hidden; }
   .mapv .react-flow { --xy-background-color:transparent; background:transparent; }
   .mapv .react-flow__pane { cursor:grab; }
@@ -798,8 +796,6 @@
   .mg-head .gl small { flex-shrink:0; font-weight:500; color:var(--ink3); margin-left:5px; }
   /* Folder names cut in the middle (FolderName): the start ellipsizes, the last folder always shows. */
   .mapv .fn { display:flex; min-width:0; overflow:hidden; white-space:pre; }
-  /* An end wider than the box leaves room for the start's ellipsis and cuts its own end instead. */
-  .mapv .fn > span + span { max-width:calc(100% - 2ch); overflow:hidden; text-overflow:ellipsis; }
   .mg-ct { font-size:11px; line-height:14px; color:var(--ink3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-variant-numeric:tabular-nums; }
   .mglabel.large .mg-head { max-width:calc(100% - 94px); }
   .mg-tog { position:absolute; right:10px; top:10px; display:flex; align-items:center; gap:4px; border:0; border-radius:999px; padding:3px 10px 3px 7px; background:var(--card); color:var(--ink2); font-size:12px; font-weight:500; cursor:pointer; box-shadow:0 1px 2px rgba(0,0,0,.06); flex-shrink:0; transition:transform .25s var(--spring),color .2s; }
@@ -831,16 +827,20 @@
   .mapv.far .node .sub, .mapv.far .mg-head { display:none; }
   .mapv.far .folder { background:color-mix(in srgb,var(--lc) 14%,var(--card)); border-color:color-mix(in srgb,var(--lc) 30%,transparent); }
   .mapv.far .folder > * { visibility:hidden; }
+  /* A new folder stays marked: a green ring, its New tag, and a New tag on its overview label. */
+  .mapv.far .folder.isnew { border-color:var(--green); box-shadow:0 0 0 3px var(--green-t); }
+  .mapv.far .folder .fnew { visibility:visible; }
   .mapv .react-flow__viewport-portal { pointer-events:none; }
   .ovl { position:absolute; left:0; top:0; display:flex; height:30px; transform-origin:0 0; pointer-events:none; }
   .ovl.mid { justify-content:center; }
   .ovl-t { display:flex; align-items:center; gap:7px; min-width:0; max-width:100%; padding:0 12px 0 10px; border-radius:10px; background:var(--glass-strong); border:1px solid var(--hair); box-shadow:0 2px 10px rgba(17,24,39,.12); font:600 14px var(--display); letter-spacing:-.01em; color:var(--ink); }
   .ovl-t::before { content:""; width:8px; height:8px; border-radius:50%; background:var(--lc); flex-shrink:0; }
+  .ovl-new { flex-shrink:0; font:700 9px var(--sans); font-style:normal; letter-spacing:.06em; text-transform:uppercase; color:var(--green); background:var(--green-t); border-radius:5px; padding:2px 5px; }
   .mapv.switching .react-flow__node-file .node { animation:lvlin .45s var(--ease) both; }
   .mapv.switching .react-flow__node-folder > *, .mapv.switching .react-flow__node-folderLabel > * { animation:lvlfade .45s var(--ease) both; }
   @keyframes lvlin { from { opacity:0; transform:scale(.88); } }
   @keyframes lvlfade { from { opacity:0; } }
-  .map-note { max-width:100%; padding:7px 13px; border-radius:16px; font-size:12.5px; line-height:16px; color:var(--ink2); box-shadow:var(--shadow); animation:fin .45s var(--ease) both; }
+  .map-note { min-width:0; font-size:12.5px; line-height:16px; color:var(--ink2); animation:fin .45s var(--ease) both; }
   .zoomctl .zfit { width:40px; font-size:12px; font-weight:600; }
   /* Wraps instead of overflowing when the text is wider (other fonts) or the center is narrow. */
   .c-tools { margin-left:auto; display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:8px; min-width:0; max-width:100%; }
@@ -1079,7 +1079,7 @@
     .c-tools { margin-left:0; flex-shrink:0; }
     .mapv .cv-hint { display:none; }
     .zoomctl { right:10px; bottom:10px; padding:2px; border-radius:11px; }
-    .mv-foot { left:10px; right:10px; bottom:10px; }
+    .mv-foot { min-height:40px; padding:4px 8px 4px 12px; }
     .zoomctl button { width:28px; height:26px; border-radius:8px; font-size:14px; }
     .zoomctl .zfit { width:34px; font-size:11.5px; }
     .stackv { padding:12px 12px 24px; }

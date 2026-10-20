@@ -64,6 +64,15 @@ describe('buildMap', () => {
       file('src/services/auth.ts', [], [sym('login')]),
       file('src/services/user.ts', [], [sym('getUser')]),
       file('src/services/README.md', [], [sym('Title')], 'markdown'),
+      // A package's README and CHANGELOG do not make it docs.
+      file('packages/foo/index.ts', [], [sym('main')]),
+      file('packages/foo/README.md', [], [sym('Title')], 'markdown'),
+      file('packages/foo/CHANGELOG.md', [], [sym('Title')], 'markdown'),
+      // Markdown must be more than half of the folder, not just its largest share.
+      file('lib/mixed/x.ts', [], [sym('x')]),
+      file('lib/mixed/y.sql', [], [sym('y')], 'sql'),
+      file('lib/mixed/a.md', [], [sym('Title')], 'markdown'),
+      file('lib/mixed/b.md', [], [sym('Title')], 'markdown'),
     ];
     const input = fixture({ files: Object.fromEntries(list.map(f => [f.path, f])) });
     const g = buildMap(input, 'folders', new Set());
@@ -71,18 +80,23 @@ describe('buildMap', () => {
     expect(g.folders.find(f => f.path === skill)?.counts.files).toBe(1);
     expect(g.folders.find(f => f.path === 'handbook/onboarding')?.layer).toBe('docs');
     expect(g.folders.find(f => f.path === 'src/services')?.layer).toBe('logic');
-    expect(buildMap(input, 'files', new Set()).files.map(f => f.id)).toEqual([`${skill}/validate.sh`, 'handbook/onboarding/snippet.ts', 'src/services/auth.ts', 'src/services/user.ts']);
+    expect(g.folders.find(f => f.path === 'packages/foo')?.layer).toBe('core');
+    expect(g.folders.find(f => f.path === 'lib/mixed')?.layer).toBe('core');
+    expect(buildMap(input, 'files', new Set()).files.map(f => f.id)).toContain('handbook/onboarding/snippet.ts');
+    expect(buildMap(input, 'files', new Set()).files.some(f => f.id.endsWith('.md'))).toBe(false);
   });
 
   it('largeNote: each level says what it shows, only in a large project', () => {
-    expect(largeNote('folders', true, false)).toBe('Large project: showing folders. Open one to see its files.');
-    expect(largeNote('files', true, false)).toBe('Large project: open a folder to see its files.');
-    expect(largeNote('functions', true, false)).toBe('Large project: open a folder to see its functions.');
-    // With a folder open, the files and functions levels need no note.
-    expect(largeNote('files', true, true)).toBeNull();
-    expect(largeNote('functions', true, true)).toBeNull();
-    expect(largeNote('folders', true, true)).toBe('Large project: showing folders. Open one to see its files.');
-    for (const l of ['folders', 'files', 'functions'] as const) expect(largeNote(l, false, false)).toBeNull();
+    const folders = 'Large project: showing folders. Open one to see its files.';
+    expect(largeNote('folders', true, 0, 12)).toBe(folders);
+    expect(largeNote('folders', true, 3, 12)).toBe(folders);
+    expect(largeNote('files', true, 0, 12)).toBe('Large project: open a folder to see its files.');
+    expect(largeNote('functions', true, 0, 12)).toBe('Large project: open a folder to see its functions.');
+    // While some folders are open, the note counts the closed ones; with all open there is none.
+    expect(largeNote('files', true, 3, 12)).toBe('9 folders are closed.');
+    expect(largeNote('functions', true, 11, 12)).toBe('1 folder is closed.');
+    expect(largeNote('files', true, 12, 12)).toBeNull();
+    for (const l of ['folders', 'files', 'functions'] as const) expect(largeNote(l, false, 0, 12)).toBeNull();
   });
 
   it('folders level: aggregated weights, root folder label', () => {

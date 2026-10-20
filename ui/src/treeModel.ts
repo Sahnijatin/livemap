@@ -261,19 +261,31 @@ const UPPER = /\p{Lu}/u;
  * A name split for middle truncation into a start (which ellipsizes) and an end (which always shows). A file keeps
  * its last word and extension: the longest end of at most 14 chars that starts after `-`, `_`, `.`, a space or a
  * lower-to-upper case change, else its last 10 chars. A folder row keeps its last folder when that is at most 16
- * chars, else splits the last folder the same way; a single folder of at most 16 chars stays whole. A short name
- * comes back whole, with an empty end.
+ * chars, else splits the last folder the same way; a single folder of at most 16 chars stays whole. A path (the map's
+ * folder names) also keeps whole folders before that while the end stays within `tailMax` chars (32 by default). A trailing slash stays on the
+ * end. A short name comes back whole, with an empty end.
  */
-export function splitName(name: string, kind: 'file' | 'dir' = 'file'): [string, string] {
-  const slash = kind === 'dir' ? name.lastIndexOf('/') : -1;
+export function splitName(name: string, kind: 'file' | 'dir' | 'path' = 'file', tailMax = 2 * SEGMENT_MAX): [string, string] {
+  if (kind !== 'file' && name.length > 1 && name.endsWith('/')) {
+    const [head, tail] = splitName(name.slice(0, -1), kind, tailMax);
+    return tail ? [head, `${tail}/`] : [`${head}/`, ''];
+  }
+  const slash = kind !== 'file' ? name.lastIndexOf('/') : -1;
   if (slash >= 0) {
     const last = name.slice(slash + 1);
-    if (last.length <= SEGMENT_MAX) return [name.slice(0, slash + 1), last];
+    if (last.length <= SEGMENT_MAX) {
+      // A path keeps whole trailing folders while the end stays within two folder lengths.
+      let at = slash;
+      if (kind === 'path') {
+        for (let j = name.lastIndexOf('/', at - 1); j > 0 && name.length - j - 1 <= tailMax; j = name.lastIndexOf('/', j - 1)) at = j;
+      }
+      return [name.slice(0, at + 1), name.slice(at + 1)];
+    }
     const [head, tail] = splitWord(last);
     return [name.slice(0, slash + 1) + head, tail];
   }
   // A single folder: kept whole up to the same length as a chain's last folder.
-  if (kind === 'dir' && name.length <= SEGMENT_MAX) return [name, ''];
+  if (kind !== 'file' && name.length <= SEGMENT_MAX) return [name, ''];
   return splitWord(name);
 }
 

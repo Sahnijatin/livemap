@@ -442,6 +442,9 @@ test('map: a large project stays legible zoomed out; docs folders are Docs; note
     await noOverlap(`files ${width}`);
     await setLevel(page, 'Functions');
     await expect(page.locator('.map-note')).toHaveText('Large project: open a folder to see its functions.');
+    // The note sits in a bar below the canvas: it never covers a card.
+    expect(await intersects(page.locator('.mv-foot'), canvas(page)), `bar ${width}`).toBe(false);
+    expect(await inside(page.locator('.map-note'), page.locator('.mv-foot')), `note ${width}`).toBe(true);
   }
   await page.setViewportSize({ width: 1440, height: 900 });
   await setLevel(page, 'Folders');
@@ -457,6 +460,11 @@ test('map: a large project stays legible zoomed out; docs folders are Docs; note
   const h = (await labels.first().boundingBox())!.height;
   expect(h).toBeGreaterThan(24);
   expect(h).toBeLessThan(36);
+  // Every label is wholly on the canvas and says more than "a…".
+  for (const l of await labels.all()) {
+    expect(await inside(l, canvas(page))).toBe(true);
+    expect(((await l.textContent()) ?? '').length).toBeGreaterThanOrEqual(8);
+  }
 });
 
 test('map: frame budget while panning 500 files at the files level', async ({ page }) => {

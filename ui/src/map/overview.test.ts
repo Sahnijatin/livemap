@@ -1,8 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { MapFolder } from './mapModel';
 import type { Box } from './mapFlow';
-import { LABEL_H, LABEL_MAX_W, labelWidth, overviewLabels, quantZoom } from './overview';
-import { splitFolder } from './FolderNode';
+import { LABEL_H, LABEL_MAX_W, folderBoxes, labelWidth, nameFit, overviewLabels, quantZoom, rankFolders, rankOrderCache } from './overview';
 
 const folder = (path: string, files: number): MapFolder => ({
   id: `dir:${path}`, path, label: path, layer: 'core', files: [],
@@ -57,12 +56,85 @@ describe('quantZoom', () => {
   });
 });
 
-describe('splitFolder', () => {
-  it('keeps the last folders that fit in 24 characters as the end, so similar folders stay apart', () => {
-    expect(splitFolder('apps/web/src/hooks')).toEqual(['apps/web/src/hooks', '']);
-    expect(splitFolder('packages/feature-01-search/src')).toEqual(['packages/', 'feature-01-search/src']);
-    expect(splitFolder('apps/api/src/controllers/billing-invoices')).toEqual(['apps/api/src/controllers/', 'billing-invoices']);
-    // A last folder longer than that is split by word, as in the file tree.
-    expect(splitFolder('.agents/skills/supabase-row-level-security')).toEqual(['.agents/skills/supabase-row-', 'level-security']);
+describe('nameFit', () => {
+  it('whole when it fits; else a middle cut keeping the whole folders that leave the start 3 characters; else "…" and the end', () => {
+    expect(nameFit('apps/web/src/hooks/', 19)).toMatchObject({ mode: 'whole', shown: 19 });
+    // 'controllers/billing/' would leave no start, so the end is 'billing/'.
+    expect(nameFit('apps/api/src/controllers/billing/', 19)).toMatchObject({ mode: 'middle', shown: 8 });
+    expect(nameFit('packages/feature-01-search/src/', 26)).toMatchObject({ mode: 'middle', shown: 22 });
+    // A last folder that alone leaves no room for a start: "…notification-hub/".
+    expect(nameFit('packages/notification-hub/', 19)).toMatchObject({ mode: 'end', shown: 17 });
+  });
+});
+
+describe('overviewLabels at scale', () => {
+  const many = (n: number) => {
+    const fs: MapFolder[] = [];
+    const bx = new Map<string, Box>();
+    for (let i = 0; i < n; i++) {
+      const f = folder(`pkg/area-${i % 37}/mod-${i}`, (i * 7919) % 50);
+      fs.push(f);
+      bx.set(f.id, box((i % 60) * 306, Math.floor(i / 60) * 152));
+    }
+    return { fs, bx };
+  };
+  /** The same greedy placement with a plain pairwise check. */
+  const naive = (fs: MapFolder[], bx: Map<string, Box>, z: number) => {
+    const order = [...fs].sort((a, b) => b.counts.files - a.counts.files || (a.path < b.path ? -1 : 1));
+    const placed: Box[] = [];
+    const ids: string[] = [];
+    const h = LABEL_H / z, m = 6 / z;
+    for (const f of order) {
+      const b = bx.get(f.id)!;
+      const w = labelWidth(`${f.label}/`) / z;
+      const r = { x: b.x + b.w / 2 - w / 2, y: b.y + b.h / 2 - h / 2, w, h };
+      if (placed.some(p => r.x < p.x + p.w + m && p.x < r.x + r.w + m && r.y < p.y + p.h + m && p.y < r.y + r.h + m)) continue;
+      placed.push(r);
+      ids.push(f.id);
+    }
+    return ids.sort();
+  };
+
+  it('places the same labels as a pairwise check, for 3,000 folders within budget', () => {
+    const { fs, bx } = many(3000);
+    for (const z of [0.1, 0.3]) expect(overviewLabels(fs, bx, 'folders', z).map(l => l.id).sort()).toEqual(naive(fs, bx, z));
+    const t0 = performance.now();
+    overviewLabels(fs, bx, 'folders', 0.2);
+    expect(performance.now() - t0).toBeLessThan(60 * (Number(process.env.LIVEMAP_TIME_SCALE) || 1));
+  });
+
+  it('keeps the size order while file counts stay the same (a live event rebuilds the folders, not their order)', () => {
+    const { fs } = many(50);
+    const a = rankFolders(fs).map(f => f.id);
+    const hits = rankOrderCache.hits;
+    expect(rankFolders(fs.map(f => ({ ...f }))).map(f => f.id)).toEqual(a);
+    expect(rankOrderCache.hits).toBe(hits + 1);
+    const more = fs.map((f, i) => (i === 49 ? { ...f, counts: { ...f.counts, files: 999 } } : f));
+    expect(rankFolders(more)[0].id).toBe(fs[49].id);
+  });
+
+  it('new folders claim their label first and say so', () => {
+    const fs = [folder('big', 40), { ...folder('fresh', 1), isNew: true }];
+    const bx = new Map([['dir:big', box(0, 0)], ['dir:fresh', box(300, 0)]]);
+    const ls = overviewLabels(fs, bx, 'folders', 0.1);
+    expect(ls.map(l => [l.id, l.isNew])).toEqual([['dir:fresh', true]]);
+  });
+
+  it('labels only what fits inside the visible area, so none is clipped at an edge', () => {
+    const fs = [folder('left', 3), folder('edge', 3)];
+    const bx = new Map([['dir:left', box(0, 0)], ['dir:edge', box(2000, 0)]]);
+    const view = { x: -500, y: -500, w: 2600, h: 1200 };
+    expect(overviewLabels(fs, bx, 'folders', 0.2, view).map(l => l.id)).toEqual(['dir:left']);
+  });
+});
+
+describe('folderBoxes', () => {
+  it('reads folder boxes from the live nodes, so labels follow a drag or a move', () => {
+    const nodes = [
+      { id: 'dir:a', type: 'folder', position: { x: 10, y: 20 }, width: 250, height: 120, data: {} },
+      { id: 'src/a.ts', type: 'file', position: { x: 0, y: 0 }, width: 220, height: 64, data: {} },
+      { id: 'dir:a#label', type: 'folderLabel', position: { x: 10, y: 20 }, width: 250, height: 44, data: {} },
+    ] as unknown as Parameters<typeof folderBoxes>[0];
+    expect([...folderBoxes(nodes)]).toEqual([['dir:a', { x: 10, y: 20, w: 250, h: 120 }]]);
   });
 });
