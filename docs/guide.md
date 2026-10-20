@@ -16,6 +16,7 @@ livemap [dir=.] [--port N] [--no-open] [--pull[=SEC]] [--no-history] [--summarie
 livemap init [dir=.] [--agents claude,codex,cursor] [--remove]
 livemap export [dir=.] [--session ID] [--no-code] [--out FILE]
 livemap sn [dir=.] --scope NAMESPACE|SYS_ID [--instance NAME] [--nexus URL] [--port N] [--no-open] [--no-history] [--mirror-only]
+livemap mcp-proxy --upstream URL [--header NAME=VALUE]... [--timeout SEC] | --upstream-cmd "COMMAND"
 ```
 
 `dir` is the project folder in every command. It defaults to the current folder. `-h` or `--help` prints the usage. Options that take a value also accept `=` (`--port=5000`, `--agents=claude`, `--out=shop.html`).
@@ -80,6 +81,50 @@ On the map, a portal links to its home page, a page to its layout, a layout to t
 Credential records (`sys_auth_profile*`, `oauth_entity*`, `discovery_credentials`) are listed by name only, fields named like passwords, secrets, tokens or keys are never written, and system properties are read without their values. The `.livemap` folder is readable only by you. When `dir` is inside a git repository, LiveMap adds `.livemap/` to its `.gitignore`; elsewhere it leaves `.gitignore` alone.
 
 A second `livemap sn` on the same folder updates the mirror in place: unchanged files are not rewritten, and files of records that are gone or renamed are removed.
+
+### `livemap mcp-proxy`
+
+Sits between a desktop MCP client and an MCP server, so LiveMap sees the client's tool calls. The client launches `livemap mcp-proxy` in place of the server. It is not started by hand. Point the client's MCP server entry at it instead.
+
+The proxy passes messages through as they came, in both directions: the tool list, schemas, calls, results, errors, notifications, cancellations and batches. It does not check them against a schema. It answers on its own in these cases only:
+
+- A line from the client that is not JSON gets a `Parse error` (-32700). A line larger than 256 MB gets an `Invalid Request` (-32600).
+- A request the upstream could not take gets an error. When the upstream's HTTP error holds a JSON-RPC error, that error is passed on. Other HTTP errors give -32603 with the status. No answer at all (the server is down, or `--timeout` passed) gives -32000.
+- When the upstream session has expired (nexus restarted), the proxy opens a new one by sending the client's own `initialize` again, then retries the request once. The client does not see this.
+
+| Option | What it does |
+|---|---|
+| `--upstream URL` | The server's Streamable HTTP endpoint, for example nexus at `http://127.0.0.1:3006/mcp`. |
+| `--header NAME=VALUE` | A header sent with every request to `--upstream`, for example `X-SN-Instance=<instance>`. Repeat it for more headers. |
+| `--timeout SEC` | How long one request to `--upstream` may take, in seconds. Default 600, because background scripts can run for minutes. |
+| `--upstream-cmd "COMMAND"` | Runs a stdio server instead, with its arguments in the quotes. Give this or `--upstream`, not both. |
+| `--debug` | Writes one line per call to stderr: the tool name and its argument names, never values. `LIVEMAP_PROXY_DEBUG=1` does the same. |
+
+After a call's answer has gone to the client, the proxy sends a short record of it to each running `livemap sn` for the same instance. The record has the tool, its arguments, the records it names, any new sys_ids in its result, the session's current update set and ServiceNow user, its start and end, and whether it worked.
+
+These values are replaced with `[redacted]` before anything is sent:
+- passwords, tokens, secrets, keys, cookies and credentials, however the field is spelled, and fields named `auth` or `authorization`
+- script and condition bodies
+- every header value
+- secrets written as `key=value` inside any text
+
+A call on a credential table or on `sys_properties` is sent with argument names only. The result itself is not sent, and results over 1 MB are not even read.
+
+If no LiveMap is running, or it does not answer within half a second, the record is dropped and the call is not slowed. Calls from LiveMap's own nexus session are never recorded.
+
+LiveMap matches each instance change to the call that made it, in this order. The first rule that fits wins.
+
+| Rule | Confidence | When |
+|---|---|---|
+| Record | `exact` | A call named the record (table and sys_id) or got its sys_id back, within a few seconds. |
+| Update set | `likely` | The change is in the update set a session made current (`sn_update_set_manage` `create` or `switch`, `sn_ensure_active_update_set`), on the same instance and by the same user, while that session was active. The shared "Default" update set never counts by name. Two such sessions give `ambiguous`. |
+| Run window | `likely` | The change landed while a session's background script ran, by that session's ServiceNow user. Two such sessions give `ambiguous`. So does an unknown user, because a person could have made the change. |
+| Log | `log` | Matched to a line of SkyForge's MCP log. |
+| Time | `likely` | Write calls of one session ran just before the change. Calls of more than one session give `ambiguous`. |
+
+A change no rule fits is shown as made outside an agent. Clock skew between your machine and the instance is allowed for, 5 seconds by default.
+
+The update set and run window rules need each change's time, user and update set, which come from the instance's change log (`sys_update_xml`). Live polling of that log is not in this release yet, so for now those two rules do not match. The record rule and the time rule work without it.
 
 ### Environment variables
 

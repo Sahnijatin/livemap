@@ -58,7 +58,8 @@ export interface ChangeSummary {
   summary?: string;
 }
 
-export type AgentKind = 'claude-code' | 'codex' | 'cursor' | 'git' | 'other';
+/** `mcp-client`: a desktop MCP client whose calls LiveMap sees through `livemap mcp-proxy`. */
+export type AgentKind = 'claude-code' | 'codex' | 'cursor' | 'git' | 'mcp-client' | 'other';
 export type AgentEventType = 'prompt' | 'message' | 'thinking' | 'tool_start' | 'tool_end' | 'commit' | 'status';
 /**
  * `inner` is the real tool of a gateway call (`tool_execute`), `access` its read or write class, and
@@ -67,7 +68,11 @@ export type AgentEventType = 'prompt' | 'message' | 'thinking' | 'tool_start' | 
 export interface AgentTool {
   id?: string; name: string; label: string; input?: unknown; output?: string; ok?: boolean; paths: string[];
   inner?: string; access?: ToolAccess; targets?: RecordTarget[];
+  /** ServiceNow context a capture knew at the call: instance, the instance user, and the session's current update set. */
+  sn?: SnContext;
 }
+/** `updateSet.unknown`: the session's current update set changed to one not named yet (a scope switch). */
+export interface SnContext { instance?: string; user?: string; updateSet?: { sysId?: string; name?: string; unknown?: true } }
 /**
  * `paths` and `seenAt` are set on git commit events: the root-relative files the commit changed and when LiveMap saw it.
  * `merge` says whether a commit has more than one parent (absent on events recorded before LiveMap set it).
@@ -76,6 +81,20 @@ export interface AgentEvent { id: number; agent: AgentKind; sessionId: string; a
 /** An event as emitted by a normalizer; the hub assigns `id`. */
 export type RawAgentEvent = Omit<AgentEvent, 'id'>;
 export interface AgentSession { id: string; agent: AgentKind; title: string; cwd: string; startedAt: number; lastAt: number; status: 'working' | 'idle'; transcriptPath?: string; hooks: boolean }
-export interface Attribution { agent: AgentKind; sessionId: string; eventId?: number; confidence: 'exact' | 'likely'; intent?: string }
+/**
+ * How sure an attribution is, strongest first: `exact` (the call named the record or file), `log` (matched to
+ * a tool log line), `likely` (one call or session fits), `ambiguous` (several fit; see `candidates`). No
+ * attribution at all means a human or an unknown writer.
+ */
+export type Confidence = 'exact' | 'log' | 'likely' | 'ambiguous';
+export interface AttributionCandidate { agent: AgentKind; sessionId: string; eventId?: number }
+/**
+ * `rule` names the matching rule that decided (`record`, `update_set`, `run_window`, `log`, `time`), and
+ * `reason` says why in plain words. `candidates` lists every session that fit an `ambiguous` match.
+ */
+export interface Attribution {
+  agent: AgentKind; sessionId: string; eventId?: number; confidence: Confidence; intent?: string;
+  rule?: string; reason?: string; candidates?: AttributionCandidate[];
+}
 export interface Flag { id: number; target: string | null; note: string; createdAt: number; deliveredAt?: number; deliveredTo?: { agent: AgentKind; sessionId: string } }
 export interface ControlState { paused: boolean; flags: Flag[] }

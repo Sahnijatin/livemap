@@ -373,11 +373,12 @@ describe('attribution and hello', () => {
 
   it('close() detaches hub, control and attributor listeners', async () => {
     const s = await boot();
-    const before = { c: hub!.control.listenerCount('change'), l: attributor!.listenerCount('late') };
-    expect(hub!.listenerCount('events')).toBe(1);
+    // The Attributor listens to the hub's batches too, and outlives the server.
+    const before = { c: hub!.control.listenerCount('change'), l: attributor!.listenerCount('late'), e: hub!.listenerCount('events') };
+    expect(before.e).toBe(2);
     await s.close();
     srv = null;
-    expect(hub!.listenerCount('events')).toBe(0);
+    expect(hub!.listenerCount('events')).toBe(before.e - 1);
     expect(hub!.listenerCount('session')).toBe(0);
     expect(hub!.control.listenerCount('change')).toBe(before.c - 1);
     expect(attributor!.listenerCount('late')).toBe(before.l - 1);

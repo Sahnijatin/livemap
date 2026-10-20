@@ -254,7 +254,10 @@ describe('#49: MCP writes and record targets', () => {
       mcpTool('B', EXEC, T0 - 2000, { inner: 'sn_push_artifact', access: 'write', targets: [{ kind: 'record', instance: '', table: 'sys_script', sysId: SYS_ID }] }),
       mcpTool('C', EXEC, T0 - 1000, { inner: 'sn_push_artifact', access: 'write', targets: [{ kind: 'record', instance: 'other', table: 'sp_widget', sysId: SYS_ID }] }),
     );
-    expect(attr.attribute(change({ path }), T0)?.confidence).toBe('likely');
+    // None names this record, so only the time-only rule fits: three write calls in the window are ambiguous.
+    const a = attr.attribute(change({ path }), T0);
+    expect(a).toMatchObject({ confidence: 'ambiguous', rule: 'time' });
+    expect(a?.candidates?.map((c) => c.sessionId).sort()).toEqual(['A', 'B', 'C']);
   });
 
   it('without a recordOf resolver, record targets never match a path', () => {
