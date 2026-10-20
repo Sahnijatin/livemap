@@ -30,8 +30,10 @@ const FLUSH_BYTES = 256 * 1024;
 const CAP_CHECK_BYTES = 5 * 1024 * 1024;
 const DEFAULT_CAP_MB = 200;
 const INDEX_VERSION = 1;
-/** `events-<run>.jsonl.trim.tmp` (trimRun) and `index.json.<pid>.<hex>.tmp` (writeFileAtomic). */
-const LEFTOVER_TMP = /^(events-.+\.jsonl\.trim|index\.json\..+)\.tmp$/;
+/** `events-<run>.jsonl.trim.tmp` (trimRun) and `index.json.<pid>.<hex>.tmp`, `imports.json.<pid>.<hex>.tmp` (writeFileAtomic). */
+const LEFTOVER_TMP = /^(events-.+\.jsonl\.trim|(index|imports)\.json\..+)\.tmp$/;
+/** The ids of every run `importRun` was asked to write, kept apart from the runs so the cap never deletes them. */
+const IMPORTS_FILE = 'imports.json';
 
 export interface HistoryOptions {
   home?: string; capMb?: number; snapshotEvery?: number; now?: () => number;
@@ -60,6 +62,7 @@ export class HistoryStore {
   private readonly now: () => number;
   private readonly readOnly: boolean;
   private runs: Run[] = [];
+  private imports = new Set<string>();
   private nextRunNo = 1;
   private index = new EventIndex();
   /** Snapshot seq -> bytes on disk, and the same seqs sorted. */
@@ -123,6 +126,51 @@ export class HistoryStore {
     await this.flush();
     this.capDue = true;
     this.runCapIfDue();
+  }
+
+  /**
+   * Writes a finished, back-dated run before the live one: `start` as its first record, then `records` with their
+   * own times (oldest first), e.g. a ServiceNow scope's version history, so rewind can go back before LiveMap ran.
+   * Returns how many records it wrote: 0 when `id` was imported before (an import is done once, even after the
+   * cap deletes its run), when there is nothing to write, or when the store cannot write. It must be called
+   * before `startRun`; the cap is checked when the live run starts.
+   */
+  /** Whether `importRun` was asked to write `id` before, whether or not its run is still on disk. */
+  imported(id: string): boolean {
+    return this.imports.has(id);
+  }
+
+  async importRun(id: string, start: ProjectState, records: { at: number; msg: ServerMessage }[]): Promise<number> {
+    if (this.disabled || this.closed || this.readOnly || this.current || !records.length) return 0;
+    if (this.imported(id) || this.runs.some(r => r.id === id) || !/^[\w.-]+$/.test(id)) return 0;
+    // Recorded first: a run cut short is better than a run written twice.
+    this.imports.add(id);
+    try {
+      await writeFileAtomic(path.join(this.dir, IMPORTS_FILE), JSON.stringify({ version: 1, ids: [...this.imports] }));
+    } catch {
+      this.imports.delete(id);
+      return 0;
+    }
+    const startAt = records[0].at;
+    const run: Run = { no: this.nextRunNo++, id, file: path.join(this.dir, eventsName(id)), firstSeq: this.lastSeq + 1, lastSeq: this.lastSeq, startAt, size: 0 };
+    this.runs.push(run);
+    this.current = run;
+    this.live = null;
+    try {
+      this.enqueue({ type: 'hello', ...start }, startAt);
+      for (const r of records) {
+        if (RECORDED_TYPES.has(r.msg.type)) this.enqueue(r.msg, r.at);
+        if (this.pendingBytes >= FLUSH_BYTES) this.flushSync();
+      }
+      this.flushSync();
+      await this.flush();
+    } finally {
+      // No live run yet: appends wait for startRun.
+      this.current = null;
+      this.live = null;
+    }
+    if (this.disabled) return 0;
+    return run.lastSeq - run.firstSeq;
   }
 
   /**
@@ -431,6 +479,7 @@ export class HistoryStore {
         if (LEFTOVER_TMP.test(name)) fs.rmSync(path.join(this.dir, name), { force: true });
       }
     }
+    this.loadImports();
     const ids = fs.readdirSync(this.dir).map(parseEventsName).filter((x): x is string => x !== null);
     if (!this.loadIndexFile(ids)) this.scan(ids);
     this.lastSeq = this.index.length ? this.index.seq[this.index.length - 1] : 0;
@@ -443,6 +492,13 @@ export class HistoryStore {
       else this.addSnapshot(seq, fs.statSync(file).size);
     }
     if (!this.readOnly) this.enforceCap();
+  }
+
+  private loadImports(): void {
+    try {
+      const j = JSON.parse(fs.readFileSync(path.join(this.dir, IMPORTS_FILE), 'utf8')) as { ids?: unknown };
+      if (Array.isArray(j.ids)) for (const id of j.ids) if (typeof id === 'string') this.imports.add(id);
+    } catch { /* none yet */ }
   }
 
   /** Uses index.json when it matches the event files on disk exactly; returns false when it is missing or stale. */

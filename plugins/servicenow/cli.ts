@@ -14,8 +14,11 @@ import { recordResolver } from './records.js';
 import { DEFAULT_LOG_WINDOW_MS, DEFAULT_SKYFORGE_LOG } from './skyforge-log.js';
 import { DEFAULT_POLL_MS, initialState, ScopePoller } from './poller.js';
 import { buildTimeline, LiveTimeline } from './timeline.js';
+import { importScopeHistory } from './history-run.js';
 import { ensureGitignored, historyPath, readPollState, snRoot, writeHistory, writeMirror } from './writer.js';
+import { buildDomainIndex, newDataRefCache } from '../../src/engine/domain/build-index.js';
 import type { ServeHandles } from '../../src/cli-args.js';
+import type { FileModel } from '../../src/shared/types.js';
 import type { SnRecord } from './nexus.js';
 
 export const SN_USAGE = 'Usage: livemap sn [dir=.] --scope NAMESPACE|SYS_ID [--instance NAME] [--nexus URL] [--skyforge-log FILE|none] [--log-window SECONDS] [--poll SECONDS|off] [--port N] [--no-open] [--no-history] [--mirror-only]';
@@ -177,12 +180,21 @@ export async function runServiceNow(argv: string[], core: CoreHooks): Promise<vo
     if (args.mirrorOnly) return;
     const serveArgs: Args = { dir: root, port: args.port, open: args.open, pullSec: null, history: args.history, summaries: false };
     let handles: ServeHandles | undefined;
+    const scopeName: string = scope.scope;
     await core.serve(root, serveArgs, {
       analyzers: [serviceNowAnalyzer(root)],
       recordOf: recordResolver(root),
       git: false,
       title: `${scope.scope} on ${manifest.instance || instance}`,
       onReady: h => { handles = h; },
+      beforeRun: async ({ model, history, say: line }) => {
+        const domainOf = (files: FileModel[]) => buildDomainIndex(files, p => model.content(p), newDataRefCache());
+        const t = Date.now();
+        const r = await importScopeHistory(history, { root, name: scopeName, scope: scopeName, files: model.all(), domainOf });
+        if (r.status === 'imported') line(`Timeline: ${n(r.imported)} history events imported as a back-dated run in ${secs(Date.now() - t)}${r.skipped ? ` (${n(r.skipped)} without a mirrored file left out)` : ''}.`);
+        else if (r.status === 'already') line('Timeline: history already imported.');
+        else if (r.status === 'partial') line('Timeline: the history is partial, so it is not in the timeline yet. A later start with the full history adds it.');
+      },
     });
     if (args.pollSec === null) { say('Live polling: off (--poll off).'); return; }
     // No handles: LiveMap was stopped while it indexed, so there is nothing to poll for.

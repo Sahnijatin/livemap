@@ -281,6 +281,14 @@ async function serve(root: string, args: Args, opts: ServeOptions = {}): Promise
   await model.scan((done, total) => server.setIndexing(done, total));
   if (stopping) return;
   if (model.truncated) process.stderr.write(`livemap: indexed the first ${model.limit} files only\n`);
+  if (history && opts.beforeRun && history.info().enabled) {
+    try {
+      await opts.beforeRun({ model, history, say: line => process.stdout.write(`${line}\n`) });
+    } catch (e) {
+      process.stderr.write(`livemap: warning: ${(e as Error)?.message ?? String(e)}\n`);
+    }
+    if (stopping) return;
+  }
   server.ready();
   if (stopping) return;
   opts.onReady?.({

@@ -125,6 +125,70 @@ test('livemap sn: mirrors the BharatBank scope and shows it in the Map and Schem
   await page.screenshot({ path: path.join(shots, 'servicenow-schema.png'), animations: 'disabled' });
 });
 
+const timeline = (page: Page) => page.getByRole('group', { name: 'Session timeline' });
+const slider = (page: Page) => timeline(page).getByRole('slider', { name: 'Time' });
+const tlState = (page: Page) => timeline(page).locator('.tl-state');
+const feed = (page: Page) => page.getByRole('main', { name: 'Activity' });
+const valueNow = async (page: Page) => Number(await slider(page).getAttribute('aria-valuenow'));
+
+interface Info { runs: { id: string; firstSeq: number; lastSeq: number; startAt: number }[] }
+interface StateAt { files: { path: string }[]; changes: { kind: string; attribution?: { confidence: string }; savedBy?: string }[]; at: number }
+
+test('livemap sn: rewind goes back through the scope\'s version history', async ({ page }) => {
+  test.setTimeout(180_000);
+  // The version history went in as a back-dated run before the live one.
+  expect(out).toMatch(/Timeline: [\d,]+ history events imported as a back-dated run/);
+  const base = new URL(url);
+  const token = base.searchParams.get('t')!;
+  const api = async <T>(p: string): Promise<T> => {
+    const r = await page.request.get(`${base.origin}${p}${p.includes('?') ? '&' : '?'}t=${token}`);
+    expect(r.ok(), `${p}: ${r.status()}`).toBe(true);
+    return (await r.json()) as T;
+  };
+  const info = await api<Info>('/api/history/info');
+  expect(info.runs.length).toBeGreaterThanOrEqual(2);
+  const [hist, live] = info.runs;
+  expect(hist.id).toBe('sn-history-x_snc_cc_offering');
+  expect(live.firstSeq).toBe(hist.lastSeq + 1);
+  // It starts at the first mirrored save in the history file, months before the live run.
+  const doc = JSON.parse(fs.readFileSync(path.join(tmp, '.livemap', 'sn', 'x_snc_cc_offering.history.json'), 'utf8')) as { events: { at: number; kind: string; path?: string }[] };
+  const firstSave = Math.min(...doc.events.filter(e => e.kind !== 'captured' && e.path).map(e => e.at));
+  expect(hist.startAt).toBe(firstSave);
+  expect(new Date(hist.startAt).getUTCFullYear()).toBe(2026);
+  expect(live.startAt - hist.startAt).toBeGreaterThan(30 * 86_400_000);
+
+  // The scope grows through the run, and ends with every mirrored file.
+  const first = await api<StateAt>(`/api/history/state?seq=${hist.firstSeq}`);
+  const last = await api<StateAt>(`/api/history/state?seq=${hist.lastSeq}`);
+  const now = await api<StateAt>(`/api/history/state?seq=${live.firstSeq}`);
+  expect(first.files.length).toBeLessThan(last.files.length);
+  expect(last.files.map(f => f.path).sort()).toEqual(now.files.map(f => f.path).sort());
+  expect(last.changes.length).toBeGreaterThan(50);
+  // SkyForge log matches are attributions; a save known only from the version history has none, just who saved it.
+  expect(new Set(last.changes.map(c => c.attribution?.confidence))).toEqual(new Set(['log', 'likely', undefined]));
+  expect(last.changes.filter(c => !c.attribution).every(c => typeof c.savedBy === 'string' && c.savedBy.length > 0)).toBe(true);
+
+  // In the UI: rewind to the start of the history, then step into it.
+  await page.goto(url);
+  await expect(page.getByRole('status').filter({ hasText: 'Live' })).toBeAttached({ timeout: 30_000 });
+  await expect(tlState(page)).toHaveText('LIVE');
+  await slider(page).focus();
+  await page.keyboard.press('Home');
+  await expect(tlState(page)).toHaveText('REWOUND');
+  await expect(page.locator('.rw-banner')).toBeVisible();
+  expect(await valueNow(page)).toBe(hist.firstSeq);
+  await expect(feed(page).locator('.f-chg')).toHaveCount(0);
+  let at = hist.firstSeq;
+  for (let i = 0; i < 1000 && at < hist.firstSeq + 20; i++) {
+    await page.keyboard.press('ArrowRight');
+    at = await valueNow(page);
+  }
+  expect(at).toBeLessThanOrEqual(hist.lastSeq);
+  await expect(feed(page).locator('.f-chg').first()).toBeVisible({ timeout: 10_000 });
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: path.join(shots, 'servicenow-rewind-history.png'), animations: 'disabled' });
+});
+
 test('livemap sn: a record saved on the instance shows within 8 s, a SkyForge change is exact, and an outage shows offline', async ({ page }) => {
   await expect.poll(() => out, { timeout: 30_000 }).toContain('Live polling every 2 s (read-only).');
   await page.goto(url);
