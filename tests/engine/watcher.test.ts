@@ -12,12 +12,15 @@ let model: ProjectModel;
 let watcher: Watcher | null;
 let changes: { change: ChangeSummary; touched: FileModel[]; t: number }[];
 let errors: Error[];
+/** The last change id the macOS sentinel used (0 elsewhere): a test's first change has id `idBase + 1`. */
+let idBase = 0;
 
-/** Slower CI runners scale wall-clock budgets (LIVEMAP_TIME_SCALE, set by CI on macOS and Windows). */
+/** Slower CI runners scale wall-clock budgets (LIVEMAP_TIME_SCALE, set by CI: 2 on Ubuntu, 3 on macOS and Windows). */
 const TIME_SCALE = Number(process.env.LIVEMAP_TIME_SCALE) || 1;
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+/** Waits until `pred` holds, for up to `ms` scaled by TIME_SCALE. */
 async function waitFor(pred: () => boolean, ms = 3000): Promise<void> {
-  const end = Date.now() + ms;
+  const end = Date.now() + ms * TIME_SCALE;
   while (!pred()) {
     if (Date.now() > end) throw new Error('waitFor timed out');
     await sleep(10);
@@ -36,6 +39,16 @@ async function startWatcher(opts: WatcherOptions = {}): Promise<Watcher> {
   w.on('error', (e: Error) => errors.push(e));
   await w.start();
   watcher = w;
+  // macOS: FSEvents can start reporting a moment after start() resolves. A sentinel file's create and delete prove the
+  // stream is live before the test writes; their changes are dropped.
+  if (process.platform === 'darwin') {
+    put('lm-sentinel.ts', 'export const s = 1;\n');
+    await waitFor(() => changes.some(c => c.change.path === 'lm-sentinel.ts'));
+    fs.rmSync(path.join(root, 'lm-sentinel.ts'));
+    await waitFor(() => changes.some(c => c.change.path === 'lm-sentinel.ts' && c.change.kind === 'deleted'));
+    idBase = Math.max(...changes.map(c => c.change.id));
+    changes.length = 0;
+  }
   return w;
 }
 const names = (c: ChangeSummary) => c.symbols.added.map(s => s.name);
@@ -45,6 +58,7 @@ beforeEach(() => {
   put('src/keep.ts', 'export const keep = 1;\n');
   changes = [];
   errors = [];
+  idBase = 0;
   watcher = null;
 });
 afterEach(async () => {
@@ -52,7 +66,8 @@ afterEach(async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe('Watcher', () => {
+// The longest test waits 8 s for events (scaled), and vitest's default 5 s timeout would cut it short.
+describe('Watcher', { timeout: 15_000 * TIME_SCALE }, () => {
   it('emits one created change with the new symbol', async () => {
     await startWatcher();
     put('src/x.ts', 'export function x() { return 1; }\n');
@@ -62,7 +77,7 @@ describe('Watcher', () => {
     const c = changes[0].change;
     expect(c.kind).toBe('created');
     expect(c.path).toBe('src/x.ts');
-    expect(c.id).toBe(1);
+    expect(c.id).toBe(idBase + 1);
     expect(names(c)).toContain('x');
     expect(model.get('src/x.ts')).toBeDefined();
   });
@@ -155,7 +170,7 @@ describe('Watcher', () => {
     await waitFor(() => changes.length >= 1);
     const latency = changes[0].t - t0;
     expect(changes[0].change.path).toBe('src/big.ts');
-    expect(latency).toBeLessThan(500);
+    expect(latency).toBeLessThan(500 * TIME_SCALE);
   });
 
   it('assigns monotonically increasing ids', async () => {
@@ -164,7 +179,7 @@ describe('Watcher', () => {
     await waitFor(() => changes.length >= 1);
     put('src/b.ts', 'export const b = 1;\n');
     await waitFor(() => changes.length >= 2);
-    expect(changes.map(c => c.change.id)).toEqual([1, 2]);
+    expect(changes.map(c => c.change.id)).toEqual([idBase + 1, idBase + 2]);
   });
 
   it('emits error and keeps processing when an update throws', async () => {
@@ -259,7 +274,7 @@ describe('Watcher', () => {
     await sleep(100);
     expect(relinkAt.length).toBeGreaterThanOrEqual(5);
     const gaps = relinkAt.slice(1).map((t, i) => t - relinkAt[i]);
-    expect(Math.max(...gaps)).toBeLessThan(400);
+    expect(Math.max(...gaps)).toBeLessThan(400 * TIME_SCALE);
   });
 
   it('watches a self-ignoring nested .gitignore (without indexing it) and reloads when it is edited', async () => {
