@@ -6,7 +6,8 @@ import type { DomainIndex, Table } from '@shared/domain.js';
 import { useStore } from '../store';
 import { emptyDomain } from '../fixtures';
 import { LARGE, LAYOUT_TIMEOUT, NODE_W, relationLinks, type ElkRun } from '../layout/schemaLayout';
-import { CAP, SchemaView, TURN_DEBOUNCE, pickTables } from './SchemaView';
+import { CAP, SchemaView, TURN_DEBOUNCE, forgetListChoice, pickTables } from './SchemaView';
+import { useSlideOvers } from '../panels';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -326,6 +327,14 @@ describe('SchemaView table list', () => {
     await act(async () => { set.call(input, v); input.dispatchEvent(new Event('input', { bubbles: true })); });
   }
   const esc = (el: Element) => act(() => { el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  /** Presses Esc; returns whether the view left the event alone (not default-prevented). */
+  const escFree = (el: Element): boolean => {
+    let free = true;
+    act(() => { free = el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
+    return free;
+  };
+  const rowOf = (k: string) => rows().find(r => r.dataset.table === k)!;
+  beforeEach(() => forgetListChoice());
   afterEach(() => vi.unstubAllGlobals());
 
   it(`is open for over ${LARGE} tables, listing each by name with column and relation counts`, async () => {
@@ -387,6 +396,91 @@ describe('SchemaView table list', () => {
     expect(wrap('picklone').classList.contains('dim')).toBe(false);
   });
 
+  it('Esc clears the search, then the focus, and only then reaches an open side panel', async () => {
+    const Slides = () => { useSlideOvers(); return null; };
+    await mount(family(LARGE + 4, 'Esc'));
+    await act(async () => root.render(<><Slides /><SchemaView run={rowRun} /></>));
+    await settleLayout();
+    await act(async () => rowOf('esckid1').click());
+    await settleLayout();
+    act(() => useStore.getState().setPanel('inspector'));
+    await type('kid');
+    expect(escFree(search())).toBe(false);
+    expect(search().value).toBe('');
+    expect(useStore.getState().panel).toBe('inspector');
+    expect(escFree(search())).toBe(false);
+    expect(wrap('esckid1').classList.contains('focus')).toBe(false);
+    expect(useStore.getState().panel).toBe('inspector');
+    expect(escFree(search())).toBe(true);
+    expect(useStore.getState().panel).toBeNull();
+  });
+
+  it(`a focused table that "Show top ${CAP}" hides is no longer focused`, async () => {
+    const many = Array.from({ length: CAP + 5 }, (_, i) => bare(`Top${i}`));
+    await mount(many);
+    const k = `top${CAP + 4}`;
+    await act(async () => rowOf(k).click());
+    await settleLayout();
+    await settleLayout();
+    expect(wrap(k).classList.contains('focus')).toBe(true);
+    const top = [...host.querySelectorAll('button')].find(b => b.textContent === `Show top ${CAP}`)!;
+    await act(async () => top.click());
+    await settleLayout();
+    expect(rowOf(k).getAttribute('aria-current')).toBeNull();
+  });
+
+  it(`opens once, when the schema grows past ${LARGE} tables, and then leaves it to the user`, async () => {
+    const t = family(LARGE + 4, 'Grow');
+    await mount(t.slice(0, 6));
+    expect(list()).toBeNull();
+    await update(t);
+    expect(list()).not.toBeNull();
+    await act(async () => host.querySelector<HTMLButtonElement>('.sv-close')!.click());
+    await update(t.slice(0, 6));
+    await update(t);
+    expect(list()).toBeNull();
+  });
+
+  it(`stays closed past ${LARGE} tables when the user already closed it`, async () => {
+    const t = family(LARGE + 4, 'Chose');
+    await mount(t.slice(0, 6));
+    await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent === 'Tables')!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('.sv-close')!.click());
+    await update(t);
+    expect(list()).toBeNull();
+  });
+
+  it('on a narrow pane any focus shows the canvas, and the list is the main view again next time', async () => {
+    const realRect = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      return this.classList.contains('sv-canvas') ? ({ x: 0, y: 0, top: 0, left: 0, right: 390, bottom: 700, width: 390, height: 700 } as DOMRect) : realRect.call(this);
+    };
+    try {
+      const again = async () => {
+        act(() => root.unmount());
+        root = createRoot(host);
+        await act(async () => root.render(<SchemaView run={rowRun} />));
+        await settleLayout();
+      };
+      await mount(family(LARGE + 4, 'Nar'));
+      expect(list()!.classList.contains('over')).toBe(true);
+      // The palette.
+      await act(async () => useStore.getState().focusTable('narkid2'));
+      await settleLayout();
+      expect(list()).toBeNull();
+      expect(wrap('narkid2').classList.contains('focus')).toBe(true);
+      await again();
+      expect(list()).not.toBeNull();
+      // The list itself.
+      await act(async () => rowOf('narkid3').click());
+      await settleLayout();
+      expect(list()).toBeNull();
+      await again();
+      expect(list()).not.toBeNull();
+    } finally {
+      Element.prototype.getBoundingClientRect = realRect;
+    }
+  });
 });
 
 describe('SchemaView layout direction (pane aspect)', () => {

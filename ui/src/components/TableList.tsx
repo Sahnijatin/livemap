@@ -39,7 +39,10 @@ export function TableList({ tables, relations, focused, narrow, onPick, onClear,
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key !== 'Escape') return;
     if (q) setQ('');
-    else onClear();
+    else if (focused) onClear();
+    else return;
+    // Handled here, so an open side panel stays open.
+    e.preventDefault();
   };
 
   return (

@@ -7,7 +7,7 @@ import '@xyflow/react/dist/style.css';
 import type { Table } from '@shared/domain.js';
 import { fieldKey, tableKey, useStore, type DomainBase } from '../store';
 import {
-  BOTH_WAYS_MAX, FIT_PADDING, LARGE, MAX_ROWS, NARROW_PANE, NODE_W, fitZoom, layoutDirection, pickLayout, layoutTables, relationLinks, schemaGroups, settle, shownLinks, shownRows, workerRun,
+  BOTH_WAYS_MAX, FIT_PADDING, LARGE, MAX_ROWS, NARROW_PANE, NODE_W, bounds, fitZoom, layoutDirection, mainGroup, pickLayout, layoutTables, relationLinks, schemaGroups, settle, shownLinks, shownRows, workerRun,
   type Direction, type ElkRun, type Pos,
 } from '../layout/schemaLayout';
 import { MORE_HANDLE, TableNode, headHandle, rowHandle, type TableFlowNode, type TableNodeData } from './TableNode';
@@ -49,6 +49,8 @@ let laidOut: Direction | null = null;
 let laidDir: Direction | null = null;
 /** Whether the table list is open, once the user has opened or closed it. */
 let listOpen: boolean | null = null;
+/** Forget the list choice, as a new session would (tests). */
+export function forgetListChoice(): void { listOpen = null; }
 /** Resizes settle for this long before the direction is read again, so a drag-resize lays out once. */
 export const TURN_DEBOUNCE = 250;
 /** Canvas width the table list covers beside it (264 px, inset 12 px, and a 12 px gap); the CSS matches. */
@@ -132,6 +134,13 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
   focusedRef.current = focused;
   const [showList, setShowList] = useState(() => listOpen ?? tables.length > LARGE);
   const toggleList = useCallback((on: boolean) => { listOpen = on; setShowList(on); }, []);
+  // A schema that grows past LARGE while shown opens the list, once, unless the user has chosen.
+  const opened = useRef(tables.length > LARGE);
+  useEffect(() => {
+    if (opened.current || listOpen !== null || tables.length <= LARGE) return;
+    opened.current = true;
+    setShowList(true);
+  }, [tables.length]);
   // The list sits beside the canvas on a wide pane, so fits and focus keep clear of it.
   const beside = showList && !narrow;
   const padding = useMemo<FitViewOptions['padding']>(() => (beside ? { ...FIT_PADDING, left: `${LIST_W + 24}px` as const } : FIT_PADDING), [beside]);
@@ -268,7 +277,8 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
   }, [focusClass]);
 
   // A large schema draws the links inside linked groups, plus the hovered and focused tables' own.
-  const always = useMemo(() => new Set(shownLinks(visible, links, null)), [visible, links]);
+  const groups = useMemo(() => (visible.length > LARGE ? schemaGroups(visible, links) : null), [visible, links]);
+  const always = useMemo(() => new Set(shownLinks(visible, links, null, groups ?? undefined)), [visible, links, groups]);
   const edges = useMemo<BuiltInEdge[]>(() => {
     const byKey = new Map(visible.map(t => [tableKey(t), t]));
     return links.flatMap(l => {
@@ -318,6 +328,8 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
         pending.current = k;
         setFocused(k);
         if (!all && !latest.current.some(t => tableKey(t) === k)) setAll(true);
+        // On a narrow pane the list covers the canvas: show the canvas, for this view only.
+        if (narrow) setShowList(false);
       }
     }
     const k = pending.current;
@@ -337,12 +349,7 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
       const w = pane.width - left - 48;
       const ht = pane.height - 96;
       const frame = (keys: string[]) => {
-        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-        for (const key of keys) {
-          const q = pos.get(key);
-          if (!q) continue;
-          x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y); x1 = Math.max(x1, q.x + NODE_W); y1 = Math.max(y1, q.y + h(key));
-        }
+        const { x0, y0, x1, y1 } = bounds(keys, pos, h);
         return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, zoom: Math.min(1, w / (x1 - x0), ht / (y1 - y0)) };
       };
       let f = frame([k, ...links.flatMap(l => (l.from === k ? [l.to] : l.to === k ? [l.from] : []))]);
@@ -350,11 +357,11 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
       void rf.setViewport({ x: left + 24 + w / 2 - f.cx * f.zoom, y: 24 + ht / 2 - f.cy * f.zoom, zoom: f.zoom }, { duration: motion(500) });
     }
     setPulse(k);
-  }, [tableFocus, pos, tables, all, rf, links, beside, paneRef]);
-  // A focused table that left the schema is no longer focused.
+  }, [tableFocus, pos, tables, all, rf, links, beside, paneRef, narrow]);
+  // A focused table no longer drawn (it left the schema, or "Show top 150" hid it) is no longer focused.
   useEffect(() => {
-    if (focused && !tables.some(t => tableKey(t) === focused)) setFocused(null);
-  }, [focused, tables]);
+    if (focused && pending.current !== focused && !visible.some(t => tableKey(t) === focused)) setFocused(null);
+  }, [focused, visible]);
   useEffect(() => {
     if (!pulse) return;
     const t = window.setTimeout(() => setPulse(null), 1600);
@@ -366,16 +373,14 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
   useEffect(() => {
     if (fitted.current || !initialized || !nodes.length) return;
     fitted.current = true;
-    // Never fit smaller than a readable zoom; a large schema that would fit smaller starts on its biggest group.
+    // Never fit smaller than a readable zoom; a large schema that would fit smaller starts on its biggest linked group.
     const pane = paneRef.current?.getBoundingClientRect();
     let only: { id: string }[] | undefined;
     if (visible.length > LARGE && pane && pane.width > 0 && fitZoom(visible, pos, pane.width - (beside ? LIST_W : 0), pane.height) < MIN_FIT) {
-      const g = schemaGroups(visible);
-      const biggest = [...g.comps, ...g.hubs, g.loose].reduce((a, b) => (b.length > a.length ? b : a));
-      only = biggest.map(id => ({ id }));
+      only = mainGroup(groups ?? schemaGroups(visible, links)).map(id => ({ id }));
     }
     rf.fitView({ nodes: only, padding, maxZoom: 1, minZoom: MIN_FIT, duration: 0 });
-  }, [initialized, nodes, rf, paneRef, beside, visible, pos, padding]);
+  }, [initialized, nodes, rf, paneRef, beside, visible, pos, padding, groups, links]);
 
   const onNodesChange = useCallback((changes: NodeChange<TableFlowNode>[]) => {
     setNodes(ns => applyNodeChanges(changes, ns));
@@ -395,11 +400,7 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
   }, [tables]);
   // The source note sits under the list when it is open, so it never runs over cards beside it.
   const hint = <p className="cv-hint">Tables and relations, read from {files.toLocaleString()} {files === 1 ? 'file' : 'files'}. Links are approximate.</p>;
-  const pick = useCallback((k: string) => {
-    // On a narrow pane the list covers the canvas: show the canvas with the table focused.
-    if (narrow) toggleList(false);
-    useStore.getState().focusTable(k);
-  }, [narrow, toggleList]);
+  const pick = useCallback((k: string) => useStore.getState().focusTable(k), []);
 
   return (
     <>
