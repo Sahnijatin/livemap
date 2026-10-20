@@ -8,7 +8,9 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
-import { argNames, buildCapture, needsResult, SessionContext, type CaptureEvent, type ClientInfo } from './capture.js';
+import { argNames, buildCapture, MAX_PARSED_RESULT, needsResult, SessionContext, type CaptureEvent, type ClientInfo } from './capture.js';
+
+export { MAX_PARSED_RESULT };
 import { baseToolName } from '../shared/tools.js';
 
 /** The MCP client name LiveMap's own nexus session carries (plugins/servicenow/nexus.ts). */
@@ -19,8 +21,6 @@ export const INSTANCE_HEADER = 'x-sn-instance';
 export const MAX_LINE = 256 * 1024 * 1024;
 /** Calls the proxy is still timing; past this, the oldest is forgotten (its answer still passes through). */
 const MAX_PENDING = 1000;
-/** Results larger than this are not parsed for the capture: only their `isError` flag counts. */
-export const MAX_PARSED_RESULT = 1024 * 1024;
 /** Default per-request timeout for an HTTP upstream: background scripts can run for minutes. */
 export const DEFAULT_TIMEOUT_MS = 600_000;
 

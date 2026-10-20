@@ -23,4 +23,16 @@ export default defineConfig([
     removeNodeProtocol: false,
     splitting: false,
   },
+  {
+    // SkyForge plugin: one self-contained ESM file (node: built-ins only), copied into ~/.skyforge/plugin/.
+    entry: { 'livemap-skyforge': 'plugins/servicenow/skyforge-plugin/plugin.ts' },
+    format: ['esm'],
+    target: 'node18',
+    platform: 'node',
+    clean: ['!*/**', '!!(livemap-skyforge.js*)'],
+    noExternal: [/.*/],
+    removeNodeProtocol: false,
+    splitting: false,
+    banner: { js: '// LiveMap plugin for SkyForge. Built from plugins/servicenow/skyforge-plugin/plugin.ts by npm run build; do not edit.' },
+  },
 ]);

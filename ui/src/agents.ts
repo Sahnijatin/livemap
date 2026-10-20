@@ -10,6 +10,7 @@ export const AGENTS: Record<AgentKind, AgentMeta> = {
   cursor: { letter: 'U', name: 'Cursor' },
   git: { letter: 'G', name: 'Git' },
   'mcp-client': { letter: 'M', name: 'MCP client' },
+  skyforge: { letter: 'S', name: 'SkyForge' },
   other: { letter: 'A', name: 'Agent' },
 };
 

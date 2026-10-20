@@ -160,9 +160,12 @@ describe('review fixes: gateway reads, redaction gaps', () => {
     const keys = ['accessToken', 'clientSecret', 'refreshToken', 'pwd', 'passphrase', 'cookie', 'Set-Cookie', 'private_key', 'credential', 'credentials', 'X-Api-Key', 'password2', 'auth', 'Authorization', 'X-Auth-Token'];
     const out = redact(Object.fromEntries(keys.map((k) => [k, 'v']))) as Record<string, unknown>;
     for (const k of keys) expect(out[k], k).toBe(REDACTED);
-    // Only whole auth/authorization keys: flags that merely end in "auth" stay.
-    const flags = { author: 'a', tokenizer_name: 'b', table: 'c', requires_auth: true, oauth: 'enabled', basic_auth: 'false', oauth_enabled: true };
+    // Keys with the word "auth" keep only plain flags; anything else they hold is a secret.
+    const flags = { author: 'a', tokenizer_name: 'b', table: 'c', requires_auth: true, basic_auth: 'false', http_auth: 'true', oauth: 'enabled', oauth_enabled: true };
     expect(redact(flags)).toEqual(flags);
+    expect(redact({ basic_auth: 'dXNlcjpwYXNz', proxy_auth: 'user:pass', http_auth: { user: 'u' }, auth_string: 'x', proxyAuth: 'y', requires_auth: 'yes' })).toEqual({
+      basic_auth: REDACTED, proxy_auth: REDACTED, http_auth: REDACTED, auth_string: REDACTED, proxyAuth: REDACTED, requires_auth: REDACTED,
+    });
   });
 
   it('redacts the value of a secret name-value pair', () => {

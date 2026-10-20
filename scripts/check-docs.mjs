@@ -7,7 +7,7 @@
  * - Every #anchor matches a heading in the target file.
  * - No em dash (U+2014).
  * - Every flag (--x) the docs mention appears in the CLI sources (src/cli.ts, src/cli-args.ts, plugins/servicenow/cli.ts,
- *   src/proxy/cli.ts),
+ *   src/proxy/cli.ts and the SkyForge plugin commands),
  *   apart from the few non-LiveMap flags below.
  * - A table row whose first cell starts with --port or --pull states the default the code uses.
  *
@@ -39,7 +39,7 @@ const docFiles = ['README.md', 'CONTRIBUTING.md', ...fs.readdirSync(path.join(ro
   .map(n => `docs/${n}`)]
   .filter(f => fs.existsSync(path.join(root, f)));
 
-const cliSource = ['src/cli.ts', 'src/cli-args.ts', 'plugins/servicenow/cli.ts', 'src/proxy/cli.ts'].map(f => fs.readFileSync(path.join(root, f), 'utf8')).join('\n');
+const cliSource = ['src/cli.ts', 'src/cli-args.ts', 'plugins/servicenow/cli.ts', 'src/proxy/cli.ts', 'plugins/servicenow/skyforge-plugin/install.ts', 'plugins/servicenow/skyforge-plugin/backfill-sessions.ts'].map(f => fs.readFileSync(path.join(root, f), 'utf8')).join('\n');
 const serverSource = fs.readFileSync(path.join(root, 'src/server/server.ts'), 'utf8');
 const constant = (src, name) => {
   const m = new RegExp(`const ${name} = (\\d+);`).exec(src);

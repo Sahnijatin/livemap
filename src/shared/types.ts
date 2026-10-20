@@ -58,8 +58,11 @@ export interface ChangeSummary {
   summary?: string;
 }
 
-/** `mcp-client`: a desktop MCP client whose calls LiveMap sees through `livemap mcp-proxy`. */
-export type AgentKind = 'claude-code' | 'codex' | 'cursor' | 'git' | 'mcp-client' | 'other';
+/**
+ * `mcp-client`: a desktop MCP client whose calls LiveMap sees through `livemap mcp-proxy`. `skyforge`: a SkyForge
+ * TUI or Hub session, seen through LiveMap's SkyForge plugin.
+ */
+export type AgentKind = 'claude-code' | 'codex' | 'cursor' | 'git' | 'mcp-client' | 'skyforge' | 'other';
 export type AgentEventType = 'prompt' | 'message' | 'thinking' | 'tool_start' | 'tool_end' | 'commit' | 'status';
 /**
  * `inner` is the real tool of a gateway call (`tool_execute`), `access` its read or write class, and

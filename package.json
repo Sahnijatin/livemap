@@ -24,7 +24,8 @@
     "docs:check": "node scripts/check-docs.mjs",
     "demo": "node scripts/demo.mjs",
     "smoke": "node scripts/smoke-pack.mjs",
-    "budget": "node scripts/check-budget.mjs"
+    "budget": "node scripts/check-budget.mjs",
+    "plugin:sync": "node scripts/sync-plugin.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.1",
