@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { AgentEvent, AgentKind, AgentSession, Attribution, ChangeSummary } from '@shared/types.js';
+import type { AgentEvent, AgentSession, Attribution, ChangeSummary } from '@shared/types.js';
 import type { SnIndex, SnRecordInfo } from '@shared/sn.js';
 import { baseToolName } from '@shared/tools.js';
 import { authHeaders } from '../connection';
@@ -23,9 +23,6 @@ export const CONFIDENCE_HINT: Record<ConfidenceLevel, string> = {
   ambiguous: 'More than one agent session fits.',
   none: 'No agent call matched. A person, or a tool LiveMap does not see, made this change.',
 };
-
-/** An attribution with the fields the matching rules add (`reason`, `candidates`), whatever the shared type holds. */
-export type RichAttribution = Attribution & { rule?: string; reason?: string; candidates?: { agent: AgentKind; sessionId: string; eventId?: number }[] };
 
 export const levelOf = (a: Attribution | undefined): ConfidenceLevel => (a ? (CONFIDENCES as readonly string[]).includes(a.confidence) ? (a.confidence as ConfidenceLevel) : 'likely' : 'none');
 

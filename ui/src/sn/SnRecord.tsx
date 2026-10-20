@@ -4,7 +4,7 @@ import { useStore } from '../store';
 import { agentName } from '../agents';
 import {
   CONFIDENCE_HINT, CONFIDENCE_LABEL, inRecord, kindOf, levelOf, openUrl, recordOf, useSn, whyOf,
-  type ConfidenceLevel, type RichAttribution,
+  type ConfidenceLevel,
 } from './data';
 
 /* The inspector's ServiceNow card: what the selected record is, who changed it last and why, and a link to it. */
@@ -76,7 +76,7 @@ export function SnRecordCard({ path }: { path: string }) {
 
   if (!r || !index) return null;
   const kind = kindOf(r.table);
-  const a = latest?.attribution as RichAttribution | undefined;
+  const a = latest?.attribution;
   const level = levelOf(a);
   const why = latest ? whyOf(latest, kind, events, sessions) : {};
   const url = openUrl(index.instance, r.table, r.sysId);
