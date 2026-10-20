@@ -847,6 +847,18 @@ describe('docked panels at 1080 px and wider', () => {
     expect(stored().collapsed.inspector).toBe(true);
   });
 
+  it('widening while focus is in the slide-over of a collapsed inspector hands focus to the toolbar button (#68)', async () => {
+    await mount();
+    act(() => btn('Hide inspector').click());
+    act(() => resize(900));
+    act(() => useStore.getState().setPanel('inspector'));
+    host.querySelector<HTMLElement>('aside.insp')!.focus();
+    expect(host.querySelector('aside.insp')!.contains(document.activeElement)).toBe(true);
+    act(() => resize(1440));
+    expect(app().classList.contains('right-collapsed')).toBe(true);
+    expect(document.activeElement).toBe(btn('Inspector'));
+  });
+
   it('when a peek ends with focus in the inspector, focus goes to the toolbar Inspector button', async () => {
     await mount();
     act(() => btn('Hide inspector').click());

@@ -13,7 +13,8 @@ vi.mock('../api', () => {
   return { ApiError, addFlag: vi.fn(), removeFlag: vi.fn(), setPaused: vi.fn() };
 });
 const api = await import('../api');
-const { LiveSession } = await import('./LiveSession');
+const { LiveHead, LiveSession } = await import('./LiveSession');
+const { session } = await import('../fixtures');
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -88,5 +89,24 @@ describe('LiveSession flags', () => {
     expect(btn.title).toBe(READ_ONLY_TIP);
     act(() => btn.click());
     expect(api.removeFlag).not.toHaveBeenCalled();
+  });
+});
+
+describe('LiveHead', () => {
+  const tag = () => host.querySelector('.livetag')?.textContent ?? null;
+
+  it('shows Live while the agent works, Paused when paused, nothing when idle or rewound', () => {
+    act(() => root.render(<LiveHead />));
+    expect(tag()).toBeNull();
+    act(() => useStore.getState().apply({ type: 'session', session: session({ id: 's1', status: 'working', hooks: true }) }));
+    expect(tag()).toBe('Live');
+    act(() => useStore.getState().apply({ type: 'control', control: { paused: true, flags: [] } }));
+    expect(tag()).toBe('Paused');
+    act(() => useStore.getState().apply({ type: 'control', control: { paused: false, flags: [] } }));
+    act(() => useStore.setState({ rewound: { seq: 1, at: 1 } }));
+    expect(tag()).toBeNull();
+    act(() => useStore.setState({ rewound: null }));
+    act(() => useStore.getState().apply({ type: 'session', session: session({ id: 's1', status: 'idle', hooks: true }) }));
+    expect(tag()).toBeNull();
   });
 });

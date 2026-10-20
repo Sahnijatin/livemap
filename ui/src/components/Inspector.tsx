@@ -75,7 +75,7 @@ export function Inspector() {
     const a = document.activeElement;
     if (box.current?.contains(a) || (focused.current && (!a || a === document.body))) focusOpener('inspector');
     focused.current = false;
-  }, [collapsed]);
+  }, [collapsed, narrow]);
   return (
     <aside
       id="inspector"
