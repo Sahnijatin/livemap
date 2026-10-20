@@ -405,6 +405,7 @@ describe('SchemaView table list', () => {
     await settleLayout();
     act(() => useStore.getState().setPanel('inspector'));
     await type('kid');
+    act(() => search().focus());
     expect(escFree(search())).toBe(false);
     expect(search().value).toBe('');
     expect(useStore.getState().panel).toBe('inspector');
@@ -413,6 +414,35 @@ describe('SchemaView table list', () => {
     expect(useStore.getState().panel).toBe('inspector');
     expect(escFree(search())).toBe(true);
     expect(useStore.getState().panel).toBeNull();
+  });
+
+  it('Esc with focus on the page body clears the focus, and yields to an open slide-over panel', async () => {
+    const Slides = () => { useSlideOvers(); return null; };
+    await mount(family(LARGE + 4, 'Body'));
+    await act(async () => root.render(<><Slides /><SchemaView run={rowRun} /></>));
+    await settleLayout();
+    await act(async () => rowOf('bodykid1').click());
+    await settleLayout();
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    expect(escFree(document.body)).toBe(false);
+    expect(wrap('bodykid1').classList.contains('focus')).toBe(false);
+    expect(escFree(document.body)).toBe(true);
+    await act(async () => rowOf('bodykid1').click());
+    await settleLayout();
+    act(() => useStore.getState().setPanel('inspector'));
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    escFree(document.body);
+    expect(useStore.getState().panel).toBeNull();
+    expect(wrap('bodykid1').classList.contains('focus')).toBe(true);
+  });
+
+  it('lists at most 300 rows, with a line asking to refine the search', async () => {
+    await mount(Array.from({ length: 400 }, (_, i) => bare(`Many${String(i).padStart(3, '0')}`)));
+    expect(rows()).toHaveLength(300);
+    expect(host.querySelector('.sv-more')?.textContent).toBe('100 more, refine the search');
+    await type('many01');
+    expect(rows()).toHaveLength(10);
+    expect(host.querySelector('.sv-more')).toBeNull();
   });
 
   it(`a focused table that "Show top ${CAP}" hides is no longer focused`, async () => {
@@ -448,6 +478,21 @@ describe('SchemaView table list', () => {
     await act(async () => host.querySelector<HTMLButtonElement>('.sv-close')!.click());
     await update(t);
     expect(list()).toBeNull();
+  });
+
+  it(`on a narrow pane, growing past ${LARGE} tables does not cover the diagram`, async () => {
+    const realRect = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      return this.classList.contains('sv-canvas') ? ({ x: 0, y: 0, top: 0, left: 0, right: 390, bottom: 700, width: 390, height: 700 } as DOMRect) : realRect.call(this);
+    };
+    try {
+      const t = family(LARGE + 4, 'NGrow');
+      await mount(t.slice(0, 6));
+      await update(t);
+      expect(list()).toBeNull();
+    } finally {
+      Element.prototype.getBoundingClientRect = realRect;
+    }
   });
 
   it('on a narrow pane any focus shows the canvas, and the list is the main view again next time', async () => {

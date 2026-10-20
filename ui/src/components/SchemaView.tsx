@@ -137,10 +137,34 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
   // A schema that grows past LARGE while shown opens the list, once, unless the user has chosen.
   const opened = useRef(tables.length > LARGE);
   useEffect(() => {
-    if (opened.current || listOpen !== null || tables.length <= LARGE) return;
+    // Not on a narrow pane, where the list would cover the diagram mid-use.
+    if (opened.current || listOpen !== null || tables.length <= LARGE || narrow) return;
     opened.current = true;
     setShowList(true);
-  }, [tables.length]);
+  }, [tables.length, narrow]);
+  const [q, setQ] = useState('');
+  // Esc clears the list's search, then the focus: from inside the view, or from the page body unless an open
+  // slide-over panel takes it first. In capture, so it runs ahead of the panels' window listener.
+  const escape = (): boolean => {
+    if (showList && q) setQ('');
+    else if (focused) setFocused(null);
+    else return false;
+    return true;
+  };
+  const escapeRef = useRef(escape);
+  escapeRef.current = escape;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      const a = document.activeElement;
+      const body = !a || a === document.body;
+      if (!body && !paneRef.current?.parentElement?.contains(a)) return;
+      if (body && useStore.getState().panel) return;
+      if (escapeRef.current()) e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [paneRef]);
   // The list sits beside the canvas on a wide pane, so fits and focus keep clear of it.
   const beside = showList && !narrow;
   const padding = useMemo<FitViewOptions['padding']>(() => (beside ? { ...FIT_PADDING, left: `${LIST_W + 24}px` as const } : FIT_PADDING), [beside]);
@@ -148,6 +172,11 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
   const visible = useMemo(() => pickTables(tables, all), [tables, all]);
   const latest = useRef(visible);
   latest.current = visible;
+  const links = useMemo(() => relationLinks(visible), [visible]);
+  // A large schema's groups, shared by the layout, the drawn lines and the first fit.
+  const groups = useMemo(() => (visible.length > LARGE ? schemaGroups(visible, links) : null), [visible, links]);
+  const groupsRef = useRef(groups);
+  groupsRef.current = groups;
   // Layout runs when the drawn tables change or a card's height changes (fields added or removed).
   const shape = visible.map(t => `${tableKey(t)}:${shownRows(t.fields.length)}`).join('\u0000');
 
@@ -157,16 +186,17 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
     if (!dir) return;
     let live = true;
     const list = latest.current;
+    const g = groupsRef.current;
     const turned = laidOut !== dir;
     const start = turned ? new Map<string, Pos>() : new Map(positions);
     const pane = paneRef.current?.getBoundingClientRect();
     // A fresh layout tries both directions and keeps the one that fits the pane larger
     // (a few tables in a chain read better stacked even in a pane slightly wider than tall).
     const fresh = async (): Promise<{ dir: Direction; value: Map<string, Pos> }> => {
-      const own = await layoutTables(list, start, run, dir);
+      const own = await layoutTables(list, start, run, dir, g);
       if (!pane || !(pane.width > 0) || list.length < 2 || list.length > BOTH_WAYS_MAX) return { dir, value: own };
       const otherDir: Direction = dir === 'RIGHT' ? 'DOWN' : 'RIGHT';
-      const other = await layoutTables(list, start, run, otherDir).catch(() => null);
+      const other = await layoutTables(list, start, run, otherDir, g).catch(() => null);
       if (!other) return { dir, value: own };
       return pickLayout(
         { dir, zoom: fitZoom(list, own, pane.width, pane.height), value: own },
@@ -175,7 +205,7 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
     };
     // Nothing placed yet (the first tables, or all new ones) is a fresh layout too.
     const placedNone = list.every(t => !start.has(tableKey(t)));
-    const job = turned || placedNone ? fresh() : layoutTables(list, start, run, laidDir ?? dir).then(value => ({ dir: laidDir ?? dir, value }));
+    const job = turned || placedNone ? fresh() : layoutTables(list, start, run, laidDir ?? dir, g).then(value => ({ dir: laidDir ?? dir, value }));
     job
       .catch(() => ({ dir: laidDir ?? dir, value: gridFallback(list, settle(list, start)) }))
       .then(({ dir: used, value: m }) => {
@@ -206,7 +236,6 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
   }, [shape, run, dir, paneRef]);
 
   const onToggle = useCallback((k: string) => setExpanded(e => ({ ...e, [k]: !e[k] })), []);
-  const links = useMemo(() => relationLinks(visible), [visible]);
   // The hovered and the focused table light their direct relations and dim the rest.
   const near = useMemo(() => {
     const lit = [hover, focused].filter((k): k is string => !!k);
@@ -277,7 +306,6 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
   }, [focusClass]);
 
   // A large schema draws the links inside linked groups, plus the hovered and focused tables' own.
-  const groups = useMemo(() => (visible.length > LARGE ? schemaGroups(visible, links) : null), [visible, links]);
   const always = useMemo(() => new Set(shownLinks(visible, links, null, groups ?? undefined)), [visible, links, groups]);
   const edges = useMemo<BuiltInEdge[]>(() => {
     const byKey = new Map(visible.map(t => [tableKey(t), t]));
@@ -392,12 +420,12 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
   // Relations per table, over every table drawn or not, for the list.
   const relations = useMemo(() => {
     const m = new Map<string, number>();
-    for (const l of relationLinks(tables)) {
+    for (const l of visible === tables ? links : relationLinks(tables)) {
       m.set(l.from, (m.get(l.from) ?? 0) + 1);
       if (l.to !== l.from) m.set(l.to, (m.get(l.to) ?? 0) + 1);
     }
     return m;
-  }, [tables]);
+  }, [tables, visible, links]);
   // The source note sits under the list when it is open, so it never runs over cards beside it.
   const hint = <p className="cv-hint">Tables and relations, read from {files.toLocaleString()} {files === 1 ? 'file' : 'files'}. Links are approximate.</p>;
   const pick = useCallback((k: string) => useStore.getState().focusTable(k), []);
@@ -447,7 +475,8 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
           focused={focused}
           narrow={narrow}
           onPick={pick}
-          onClear={() => setFocused(null)}
+          q={q}
+          onQuery={setQ}
           onClose={() => toggleList(false)}
           footer={hint}
         />

@@ -320,11 +320,15 @@ export function settle(tables: Table[], placed: Map<string, Pos>): Map<string, P
  * Stability rule: a table in `prev` keeps its position exactly, unless a card above it grew into it
  * (`settle`). A new table takes ELK's position, moved next to an already placed neighbor when it has one
  * (ELK's offset from that neighbor is kept), then shifted down in 24 px steps until it overlaps nothing. In a large
- * schema the anchor is a placed table of the new one's own group: a non-hub neighbor first, then its hub, then any.
+ * schema the anchor is a placed table of the new one's own group: a non-hub neighbor first, then its hub, then any;
+ * a new group with nothing placed starts below the drawing. A large schema that gains many tables at once (over 40,
+ * or over a quarter of those placed) is laid out afresh instead. `groups` defaults to `schemaGroups(tables)`.
  * ELK runs only when there is a new table, and a run that has not settled in 10 s rejects.
  * `direction` only shapes new placements; a full re-layout in another direction passes an empty `prev`.
  */
-export async function layoutTables(tables: Table[], prev: Map<string, Pos>, run: ElkRun, direction: Direction = 'RIGHT'): Promise<Map<string, Pos>> {
+export async function layoutTables(
+  tables: Table[], prev: Map<string, Pos>, run: ElkRun, direction: Direction = 'RIGHT', groups?: Groups | null,
+): Promise<Map<string, Pos>> {
   const kept = new Map<string, Pos>();
   const fresh: Table[] = [];
   for (const t of tables) {
@@ -335,20 +339,24 @@ export async function layoutTables(tables: Table[], prev: Map<string, Pos>, run:
   const out = settle(tables, kept);
   if (!fresh.length) return out;
 
-  const groups = tables.length > LARGE ? schemaGroups(tables) : null;
-  const placed = await withTimeout(placeAll(tables, groups, run, direction), LAYOUT_TIMEOUT);
+  const g = tables.length > LARGE ? (groups ?? schemaGroups(tables)) : null;
+  const placed = await withTimeout(placeAll(tables, g, run, direction), LAYOUT_TIMEOUT);
   const elkPos = new Map<string, Pos>();
   for (const [k, p] of placed) elkPos.set(k, { x: Math.round(p.x), y: Math.round(p.y) });
+  // Many new tables at once ("Show all"): one card at a time would be slow and scattered, so lay everything out afresh.
+  if (g && (fresh.length > 40 || fresh.length > out.size / 4)) return elkPos;
 
   const byKey = new Map(tables.map(t => [tableKey(t), t]));
   const boxes: Box[] = [...out].map(([k, p]) => ({ ...p, w: NODE_W, h: nodeHeight(byKey.get(k)!) }));
+  // Where a new group with nothing placed yet starts: below the drawing, at its left edge.
+  const drawn = bounds(out.keys(), out, k => nodeHeight(byKey.get(k)!));
   for (const t of fresh) {
     const k = tableKey(t);
     const e = elkPos.get(k) ?? { x: 0, y: 0 };
     let p = e;
     if (out.size) {
       // Anchor on a neighbor that already has a position, so the new card appears beside it.
-      const anchor = anchors(t, tables, groups).find(n => out.has(n) && elkPos.has(n));
+      const anchor = anchors(t, tables, g).find(n => out.has(n) && elkPos.has(n));
       if (anchor) {
         const a = out.get(anchor)!;
         const ea = elkPos.get(anchor)!;
@@ -356,8 +364,16 @@ export async function layoutTables(tables: Table[], prev: Map<string, Pos>, run:
       }
     }
     let b: Box = { ...p, w: NODE_W, h: nodeHeight(t) };
-    // A packed large schema takes the free spot nearest its anchor, so the card stays with its group.
-    if (groups && out.size) b = nearestFree(b, boxes) ?? b;
+    if (g && out.size) {
+      if (p === e) {
+        // No placed table of its group: the first free spot in a row below the drawing.
+        b = { ...b, x: drawn.x0, y: drawn.y1 + GROUP_GAP };
+        while (boxes.some(o => hits(b, o)) && b.x + NODE_W < drawn.x1) b.x += NODE_W + CARD_GAP;
+      } else {
+        // A packed large schema takes the free spot nearest its anchor, so the card stays with its group.
+        b = nearestFree(b, boxes) ?? b;
+      }
+    }
     // Each step moves the box down, so this ends after at most (boxes x tallest box / STEP) steps.
     while (boxes.some(o => hits(b, o))) b.y += STEP;
     boxes.push(b);

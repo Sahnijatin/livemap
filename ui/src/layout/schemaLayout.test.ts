@@ -203,10 +203,10 @@ describe('large schemas (grouped layout)', () => {
     expect(g.loose).toEqual(['d', 'e']);
   });
 
-  /** 120 tables: two hubs, ten linked families of six, and twenty loose tables. */
-  function big(): Table[] {
+  /** Two hubs, `families` linked families of six, eighteen satellites and forty loose tables (120 by default). */
+  function big(families = 10, tag = ''): Table[] {
     const out: Table[] = [table('User', 6), table('Org', 5)];
-    for (let f = 0; f < 10; f++) {
+    for (let f = 0; f < families; f++) {
       for (let i = 0; i < 6; i++) {
         const rel = [];
         if (i > 0) rel.push({ field: 'parentId', to: `f${f}t${Math.floor((i - 1) / 2)}` });
@@ -215,7 +215,7 @@ describe('large schemas (grouped layout)', () => {
       }
     }
     for (let i = 0; i < 18; i++) out.push(table(`Sat${i}`, 4, [{ field: 'userId', to: i % 3 ? 'user' : 'org' }]));
-    for (let i = 0; i < 40; i++) out.push(table(`Loose${i}`, 2 + (i % 7)));
+    for (let i = 0; i < 40; i++) out.push(table(`Loose${tag}${i}`, 2 + (i % 7)));
     return out;
   }
   const bounds = (tables: Table[], pos: Map<string, Pos>) => {
@@ -287,6 +287,29 @@ describe('large schemas (grouped layout)', () => {
     }
     return [...g.comps, ...g.hubs, g.loose].find(x => x.includes(best))![0];
   }
+
+  it('"Show all" from 150 to about 1,000 tables lays out within the time budget, without overlap', async () => {
+    const all = big(157);
+    expect(all.length).toBe(1002);
+    const first = await layoutTables(all.slice(0, 150), new Map(), run, 'RIGHT');
+    const t0 = performance.now();
+    const pos = await layoutTables(all, first, run, 'RIGHT');
+    expect(performance.now() - t0).toBeLessThan(3000 * TIME_SCALE);
+    expect(pos.size).toBe(1002);
+    expectNoOverlap(all, pos);
+  });
+
+  it('a new group with nothing placed yet goes below the drawing, at its left edge', async () => {
+    const tables = big();
+    const first = await layoutTables(tables, new Map(), run, 'RIGHT');
+    const b = bounds(tables, first);
+    const pair = [table('NewA', 3), table('NewB', 3, [{ field: 'aId', to: 'newa' }])];
+    const next = await layoutTables([...tables, ...pair], first, run, 'RIGHT');
+    expectNoOverlap([...tables, ...pair], next);
+    const ys = pair.map(t => next.get(tableKey(t))!.y);
+    for (const y of ys) expect(y).toBeGreaterThan(b.y1);
+    expect(Math.min(...pair.map(t => next.get(tableKey(t))!.x))).toBe(b.x0);
+  });
 
   it('a new table joins its own group: a hub\'s table lands in the hub\'s block, a linked one in its component', async () => {
     const tables = big();

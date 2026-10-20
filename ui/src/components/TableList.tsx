@@ -1,29 +1,32 @@
-import { useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useDeferredValue, useMemo, type ReactNode } from 'react';
 import clsx from 'clsx';
 import type { Table } from '@shared/domain.js';
 import { tableKey } from '../store';
 import { SchemaIcon, SearchIcon, SidebarIcon } from './icons';
 
 const plural = (n: number, one: string): string => `${n.toLocaleString()} ${one}${n === 1 ? '' : 's'}`;
+/** Rows drawn at most; the rest wait for a narrower search. */
+const SHOWN = 300;
 
 /**
  * Every table by name, with its column and relation counts, searchable by table or column name.
  * Beside the canvas on a wide pane; over it, as the primary view, on a narrow one.
  */
-export function TableList({ tables, relations, focused, narrow, onPick, onClear, onClose, footer }: {
+export function TableList({ tables, relations, focused, narrow, q, onQuery, onPick, onClose, footer }: {
   tables: Table[];
   /** Relations per table key, in or out. */
   relations: Map<string, number>;
   focused: string | null;
   narrow: boolean;
+  /** The search, kept by the view so Esc clears it from anywhere in the view. */
+  q: string;
+  onQuery: (q: string) => void;
   onPick: (key: string) => void;
-  /** Esc with an empty search: drop the canvas focus. */
-  onClear: () => void;
   onClose: () => void;
   footer?: ReactNode;
 }) {
-  const [q, setQ] = useState('');
-  const needle = q.trim().toLowerCase();
+  // Typing stays responsive on thousands of tables: the rows follow a step behind.
+  const needle = useDeferredValue(q).trim().toLowerCase();
   const sorted = useMemo(() => [...tables].sort((a, b) => a.name.localeCompare(b.name)), [tables]);
   const rows = useMemo(() => {
     if (!needle) return sorted.map(t => ({ t, hits: '' }));
@@ -36,21 +39,12 @@ export function TableList({ tables, relations, focused, narrow, onPick, onClear,
     return out;
   }, [sorted, needle]);
 
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key !== 'Escape') return;
-    if (q) setQ('');
-    else if (focused) onClear();
-    else return;
-    // Handled here, so an open side panel stays open.
-    e.preventDefault();
-  };
-
   return (
-    <aside className={clsx('sv-list', narrow ? 'over' : 'glass')} aria-label="Tables" onKeyDown={onKeyDown}>
+    <aside className={clsx('sv-list', narrow ? 'over' : 'glass')} aria-label="Tables">
       <div className="sv-lh">
         <label className="sv-search">
           <SearchIcon />
-          <input type="search" placeholder="Find a table or column" aria-label="Search tables and columns" value={q} onChange={e => setQ(e.target.value)} />
+          <input type="search" placeholder="Find a table or column" aria-label="Search tables and columns" value={q} onChange={e => onQuery(e.target.value)} />
         </label>
         <button type="button" className={clsx('sv-close', narrow && 'txt')} onClick={onClose} aria-label={narrow ? undefined : 'Hide table list'} title={narrow ? undefined : 'Hide table list'}>
           {narrow ? 'Diagram' : <SidebarIcon on />}
@@ -61,7 +55,7 @@ export function TableList({ tables, relations, focused, narrow, onPick, onClear,
         <span className="sv-legend" aria-hidden="true"><i>Cols</i><i>Rels</i></span>
       </div>
       <div className="sv-rows">
-        {rows.map(({ t, hits }) => {
+        {rows.slice(0, SHOWN).map(({ t, hits }) => {
           const k = tableKey(t);
           const rel = relations.get(k) ?? 0;
           return (
@@ -84,6 +78,7 @@ export function TableList({ tables, relations, focused, narrow, onPick, onClear,
             </button>
           );
         })}
+        {rows.length > SHOWN && <p className="sv-more">{(rows.length - SHOWN).toLocaleString()} more, refine the search</p>}
         {!rows.length && <p className="sv-none">No tables match “{q.trim()}”.</p>}
       </div>
       {footer}
