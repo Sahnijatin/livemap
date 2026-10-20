@@ -28,7 +28,7 @@ import { usePins } from './usePins';
 import { useNodeMotion } from './useNodeMotion';
 import { useFollowCamera } from './useFollowCamera';
 import { FOLLOW_MAX_ZOOM, MoveGesture } from './camera';
-import { FAR_ZOOM, LABEL_CHARS, folderBoxes, labelWidth, overviewLabels, quantZoom } from './overview';
+import { FAR_ZOOM, folderBoxes, overviewLabels, quantZoom, shiftLabels } from './overview';
 import { layerVars } from '../components/icons';
 
 const nodeTypes = { file: FileNode, folder: FolderNode, folderLabel: FolderLabelNode };
@@ -103,9 +103,13 @@ function ZoomControls({ fitAll, onZoom }: { fitAll: () => void; onZoom: () => vo
   );
 }
 
+/** Nodes that have not moved for this long have settled (a drag or layout move ended): labels are placed again. */
+const SETTLE_MS = 150;
+
 /**
- * Zoomed out: folder labels drawn at their normal screen size over the map, so a big project stays legible. They
- * follow the drawn nodes (a drag, a layout move), and only those wholly in view at the end of a camera move show.
+ * Zoomed out: folder labels drawn at their normal screen size over the map, so a big project stays legible. They are
+ * placed when the nodes settle, at a zoom step or at the end of a camera move (only those wholly in view show); while
+ * nodes move they just follow their folder.
  */
 function OverviewLayer({ graph, nodes }: { graph: MapGraph; nodes: MapFlowNode[] }) {
   // A rounded zoom, so this re-renders a few times while zooming out, not every frame.
@@ -114,14 +118,23 @@ function OverviewLayer({ graph, nodes }: { graph: MapGraph; nodes: MapFlowNode[]
   const storeApi = useStoreApi<MapFlowNode, LinkFlowEdge>();
   const [moves, setMoves] = useState(0);
   useOnViewportChange({ onEnd: () => setMoves(n => n + 1) });
-  const boxes = useMemo(() => (q ? folderBoxes(nodes) : null), [q, nodes]);
-  const labels = useMemo(() => {
+  // The nodes as of their last stop; before the first stop (a fresh layout), the live ones.
+  const [rest, setRest] = useState<MapFlowNode[]>([]);
+  useEffect(() => {
+    if (!q) return;
+    const t = window.setTimeout(() => setRest(nodes), SETTLE_MS);
+    return () => window.clearTimeout(t);
+  }, [q, nodes]);
+  const base = rest.length ? rest : nodes;
+  const boxes = useMemo(() => (q ? folderBoxes(base) : null), [q, base]);
+  const placed = useMemo(() => {
     if (!q || !boxes) return [];
     const { transform: [x, y, z], width, height } = storeApi.getState();
     const view = width > 0 && height > 0 ? { x: -x / z, y: -y / z, w: width / z, h: height / z } : undefined;
-    return overviewLabels(graph.folders, boxes, graph.level, q, view);
+    return overviewLabels(graph.folders, boxes, graph.level, q, view, graph.large);
     // `moves` and `size`: the visible area changed.
   }, [graph, boxes, q, moves, size, storeApi]);
+  const labels = useMemo(() => (placed.length && base !== nodes ? shiftLabels(placed, boxes!, folderBoxes(nodes)) : placed), [placed, base, nodes, boxes]);
   if (!labels.length) return null;
   return (
     <ViewportPortal>
@@ -129,11 +142,11 @@ function OverviewLayer({ graph, nodes }: { graph: MapGraph; nodes: MapFlowNode[]
         <div
           key={l.id}
           className={graph.level === 'folders' ? 'ovl mid' : 'ovl'}
-          style={{ ...layerVars(l.layer), width: labelWidth(l.text), transform: `translate(${l.x}px,${l.y}px) scale(${1 / q})` }}
+          style={{ ...layerVars(l.layer), width: l.w, transform: `translate(${l.x}px,${l.y}px) scale(${1 / q})` }}
           aria-hidden="true"
         >
           <span className="ovl-t">
-            <FolderName name={l.text} chars={LABEL_CHARS} />
+            <FolderName name={l.text} chars={l.chars} />
             {l.isNew && <i className="ovl-new">New</i>}
           </span>
         </div>
@@ -496,9 +509,8 @@ function Canvas({ run, tools }: { run: ElkRun; tools: HTMLElement | null }) {
         </div>
         {/* A bar below the canvas (the canvas ends above it), so the note, hint and zoom buttons never cover a card. */}
         <div className="mv-foot">
-          {note
-            ? <div className="map-note" role="status">{note}</div>
-            : <p className="cv-hint">Drag to pan · ⌘ + scroll to zoom · click a card to inspect</p>}
+          {note && <div className="map-note" role="status">{note}</div>}
+          <p className="cv-hint">{note ? 'Drag to pan · ⌘ + scroll to zoom' : 'Drag to pan · ⌘ + scroll to zoom · click a card to inspect'}</p>
           <ZoomControls fitAll={actions.fitAll} onZoom={userMoved} />
         </div>
       </div>

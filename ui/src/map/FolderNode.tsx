@@ -9,12 +9,11 @@ import { Anchors } from './FileNode';
 import { useStore } from '../store';
 import { READ_ONLY_TIP } from '../history';
 import { MidName } from '../components/FileRow';
-import { nameEnd, nameFit } from './overview';
+import { nameEnd, nameFit, slash } from './overview';
 
 const midHandle: CSSProperties = { top: '50%', opacity: 0, pointerEvents: 'none' };
 const n = (v: number): string => v.toLocaleString();
 const plural = (v: number, one: string, many: string): string => `${n(v)} ${v === 1 ? one : many}`;
-const slash = (label: string, path: string): string => (path === '' ? label : `${label}/`);
 
 /** Characters of a folder card's name (15 px semibold in the card's text column). */
 const CARD_CHARS = 19;

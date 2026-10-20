@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { MapFolder } from './mapModel';
 import type { Box } from './mapFlow';
-import { LABEL_H, LABEL_MAX_W, folderBoxes, labelWidth, nameFit, overviewLabels, quantZoom, rankFolders, rankOrderCache } from './overview';
+import { LABEL_H, LABEL_MAX_W, NEW_TAG_W, TOGGLE_W, folderBoxes, labelWidth, nameFit, overviewLabels, quantZoom, rankFolders, shiftLabels, slash } from './overview';
 
 const folder = (path: string, files: number): MapFolder => ({
   id: `dir:${path}`, path, label: path, layer: 'core', files: [],
@@ -58,12 +58,13 @@ describe('quantZoom', () => {
 
 describe('nameFit', () => {
   it('whole when it fits; else a middle cut keeping the whole folders that leave the start 3 characters; else "…" and the end', () => {
-    expect(nameFit('apps/web/src/hooks/', 19)).toMatchObject({ mode: 'whole', shown: 19 });
+    expect(nameFit('apps/web/src/hooks/', 19)).toMatchObject({ mode: 'whole' });
     // 'controllers/billing/' would leave no start, so the end is 'billing/'.
-    expect(nameFit('apps/api/src/controllers/billing/', 19)).toMatchObject({ mode: 'middle', shown: 8 });
-    expect(nameFit('packages/feature-01-search/src/', 26)).toMatchObject({ mode: 'middle', shown: 22 });
+    expect(nameFit('apps/api/src/controllers/billing/', 19)).toMatchObject({ mode: 'middle', tailMax: 14 });
+    expect(nameFit('packages/feature-01-search/src/', 26)).toMatchObject({ mode: 'middle' });
     // A last folder that alone leaves no room for a start: "…notification-hub/".
-    expect(nameFit('packages/notification-hub/', 19)).toMatchObject({ mode: 'end', shown: 17 });
+    expect(nameFit('packages/notification-hub/', 19)).toMatchObject({ mode: 'end' });
+    expect(Object.keys(nameFit('a/', 19)).sort()).toEqual(['mode', 'tailMax']);
   });
 });
 
@@ -103,13 +104,13 @@ describe('overviewLabels at scale', () => {
     expect(performance.now() - t0).toBeLessThan(60 * (Number(process.env.LIVEMAP_TIME_SCALE) || 1));
   });
 
-  it('keeps the size order while file counts stay the same (a live event rebuilds the folders, not their order)', () => {
-    const { fs } = many(50);
-    const a = rankFolders(fs).map(f => f.id);
-    const hits = rankOrderCache.hits;
-    expect(rankFolders(fs.map(f => ({ ...f }))).map(f => f.id)).toEqual(a);
-    expect(rankOrderCache.hits).toBe(hits + 1);
-    const more = fs.map((f, i) => (i === 49 ? { ...f, counts: { ...f.counts, files: 999 } } : f));
+  it('ranks new folders, then by file count, then by path; 3,000 folders sort within budget', () => {
+    const { fs } = many(3000);
+    const t0 = performance.now();
+    const ranked = rankFolders(fs);
+    expect(performance.now() - t0).toBeLessThan(30 * (Number(process.env.LIVEMAP_TIME_SCALE) || 1));
+    expect(ranked[0].counts.files).toBe(Math.max(...fs.map(f => f.counts.files)));
+    const more = fs.map((f, i) => (i === 49 ? { ...f, isNew: true } : f));
     expect(rankFolders(more)[0].id).toBe(fs[49].id);
   });
 
@@ -118,6 +119,32 @@ describe('overviewLabels at scale', () => {
     const bx = new Map([['dir:big', box(0, 0)], ['dir:fresh', box(300, 0)]]);
     const ls = overviewLabels(fs, bx, 'folders', 0.1);
     expect(ls.map(l => [l.id, l.isNew])).toEqual([['dir:fresh', true]]);
+  });
+
+  it("a new folder's label is wider by its New tag, so its short name stays whole", () => {
+    const [l] = overviewLabels([{ ...folder('fresh', 1), isNew: true }], new Map([['dir:fresh', box(0, 0)]]), 'folders', 0.2);
+    expect(l.w).toBe(labelWidth('fresh/') + NEW_TAG_W);
+    expect(labelWidth('fresh/', true)).toBe(labelWidth('fresh/') + NEW_TAG_W);
+    expect(nameFit('fresh/', l.chars).mode).toBe('whole');
+  });
+
+  it("at Files and Functions a label leaves a large project's open/close toggle clear, or is left out", () => {
+    const fs = [folder('packages/feature-01-search/src', 40), folder('pkg/one', 2)];
+    const bx = new Map([['dir:packages/feature-01-search/src', box(0, 0, 740, 400)], ['dir:pkg/one', box(2000, 0, 260, 120)]]);
+    const z = 0.3;
+    const ls = overviewLabels(fs, bx, 'files', z, undefined, true);
+    // The wide region keeps a label that ends before the toggle; the one-column region has no room for one.
+    expect(ls.map(l => l.id)).toEqual(['dir:packages/feature-01-search/src']);
+    const [l] = ls;
+    expect(l.x + l.w / z).toBeLessThanOrEqual(740 - TOGGLE_W);
+    expect(l.chars).toBe(Math.floor((l.w - 40) / 8));
+    // Without toggles (a small project) the label takes its natural width.
+    expect(overviewLabels(fs, bx, 'files', z)[0].w).toBe(labelWidth('packages/feature-01-search/src/'));
+  });
+
+  it('shares the folder name with the cards: a slash after a folder, none after the root', () => {
+    expect(slash('src/api', 'src/api')).toBe('src/api/');
+    expect(slash('Project root', '')).toBe('Project root');
   });
 
   it('labels only what fits inside the visible area, so none is clipped at an edge', () => {
@@ -136,5 +163,16 @@ describe('folderBoxes', () => {
       { id: 'dir:a#label', type: 'folderLabel', position: { x: 10, y: 20 }, width: 250, height: 44, data: {} },
     ] as unknown as Parameters<typeof folderBoxes>[0];
     expect([...folderBoxes(nodes)]).toEqual([['dir:a', { x: 10, y: 20, w: 250, h: 120 }]]);
+  });
+});
+
+describe('shiftLabels', () => {
+  it('moves placed labels with their folder while nodes move, without placing them again', () => {
+    const labels = [{ id: 'dir:a', text: 'a/', layer: 'core' as const, isNew: false, x: 5, y: 6, w: 56, chars: 25 }];
+    const rest = new Map([['dir:a', box(0, 0)]]);
+    const live = new Map([['dir:a', box(30, -10)]]);
+    expect(shiftLabels(labels, rest, live)).toEqual([{ ...labels[0], x: 35, y: -4 }]);
+    // Nothing moved: the same array, so nothing re-renders.
+    expect(shiftLabels(labels, rest, rest)).toBe(labels);
   });
 });

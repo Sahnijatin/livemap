@@ -412,16 +412,25 @@ test('map: a large project stays legible zoomed out; docs folders are Docs; note
   fs.mkdirSync(skill, { recursive: true });
   for (let i = 0; i < 8; i++) fs.writeFileSync(path.join(skill, `reference-${i}.md`), `# Reference ${i}\n\n## Part\n`);
   fs.writeFileSync(path.join(skill, 'validate.sh'), 'check() {\n  echo ok\n}\n');
+  // Wide glyphs: the character estimate fits this name on a card, but it is wider than the card.
+  const wide = 'wide/中文文档示例代码模块组件';
+  fs.mkdirSync(path.join(big, wide), { recursive: true });
+  fs.writeFileSync(path.join(big, wide, 'a.ts'), 'export const a = 1;\n');
   const bigUrl = await startCli(big);
   await open(page, bigUrl);
   await tab(page, 'map').click();
-  await expect(page.locator('.folder')).toHaveCount(41, { timeout: 15_000 });
+  await expect(page.locator('.folder')).toHaveCount(42, { timeout: 15_000 });
 
   const skillCard = page.locator('.folder[data-folder="dir:.agents/skills/supabase-row-level-security-policies"]');
   await expect(skillCard.locator('.fly')).toHaveText('Docs');
   // Cut in the middle: the end of the name shows; the full path is the title.
   await expect(skillCard.locator('.fl')).toHaveAttribute('title', '.agents/skills/supabase-row-level-security-policies');
   await expect(skillCard.locator('.fl .fn > span').last()).toHaveText('policies/');
+  // A name wider than the estimate is never clipped hard: its end shrinks with an ellipsis inside the card.
+  const wideFl = page.locator(`.folder[data-folder="dir:${wide}"] .fl`);
+  const wideEnd = wideFl.locator('.fn > span').last();
+  expect(await inside(wideEnd, wideFl)).toBe(true);
+  expect(await wideEnd.evaluate(e => getComputedStyle(e).textOverflow)).toBe('ellipsis');
 
   // No two of the notes, the hint, the zoom buttons and the Map tools overlap, at desktop and phone widths.
   const parts = ['.map-note', '.cv-hint', '.zoomctl', '.c-tools'];

@@ -373,8 +373,8 @@ describe('MapView', () => {
     expect(bar.previousElementSibling?.classList.contains('mv-canvas')).toBe(true);
     expect(bar.querySelector('.map-note')).not.toBeNull();
     expect(bar.querySelector('.zoomctl')).not.toBeNull();
-    // The note takes the hint's place.
-    expect(bar.querySelector('.cv-hint')).toBeNull();
+    // The hint stays beside the note, shortened (a phone hides it by CSS).
+    expect(bar.querySelector('.cv-hint')?.textContent).toBe('Drag to pan · ⌘ + scroll to zoom');
   });
 
   it('cuts long folder names in the middle and keeps the full path in the title', async () => {
