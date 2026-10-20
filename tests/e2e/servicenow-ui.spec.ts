@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
-import { startMockNexus, type MockNexus } from '../helpers/mock-nexus';
+import { loadFixture, startMockNexus, type MockNexus } from '../helpers/mock-nexus';
 
 /*
  * The ServiceNow inspector, filters, unattributed badge and diagnostics, on the BharatBank fixture served by the mock
@@ -83,10 +83,20 @@ test('servicenow: filters, the record inspector, the unattributed badge and diag
   const bar = page.getByRole('group', { name: 'Filters' });
   await expect(bar).toBeVisible({ timeout: 30_000 });
 
-  // With LiveMap watching, the carousel widget gets an update set, as the mirror will record it: one unattributed change.
+  // With LiveMap watching, the carousel widget is saved on the instance into an update set. The live poll writes
+  // that update set into its meta.json: one unattributed change.
+  const fx = loadFixture();
+  const carousel = (fx.tables.sp_widget as Record<string, string>[]).find(w => CAROUSEL.endsWith(`__${w.sys_id}`))!;
+  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  nexus.live.rows.sys_update_set = [{ sys_id: '5f00000000000000000000000000fe01', name: SET }];
+  nexus.live.rows.sys_update_xml = [{
+    sys_id: '5e00000000000000000000000000c201', name: `sp_widget_${carousel.sys_id}`, type: 'Widget', target_name: carousel.name, action: 'INSERT_OR_UPDATE',
+    update_set: '5f00000000000000000000000000fe01', sys_created_by: 'admin', sys_updated_by: 'admin', sys_updated_on: now, payload: '',
+  }];
+  nexus.live.rows.sp_widget = [{ ...carousel, sys_updated_on: now }];
+  nexus.live.rows.sys_metadata = [{ sys_id: carousel.sys_id, sys_class_name: 'sp_widget', sys_name: carousel.sys_name, sys_updated_on: now, sys_updated_by: 'admin', sys_scope: fx.scope.sys_id }];
   const metaFile = path.join(mirror(), CAROUSEL, 'meta.json');
-  const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
-  fs.writeFileSync(metaFile, `${JSON.stringify({ ...meta, sys_update_set: { value: '5f00000000000000000000000000fe01', display_value: SET } }, null, 2)}\n`);
+  await expect.poll(() => JSON.parse(fs.readFileSync(metaFile, 'utf8')).sys_update_set, { timeout: 20_000 }).toEqual({ value: '5f00000000000000000000000000fe01', display_value: SET });
   const changes = async () => (await (await fetch(api(`/api/state?t=${token()}`))).json() as { changes: { path: string; attribution?: unknown }[] }).changes;
   await expect.poll(async () => (await changes()).some(c => c.path.startsWith(CAROUSEL)), { timeout: 20_000 }).toBe(true);
 

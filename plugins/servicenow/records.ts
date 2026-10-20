@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { RecordKey } from '../../src/agents/attribution.js';
+import { snTime } from './history.js';
 import type { StoredManifest } from './writer.js';
 
 const FOLDER_KINDS = new Set(['widget', 'page', 'portal', 'flow', 'ai_agent', 'rest']);
@@ -18,7 +19,16 @@ const FOLDER_KINDS = new Set(['widget', 'page', 'portal', 'flow', 'ai_agent', 'r
 export function indexManifest(m: StoredManifest): Map<string, RecordKey> {
   const out = new Map<string, RecordKey>();
   const owners = new Map<string, RecordKey>();
-  const keyOf = (sysId: string, e: StoredManifest['records'][string]): RecordKey => ({ instance: m.instance || undefined, table: e.class, sysId, name: e.name });
+  const keyOf = (sysId: string, e: StoredManifest['records'][string]): RecordKey => {
+    const key: RecordKey = { instance: m.instance || undefined, table: e.class, sysId, name: e.name };
+    // The record's last change, for the update set, run window and time rules.
+    const on = snTime(e.updatedOn);
+    if (!Number.isNaN(on)) key.updatedOn = on;
+    if (e.updatedBy) key.updatedBy = e.updatedBy;
+    if (e.updateSet) key.updateSet = e.updateSet;
+    if (e.updateSetName) key.updateSetName = e.updateSetName;
+    return key;
+  };
   const folderOf = (p: string): string | null => {
     const parts = p.split('/');
     return FOLDER_KINDS.has(parts[1]) && parts.length === 4 ? parts.slice(0, 3).join('/') : null;

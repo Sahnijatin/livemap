@@ -7,14 +7,18 @@ import type { Args, CoreHooks } from '../../src/cli-args.js';
 import { DEFAULT_PORT } from '../../src/server/server.js';
 import { serviceNowAnalyzer } from './analyzer.js';
 import { instanceInfo, pullScope, resolveScope, ScopeNotFoundError } from './backfill.js';
-import { layoutMirror } from './mirror.js';
+import { changeFacts, readChangeRows, updateNameIndex, updateSetNames } from './changes.js';
+import { layoutMirror, type ChangeFacts } from './mirror.js';
 import { DEFAULT_NEXUS_URL, NexusClient, NexusOfflineError, NexusToolError } from './nexus.js';
 import { recordResolver } from './records.js';
 import { DEFAULT_LOG_WINDOW_MS, DEFAULT_SKYFORGE_LOG } from './skyforge-log.js';
-import { buildTimeline } from './timeline.js';
-import { ensureGitignored, historyPath, snRoot, writeHistory, writeMirror } from './writer.js';
+import { DEFAULT_POLL_MS, initialState, ScopePoller } from './poller.js';
+import { buildTimeline, LiveTimeline } from './timeline.js';
+import { ensureGitignored, historyPath, readPollState, snRoot, writeHistory, writeMirror } from './writer.js';
+import type { ServeHandles } from '../../src/cli-args.js';
+import type { SnRecord } from './nexus.js';
 
-export const SN_USAGE = 'Usage: livemap sn [dir=.] --scope NAMESPACE|SYS_ID [--instance NAME] [--nexus URL] [--skyforge-log FILE|none] [--log-window SECONDS] [--port N] [--no-open] [--no-history] [--mirror-only]';
+export const SN_USAGE = 'Usage: livemap sn [dir=.] --scope NAMESPACE|SYS_ID [--instance NAME] [--nexus URL] [--skyforge-log FILE|none] [--log-window SECONDS] [--poll SECONDS|off] [--port N] [--no-open] [--no-history] [--mirror-only]';
 
 export interface SnArgs {
   dir: string; scope: string; instance?: string; nexus: string;
@@ -22,6 +26,8 @@ export interface SnArgs {
   /** SkyForge's MCP log for history attribution; null skips it. */
   skyforgeLog: string | null;
   logWindowSec: number;
+  /** Seconds between live polls of the instance; null turns polling off. */
+  pollSec: number | null;
 }
 
 function fail(message: string): never {
@@ -32,7 +38,7 @@ function fail(message: string): never {
 export function parseSnArgs(argv: string[], onError: (m: string) => never = fail): SnArgs {
   const args: Partial<SnArgs> & { dir: string } = {
     dir: '.', nexus: DEFAULT_NEXUS_URL, port: DEFAULT_PORT, open: true, history: true, mirrorOnly: false,
-    skyforgeLog: DEFAULT_SKYFORGE_LOG, logWindowSec: DEFAULT_LOG_WINDOW_MS / 1000,
+    skyforgeLog: DEFAULT_SKYFORGE_LOG, logWindowSec: DEFAULT_LOG_WINDOW_MS / 1000, pollSec: DEFAULT_POLL_MS / 1000,
   };
   let sawDir = false;
   const value = (flag: string, v: string | undefined): string => (v && !v.startsWith('--') ? v : onError(`${flag} needs a value`));
@@ -53,6 +59,11 @@ export function parseSnArgs(argv: string[], onError: (m: string) => never = fail
       const v = take();
       if (!/^\d+$/.test(v) || Number(v) < 1 || Number(v) > 3600) onError(`invalid --log-window (1 to 3600 seconds): ${v}`);
       args.logWindowSec = Number(v);
+    } else if (flag === '--poll') {
+      const v = take();
+      if (v.toLowerCase() === 'off') args.pollSec = null;
+      else if (!/^\d+$/.test(v) || Number(v) < 2 || Number(v) > 60) onError(`invalid --poll (2 to 60 seconds, or off): ${v}`);
+      else args.pollSec = Number(v);
     } else if (flag === '--port') {
       const v = take();
       if (!/^\d+$/.test(v) || Number(v) > 65535) onError(`invalid port: ${v}`);
@@ -101,7 +112,23 @@ export async function runServiceNow(argv: string[], core: CoreHooks): Promise<vo
     });
     if (process.stdout.isTTY) process.stdout.write('\r\x1b[K');
     const root = snRoot(project);
-    const { files, manifest } = layoutMirror({ instance: info?.name ?? args.instance ?? '', scope, ...pulled, rootAbs: root });
+    // Each record's last change: the update set from its latest update_xml row, the user and time from the
+    // record. After a good pull, any failure here (a refusal, a timeout, nexus going away) is only a warning.
+    let changeRows: SnRecord[] = [];
+    const setNames = new Map<string, string>();
+    let facts = new Map<string, ChangeFacts>();
+    const invById = new Map(pulled.inventory.map(r => [r.sys_id, r]));
+    try {
+      changeRows = await readChangeRows(client, scope);
+      await updateSetNames(client, changeRows, setNames);
+      facts = changeFacts(changeRows, updateNameIndex(pulled.full), setNames, undefined, id => {
+        const r = pulled.full.get(id) ?? invById.get(id);
+        return r ? { on: r.sys_updated_on, by: r.sys_updated_by } : undefined;
+      });
+    } catch (e) {
+      process.stderr.write(`livemap sn: warning: update sets and change users are not shown (${e instanceof Error ? e.message : String(e)})\n`);
+    }
+    const { files, manifest } = layoutMirror({ instance: info?.name ?? args.instance ?? '', scope, ...pulled, rootAbs: root, facts });
     const res = writeMirror(root, files, manifest);
     const classes = Object.keys(manifest.byClass).length;
     say(`Pulled ${n(pulled.inventory.length)} records in ${n(classes)} classes in ${secs(Date.now() - t0)} (${n(pulled.queries)} queries).`);
@@ -110,12 +137,16 @@ export async function runServiceNow(argv: string[], core: CoreHooks): Promise<vo
     if (ignored === 'added') say('Added .livemap/ to .gitignore');
     for (const f of pulled.failedClasses) process.stderr.write(`livemap sn: warning: ${f.class}: kept names and dates only (${f.error})\n`);
     const t1 = Date.now();
+    let liveHistory: LiveTimeline | undefined;
     if (!args.history) say('History: skipped (--no-history).');
     else {
       // History is extra: any failure is a warning, and the mirror and UI go on without it.
       try {
-        const timeline = await buildTimeline(client, scope, pulled.inventory, manifest, { logFile: args.skyforgeLog, windowMs: args.logWindowSec * 1000, full: pulled.full });
+        const timeline = await buildTimeline(client, scope, pulled.inventory, manifest, {
+          logFile: args.skyforgeLog, windowMs: args.logWindowSec * 1000, full: pulled.full, ...(changeRows.length ? { history: { updateXml: changeRows } } : {}),
+        });
         writeHistory(root, scope.scope, timeline.doc);
+        liveHistory = new LiveTimeline(timeline.doc, { root, logFile: args.skyforgeLog, windowMs: args.logWindowSec * 1000 });
         const h = timeline.history;
         const recaptures = h.captured ? `, plus ${n(h.captured)} recaptures` : '';
         say(`Versions imported: ${n(h.versionEvents + h.xmlEvents)} (${n(h.versionEvents)} from sys_update_version, ${n(h.xmlEvents)} from sys_update_xml${recaptures}) for ${n(h.fromVersions + h.fromUpdateXml)} records in ${secs(Date.now() - t1)} (${n(h.queries)} queries).`);
@@ -145,12 +176,43 @@ export async function runServiceNow(argv: string[], core: CoreHooks): Promise<vo
     }
     if (args.mirrorOnly) return;
     const serveArgs: Args = { dir: root, port: args.port, open: args.open, pullSec: null, history: args.history, summaries: false };
+    let handles: ServeHandles | undefined;
     await core.serve(root, serveArgs, {
       analyzers: [serviceNowAnalyzer(root)],
       recordOf: recordResolver(root),
       git: false,
       title: `${scope.scope} on ${manifest.instance || instance}`,
+      onReady: h => { handles = h; },
     });
+    if (args.pollSec === null) { say('Live polling: off (--poll off).'); return; }
+    // No handles: LiveMap was stopped while it indexed, so there is nothing to poll for.
+    if (!handles) return;
+    // Its own connection, which fails fast: a poll that cannot reach nexus marks the instance offline and
+    // backs off. It is named "livemap" like every LiveMap session, so its calls are never attributed.
+    let wasOffline = false;
+    const live = new NexusClient({ url: args.nexus, instance: args.instance, attempts: 1, timeoutMs: 30_000 });
+    const poller = new ScopePoller(live, {
+      instance: manifest.instance || instance, scope, inventory: pulled.inventory, full: pulled.full, facts, setNames, pulledAt: manifest.pulledAt,
+    }, readPollState(root, scope.scope) ?? initialState(scope.scope, changeRows, pulled.inventory), {
+      root,
+      intervalMs: args.pollSec * 1000,
+      onStatus: st => {
+        handles?.setSource(st);
+        if (st.state === 'offline') process.stderr.write(`livemap sn: warning: instance offline (${st.detail ?? 'nexus did not answer'}); showing the last mirror\n`);
+        else if (wasOffline) say('Instance back online; catching up.');
+        wasOffline = st.state === 'offline';
+      },
+      onSkew: ms => handles?.setSkewMs(ms),
+      // New saves join the history file, matched to SkyForge's log like the imported ones.
+      ...(liveHistory ? { onSaves: (rows, ctx, m) => liveHistory!.addSaves(rows, ctx.full, m, ctx.inventory) } : {}),
+      warn: m => process.stderr.write(`livemap sn: warning: ${m}\n`),
+      onFirstPoll: lines => { for (const l of lines) say(`First poll: ${l}`); },
+    });
+    handles.onRecordGap(g => poller.learnGap(g));
+    // No poll may write after shutdown has begun.
+    handles.onShutdown(() => poller.stop());
+    poller.start();
+    say(`Live polling every ${args.pollSec} s (read-only).`);
   } catch (e) {
     if (e instanceof NexusOfflineError) fail(`${e.message}\nIs SkyForge running? Start it, or pass --nexus with its MCP URL.`);
     if (e instanceof ScopeNotFoundError || e instanceof NexusToolError) fail(e.message);

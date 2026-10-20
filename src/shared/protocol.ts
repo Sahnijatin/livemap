@@ -8,6 +8,11 @@ export interface UsedByEntry { file: string; symbol: string; usedIn: string[] }
  * carries `error` instead. Both are absent while recording.
  */
 export interface HistoryStatus { enabled: boolean; first: number; last: number; firstAt: number; lastAt: number; error?: string; off?: true }
+/**
+ * A data source's state, for sources other than a plain folder (a ServiceNow instance through nexus).
+ * `offline` means LiveMap could not reach it; the map shows the last mirror until it is back.
+ */
+export interface SourceStatus { name: string; state: 'online' | 'offline'; detail?: string; since?: number }
 export type ServerMessage =
   | { type: 'hello'; root: string; name: string; files: FileModel[]; changes: ChangeSummary[]; usedBy: UsedByEntry[]; domain: DomainIndex; indexing: boolean; events: AgentEvent[]; sessions: AgentSession[]; control: ControlState;
       /**
@@ -18,7 +23,9 @@ export type ServerMessage =
       /** Summary status and file summaries. Optional so that older recorded hellos still load; the server always sends it. */
       summaries?: SummariesState;
       /** True when the project is a `livemap sn` mirror: the UI then loads its ServiceNow parts and asks `/api/sn`. */
-      sn?: boolean }
+      sn?: boolean;
+      /** The data source's state, when the source reports one (never recorded). */
+      source?: SourceStatus }
   | { type: 'files'; files: FileModel[]; removed: string[] }
   /** A change and the file updates it caused, applied together. */
   | { type: 'change'; change: ChangeSummary; files: FileModel[]; removed: string[] }
@@ -39,7 +46,9 @@ export type ServerMessage =
   /** The summarizer's status; never recorded. */
   | { type: 'summaryStatus'; status: SummaryStatus }
   /** Recording status; never recorded itself. */
-  | { type: 'history'; history: HistoryStatus };
+  | { type: 'history'; history: HistoryStatus }
+  /** The data source's state; never recorded. */
+  | { type: 'source'; source: SourceStatus };
 
 /**
  * A message as the socket carries it: a recorded message is stamped with the seq the history store gave

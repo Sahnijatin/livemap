@@ -18,6 +18,7 @@ export function StatusChip() {
   const indexing = useStore(s => s.indexing);
   const loaded = useStore(s => s.loaded);
   const rewound = useStore(s => s.rewound !== null);
+  const offline = useStore(s => s.source?.state === 'offline');
 
   let dot = <i className="dot" />;
   let label = 'Connecting';
@@ -35,6 +36,11 @@ export function StatusChip() {
     // Showing the past: not Live, whatever the socket says.
     dot = <i className="dot" />;
     label = 'Rewound';
+  } else if (connection === 'open' && loaded && offline) {
+    // The source (a ServiceNow instance) is unreachable: the map shows its last mirror.
+    dot = <i className="dot warn" />;
+    label = 'Offline';
+    detail = 'instance offline';
   } else if (connection === 'open' && loaded) {
     dot = <i className="dot live" />;
     label = 'Live';

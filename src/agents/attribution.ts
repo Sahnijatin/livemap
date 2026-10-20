@@ -62,7 +62,8 @@ function isWriteTool(e: AgentEvent): boolean {
  * Links file changes to agent actions, and to git commits that list the file (pulls, cloud builders).
  * Tool calls whose PreToolUse LiveMap blocked never count.
  * Emits 'late' (changeId, Attribution) when a write-family tool event arriving after the change upgrades
- * a change that was unattributed or only likely.
+ * a change that was unattributed or only likely, and 'recordGap' (ms) on each exact match of a record change
+ * that has its instance time: the record's `updatedOn` minus the call's time, for learning the clock skew.
  */
 export class Attributor extends EventEmitter {
   private readonly before: number;
@@ -142,6 +143,7 @@ export class Attributor extends EventEmitter {
     const exact = this.findExact(all, change, t, this.skewMs);
     if (exact) {
       if (record.updatedBy) this.users.set(exact.sessionId, record.updatedBy);
+      if (record.updatedOn !== undefined) this.emit('recordGap', record.updatedOn - timeOf(exact));
       const a = this.exactFor(all, exact, t);
       return { ...a, rule: 'record', reason: `${exact.tool?.label ?? 'The call'} named ${record.table} ${record.sysId ?? record.name ?? ''}`.trim() };
     }

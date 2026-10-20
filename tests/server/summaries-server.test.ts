@@ -377,3 +377,18 @@ describe('POST /api/ask', () => {
     expect((await post('/api/ask', { question: 'x' })).status).toBe(503);
   });
 });
+
+describe('source status', () => {
+  it('sends a source change to every client and puts the latest in later hellos, without recording it', async () => {
+    const s = await boot({}, true);
+    const c = connect(s.port, s.token);
+    await waitFor(() => ofType(c, 'hello').length === 1);
+    expect(ofType(c, 'hello')[0].source).toBeUndefined();
+    s.setSource({ name: 'x_app on dev1', state: 'offline', detail: 'nexus did not answer', since: 1 });
+    await waitFor(() => ofType(c, 'source').length === 1);
+    expect(ofType(c, 'source')[0]).toEqual({ type: 'source', source: { name: 'x_app on dev1', state: 'offline', detail: 'nexus did not answer', since: 1 } });
+    expect((await hello(s)).source).toMatchObject({ state: 'offline' });
+    // Never recorded: a rewind or an export never replays a past outage.
+    expect(store!.append({ type: 'source', source: { name: 'x', state: 'online' } }, Date.now())).toBe(-1);
+  });
+});

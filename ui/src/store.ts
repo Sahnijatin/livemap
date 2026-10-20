@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { ApiRoute, DomainIndex, Table } from '@shared/domain.js';
-import type { HistoryStatus, UsedByEntry, WireMessage } from '@shared/protocol.js';
+import type { HistoryStatus, SourceStatus, UsedByEntry, WireMessage } from '@shared/protocol.js';
 import { patchChanges, withFileSummary, type ProjectState } from '@shared/state.js';
 import { emptySummaries, type SummariesState } from '@shared/summaries.js';
 import type { AgentEvent, AgentSession, ChangeSummary, ControlState, Dep, FileModel } from '@shared/types.js';
@@ -180,6 +180,8 @@ export interface StoreState {
   paletteOpen: boolean;
   /** Recording status, from hello and `history` messages. (`history` above is the recent-files list.) */
   historyStatus: HistoryStatus;
+  /** The data source's state (a ServiceNow instance), from hello and `source` messages; always live. */
+  source: SourceStatus | null;
   /** The UI shows a past moment: live data messages are dropped until `backToLive`. */
   rewound: { seq: number; at: number } | null;
   /** The timeline is playing history forward. */
@@ -262,6 +264,7 @@ const initial = {
   routeTrace: null,
   paletteOpen: false,
   historyStatus: NO_HISTORY,
+  source: null as SourceStatus | null,
   rewound: null as StoreState['rewound'],
   playing: false,
   summaries: summariesOf(),
@@ -423,10 +426,11 @@ export const useStore = create<StoreState>()((set, get) => ({
 
   apply(msg) {
     if (msg.type === 'fileSummary') summaryRequests.delete(msg.path); // even while rewound: see summaryRequests
+    if (msg.type === 'source') { set({ source: msg.source }); return; }
     if (get().rewound && !replaying && msg.type !== 'history' && msg.type !== 'summaryStatus') {
       // Rewound: live data is dropped (backToLive refetches it), or kept while backToLive waits, for
       // replay after the state it fetches. A reconnect's hello still updates the status.
-      if (msg.type === 'hello' && msg.history) set({ historyStatus: msg.history });
+      if (msg.type === 'hello' && msg.history) set({ historyStatus: msg.history, source: msg.source ?? null });
       liveBuffer?.push(msg);
       return;
     }
@@ -440,6 +444,7 @@ export const useStore = create<StoreState>()((set, get) => ({
           ...data,
           hellos: newRun(before, msg.events) ? get().hellos + 1 : get().hellos,
           historyStatus: msg.history ?? NO_HISTORY,
+          source: msg.source ?? null,
           selected: selected && data.files[selected] ? selected : null,
         });
         return;

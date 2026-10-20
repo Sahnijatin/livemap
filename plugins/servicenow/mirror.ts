@@ -14,7 +14,17 @@ export interface InventoryRow {
 }
 export interface ScopeInfo { sys_id: string; scope: string; name: string; version?: string }
 
-export interface ManifestEntry {
+/**
+ * What a record's latest `sys_update_xml` row says about its last change, as ServiceNow writes it:
+ * `updatedOn` is `YYYY-MM-DD HH:MM:SS` (UTC), `updateSet` the update set's sys_id.
+ */
+export interface ChangeFacts {
+  updateSet?: string; updateSetName?: string; updatedBy?: string; updatedOn?: string;
+  /** The newest update_xml row's own time (kept in memory to tell a later save outside update sets; never written). */
+  rowOn?: string;
+}
+
+export interface ManifestEntry extends Omit<ChangeFacts, 'rowOn'> {
   class: string; name: string; path: string;
   /** Only the inventory fields were available (the class query failed or skipped this record). */
   partial?: true;
@@ -41,12 +51,14 @@ export interface MirrorInput {
   pulledAt?: string;
   /** Absolute mirror root, so paths can be fitted under the Windows path limit. */
   rootAbs?: string;
+  /** Each record's last change, by sys_id (see changeFacts). */
+  facts?: Map<string, ChangeFacts>;
 }
 
 /** Credential classes: their records are never fetched or written, only named. */
-export const WITHHELD_CLASS = /^(sys_auth_profile|oauth_entity)|^discovery_credentials$/;
+export const WITHHELD_CLASS = /^(sys_auth_profile|oauth_entity)|_credentials?$|^(sys_certificate|sys_user|sys_alias|sys_email_account|ldap_server_config|jdbc_connection|http_connection|sys_connection|sys_hub_connection.*)$/;
 /** Fields never written, whatever the class: passwords, secrets, tokens, keys and credentials. */
-export const SECRET_FIELD = /(password|passwd|secret|token|private_?key|api_?key|credential)/i;
+export const SECRET_FIELD = /(password|passwd|passphrase|secret|token|private_?key|api_?key|credential)/i;
 
 /** A record without secret fields (and without a system property's value), keys sorted so a re-pull writes the same bytes. */
 export function clean(r: SnRecord): SnRecord {
@@ -73,10 +85,23 @@ export function readHeader(text: string): Record<string, unknown> | null {
 
 /** The fields a record carries in a meta.json: everything but bulky script and markup fields. */
 const BULKY = new Set(['script', 'client_script', 'template', 'css', 'link', 'option_schema', 'demo_data', 'instructions']);
-function meta(r: SnRecord, partial: boolean, extra: Record<string, unknown> = {}): string {
+function metaJson(r: SnRecord, partial: boolean, extra: Record<string, unknown> = {}): string {
   const base = Object.fromEntries(Object.entries(clean(r)).filter(([k]) => !BULKY.has(k)));
   return json({ ...base, ...extra, ...(partial ? { partial: true } : {}) });
 }
+
+/** A record's last change as JSON fields: the update set as a reference, and who changed it and when. */
+function factFields(f: ChangeFacts | undefined): Record<string, unknown> {
+  if (!f) return {};
+  return {
+    ...(f.updateSet ? { sys_update_set: { value: f.updateSet, ...(f.updateSetName ? { display_value: f.updateSetName } : {}) } } : {}),
+    ...(f.updatedBy ? { sys_updated_by: f.updatedBy } : {}),
+    ...(f.updatedOn ? { sys_updated_on: f.updatedOn } : {}),
+  };
+}
+/** The same in a script header (camelCase), and in the manifest. */
+const factKeys = (f: ChangeFacts | undefined): Omit<ChangeFacts, 'rowOn'> =>
+  (f ? Object.fromEntries(Object.entries(f).filter(([k, v]) => v && k !== 'rowOn')) : {});
 
 interface Out { files: Map<string, string>; records: Record<string, ManifestEntry> }
 
@@ -84,6 +109,11 @@ interface Out { files: Map<string, string>; records: Record<string, ManifestEntr
 export function layoutMirror(input: MirrorInput): { files: Map<string, string>; manifest: Manifest } {
   const ns = safeSegment(input.scope.scope, 'scope');
   const out: Out = { files: new Map(), records: {} };
+  const facts = (id: string | undefined): ChangeFacts | undefined => (id ? input.facts?.get(id) : undefined);
+  // Every record file carries its last change: meta.json and other JSON files as fields, scripts in the header.
+  const meta = (r: SnRecord, partial: boolean, extra: Record<string, unknown> = {}): string => metaJson(r, partial, { ...extra, ...factFields(facts(r.sys_id)) });
+  const scriptOut = (header: Record<string, unknown>, text: string | undefined): string =>
+    scriptFile({ ...header, ...factKeys(facts(typeof header.sys_id === 'string' ? header.sys_id : undefined)) }, text);
   const inv = new Map(input.inventory.map(r => [r.sys_id, r]));
   /** The full record, or the inventory row standing in for it. */
   const rec = (row: InventoryRow): { r: SnRecord; partial: boolean } => {
@@ -97,7 +127,7 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
     return p;
   };
   const note = (row: InventoryRow, path: string, partial: boolean, extra: Partial<ManifestEntry> = {}) => {
-    out.records[row.sys_id] = { class: row.sys_class_name, name: row.sys_name ?? '', path, ...(partial ? { partial: true as const } : {}), ...extra };
+    out.records[row.sys_id] = { class: row.sys_class_name, name: row.sys_name ?? '', path, ...(partial ? { partial: true as const } : {}), ...factKeys(facts(row.sys_id)), ...extra };
   };
   const byClass = new Map<string, InventoryRow[]>();
   for (const row of input.inventory) {
@@ -252,7 +282,7 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
   for (const row of rows('sys_script')) {
     const { r, partial } = rec(row);
     const actions = (['insert', 'update', 'delete', 'query'] as const).filter(a => truthy(r[`action_${a}`]));
-    const p = put(`business_rule/${safeSegment(r.collection || 'unknown', 'collection')}/${recordSegment(nameOf(r), row.sys_id, '.js')}`, scriptFile({
+    const p = put(`business_rule/${safeSegment(r.collection || 'unknown', 'collection')}/${recordSegment(nameOf(r), row.sys_id, '.js')}`, scriptOut({
       class: 'sys_script', sys_id: row.sys_id, name: nameOf(r), table: r.collection, when: r.when, order: num(r.order),
       condition: r.condition || r.filter_condition, actions: actions.length ? actions : undefined, active: bool(r.active), advanced: bool(r.advanced), partial: partial || undefined,
     }, r.script));
@@ -261,7 +291,7 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
   }
   for (const row of rows('sys_script_client')) {
     const { r, partial } = rec(row);
-    const p = put(`client_script/${safeSegment(r.table || 'unknown', 'table')}/${recordSegment(nameOf(r), row.sys_id, '.js')}`, scriptFile({
+    const p = put(`client_script/${safeSegment(r.table || 'unknown', 'table')}/${recordSegment(nameOf(r), row.sys_id, '.js')}`, scriptOut({
       class: 'sys_script_client', sys_id: row.sys_id, name: nameOf(r), table: r.table, when: r.type, field: r.field_name || undefined,
       order: num(r.order), condition: r.condition, active: bool(r.active), ui_type: r.ui_type, partial: partial || undefined,
     }, r.script));
@@ -270,7 +300,7 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
   }
   for (const row of rows('sys_script_include')) {
     const { r, partial } = rec(row);
-    const p = put(`script_include/${recordSegment(nameOf(r, 'api_name'), row.sys_id, '.js', 'api_name')}`, scriptFile({
+    const p = put(`script_include/${recordSegment(nameOf(r, 'api_name'), row.sys_id, '.js', 'api_name')}`, scriptOut({
       class: 'sys_script_include', sys_id: row.sys_id, name: r.name || row.sys_name, api_name: r.api_name,
       client_callable: bool(r.client_callable), access: r.access, active: bool(r.active), partial: partial || undefined,
     }, r.script));
@@ -279,7 +309,7 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
   }
   for (const row of rows('sys_ui_action')) {
     const { r, partial } = rec(row);
-    const p = put(`ui_action/${safeSegment(r.table || 'global', 'table')}/${recordSegment(nameOf(r), row.sys_id, '.js')}`, scriptFile({
+    const p = put(`ui_action/${safeSegment(r.table || 'global', 'table')}/${recordSegment(nameOf(r), row.sys_id, '.js')}`, scriptOut({
       class: 'sys_ui_action', sys_id: row.sys_id, name: nameOf(r), table: r.table, action_name: r.action_name, order: num(r.order),
       condition: r.condition, client: bool(r.client), onclick: r.onclick, form_button: bool(r.form_button), list_button: bool(r.list_button),
       active: bool(r.active), partial: partial || undefined,
@@ -324,7 +354,7 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
     const { r, partial } = rec(row);
     const api = safeSegment(apiName.get(r.web_service_definition) ?? 'unknown', 'web_service_definition');
     const seg = `${r.http_method || 'GET'}_${(r.relative_path || '').replace(/^\/+/, '') || 'root'}`;
-    const p = put(`rest/${api}/${recordSegment(seg, row.sys_id, '.js')}`, scriptFile({
+    const p = put(`rest/${api}/${recordSegment(seg, row.sys_id, '.js')}`, scriptOut({
       class: 'sys_ws_operation', sys_id: row.sys_id, name: nameOf(r), method: r.http_method, path: r.operation_uri || r.relative_path,
       api: apiName.get(r.web_service_definition), partial: partial || undefined,
     }, r.operation_script));
@@ -338,7 +368,7 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
       const { r, partial } = rec(row);
       const script = r.script?.trim() ? r.script : undefined;
       const p = script
-        ? put(`workspace/${cls}/${recordSegment(nameOf(r), row.sys_id, '.js')}`, scriptFile({ class: cls, sys_id: row.sys_id, name: nameOf(r), partial: partial || undefined }, script))
+        ? put(`workspace/${cls}/${recordSegment(nameOf(r), row.sys_id, '.js')}`, scriptOut({ class: cls, sys_id: row.sys_id, name: nameOf(r), partial: partial || undefined }, script))
         : put(`workspace/${cls}/${recordSegment(nameOf(r), row.sys_id, '.json')}`, meta(r, partial));
       note(row, p, partial);
       mark(row.sys_id);
@@ -366,7 +396,7 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
       note(row, p, false, { withheld: true });
     } else {
       const { r, partial } = rec(row);
-      const p = put(`other/${cls}/${recordSegment(nameOf(r), row.sys_id, '.json')}`, json({ ...clean(r), ...(partial ? { partial: true } : {}) }));
+      const p = put(`other/${cls}/${recordSegment(nameOf(r), row.sys_id, '.json')}`, json({ ...clean(r), ...factFields(facts(row.sys_id)), ...(partial ? { partial: true } : {}) }));
       note(row, p, partial);
     }
     mark(row.sys_id);

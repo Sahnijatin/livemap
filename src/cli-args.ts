@@ -1,6 +1,19 @@
 import { DEFAULT_PORT } from './server/server.js';
 import type { Analyzer } from './engine/domain/index.js';
 import type { RecordKey } from './agents/attribution.js';
+import type { SourceStatus } from './shared/protocol.js';
+
+/** What a source gets once the server is up: the skew margin, the gaps it is learned from, and its status. */
+export interface ServeHandles {
+  /** Sets the clock skew margin for record changes (Attributor.setSkewMs). */
+  setSkewMs(ms: number): void;
+  /** Calls `listener` with each exact record match's gap (instance time minus call time, ms). */
+  onRecordGap(listener: (gapMs: number) => void): void;
+  /** Shows the source's state in the UI (an instance going offline and coming back). */
+  setSource(status: SourceStatus): void;
+  /** Calls `listener` once shutdown begins, before anything is closed, so the source stops writing. */
+  onShutdown(listener: () => void): void;
+}
 
 /** How a source other than a plain folder (the ServiceNow mirror) runs the server on its files. */
 export interface ServeOptions {
@@ -12,6 +25,8 @@ export interface ServeOptions {
   git?: boolean;
   /** What "LiveMap is watching ..." names instead of the folder. */
   title?: string;
+  /** Called once indexing is done and the UI is live, before serve resolves. */
+  onReady?: (handles: ServeHandles) => void;
 }
 /** What core hands a source's command: the server loop and root resolution. */
 export interface CoreHooks {
@@ -19,7 +34,7 @@ export interface CoreHooks {
   resolveRoot(dir: string): string;
 }
 
-export const USAGE = 'Usage: livemap [dir=.] [--port N] [--no-open] [--pull[=SEC]] [--no-history] [--summaries]\n       livemap init [dir=.] [--agents claude,codex,cursor] [--remove]\n       livemap export [dir=.] [--session ID] [--no-code] [--out FILE]\n       livemap sn [dir=.] --scope NAMESPACE|SYS_ID [--instance NAME] [--nexus URL] [--port N] [--no-open] [--no-history] [--mirror-only]';
+export const USAGE = 'Usage: livemap [dir=.] [--port N] [--no-open] [--pull[=SEC]] [--no-history] [--summaries]\n       livemap init [dir=.] [--agents claude,codex,cursor] [--remove]\n       livemap export [dir=.] [--session ID] [--no-code] [--out FILE]\n       livemap sn [dir=.] --scope NAMESPACE|SYS_ID [--instance NAME] [--nexus URL] [--skyforge-log FILE|none] [--log-window SECONDS] [--poll SECONDS|off] [--port N] [--no-open] [--no-history] [--mirror-only]';
 const DEFAULT_PULL_SEC = 15;
 
 export interface Args { dir: string; port: number; open: boolean; pullSec: number | null; history: boolean; summaries: boolean }
