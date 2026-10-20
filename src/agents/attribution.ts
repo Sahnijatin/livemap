@@ -1,19 +1,46 @@
 import { EventEmitter } from 'node:events';
-import type { AgentEvent, Attribution, ChangeSummary } from '../shared/types.js';
+import type { AgentEvent, Attribution, ChangeSummary, Confidence } from '../shared/types.js';
 import type { AgentHub } from './hub.js';
 import { classifyTool, sameRecord } from '../shared/tools.js';
+import { byRunWindow, byTime, byUpdateSet, callsOf, type RecordFacts, type RuleWindows } from './record-rules.js';
 
 const MAX_INTENT = 500;
 const MAX_PENDING = 200;
+/** A call event this far from a pending record change is not taken as new evidence for it. */
+const LATE_RECORD_MS = 60 * 60_000;
 
-/** The record a changed path holds (a ServiceNow mirror file), for matching tool calls that name records. */
-export type RecordKey = { instance?: string; table: string; sysId?: string; name?: string };
+/**
+ * The record a changed path holds (a ServiceNow mirror file), for matching tool calls that name records.
+ * The optional facts (`updatedOn`, `updatedBy`, `updateSet`) come from the instance's change rows; the rules
+ * after the record-key rule need them.
+ */
+export type RecordKey = RecordFacts;
+
+/** Strongest first. A later event only replaces an attribution with a stronger one. */
+export const CONFIDENCE_ORDER: readonly Confidence[] = ['exact', 'log', 'likely', 'ambiguous'];
+const rank = (a: Attribution | undefined): number => (a ? CONFIDENCE_ORDER.indexOf(a.confidence) : CONFIDENCE_ORDER.length);
+
+/** Default clock skew margin between this machine and the instance. */
+export const DEFAULT_SKEW_MS = 5000;
+const MAX_SKEW_MS = 10 * 60_000;
+
 export interface AttributorOptions {
   exactBeforeMs?: number; exactAfterMs?: number; likelyMs?: number;
   /** Maps a changed path to the record it mirrors; undefined for ordinary files. */
   recordOf?: (path: string) => RecordKey | undefined;
+  /** Clock skew margin for record changes (default 5 s); see setSkewMs. */
+  skewMs?: number;
+  /** Changes this long after a background script ends still belong to it (default 3 s). */
+  runTailMs?: number;
+  /** A session's update set counts until this long after its last event (default 60 s). */
+  spanTailMs?: number;
+  /**
+   * Rule 4, for record changes no stronger rule matched: tool log lines (SkyForge's MCP log). Return an
+   * attribution with confidence `log`, or undefined. Exceptions count as no match.
+   */
+  logMatch?: (change: ChangeSummary, record: RecordKey) => Attribution | undefined;
 }
-interface Pending { id: number; path: string; at: number }
+interface Pending { id: number; path: string; at: number; record?: RecordKey; best: number }
 
 const cap = (s: string) => (s.length > MAX_INTENT ? s.slice(0, MAX_INTENT) : s);
 
@@ -42,6 +69,12 @@ export class Attributor extends EventEmitter {
   private readonly after: number;
   private readonly likelyMs: number;
   private readonly recordOf?: (path: string) => RecordKey | undefined;
+  private readonly logMatch?: AttributorOptions['logMatch'];
+  private skewMs: number;
+  private readonly runTailMs: number;
+  private readonly spanTailMs: number;
+  /** ServiceNow users learned from exact matches, by session. */
+  private readonly users = new Map<string, string>();
   private pending: Pending[] = [];
   private readonly onEvent = (e: AgentEvent) => this.handle(e);
 
@@ -51,12 +84,28 @@ export class Attributor extends EventEmitter {
     this.after = opts.exactAfterMs ?? 5000;
     this.likelyMs = opts.likelyMs ?? 15_000;
     this.recordOf = opts.recordOf;
+    this.logMatch = opts.logMatch;
+    this.skewMs = DEFAULT_SKEW_MS;
+    this.setSkewMs(opts.skewMs ?? DEFAULT_SKEW_MS);
+    this.runTailMs = opts.runTailMs ?? 3000;
+    this.spanTailMs = opts.spanTailMs ?? 60_000;
     hub.on('event', this.onEvent);
+  }
+
+  /** The clock skew margin for record changes. The live poller sets it once it has measured the skew. */
+  setSkewMs(ms: number): void {
+    if (Number.isFinite(ms)) this.skewMs = Math.min(MAX_SKEW_MS, Math.max(0, Math.abs(ms)));
+  }
+
+  get skew(): number {
+    return this.skewMs;
   }
 
   /** `now` is unused: times come from change.at and event.at. */
   attribute(change: ChangeSummary, _now: number = Date.now()): Attribution | undefined {
     const all = this.hub.events();
+    const record = this.recordOf?.(change.path);
+    if (record) return this.track(change, record, this.attributeRecord(all, change, record));
     const exact = this.findExact(all, change);
     let result: Attribution | undefined;
     if (exact) result = this.exactFor(all, exact, change.at);
@@ -65,12 +114,46 @@ export class Attributor extends EventEmitter {
       if (likely) result = { agent: likely.agent, sessionId: likely.sessionId, confidence: 'likely', intent: this.intent(all, likely.sessionId, change.at) };
     }
     if (result && !result.intent) delete result.intent;
+    return this.track(change, undefined, result);
+  }
+
+  /** Keeps a change that is not exact yet, so a later call event can upgrade it. */
+  private track(change: ChangeSummary, record: RecordKey | undefined, result: Attribution | undefined): Attribution | undefined {
     this.pending = this.pending.filter((p) => p.id !== change.id);
     if (result?.confidence !== 'exact') {
-      this.pending.push({ id: change.id, path: change.path, at: change.at });
+      this.pending.push({ id: change.id, path: change.path, at: change.at, best: rank(result), ...(record ? { record } : {}) });
       if (this.pending.length > MAX_PENDING) this.pending.splice(0, this.pending.length - MAX_PENDING);
     }
     return result;
+  }
+
+  private windows(): RuleWindows {
+    return { skewMs: this.skewMs, runTailMs: this.runTailMs, spanTailMs: this.spanTailMs, likelyMs: this.likelyMs };
+  }
+
+  /**
+   * A record change, through the rules in order (the first match wins): record key (exact), update set,
+   * run window, log, time only. No match means a human or an unknown writer: no attribution.
+   */
+  private attributeRecord(all: AgentEvent[], change: ChangeSummary, record: RecordKey): Attribution | undefined {
+    const t = record.updatedOn ?? change.at;
+    const exact = this.findExact(all, change, t, this.skewMs);
+    if (exact) {
+      if (record.updatedBy) this.users.set(exact.sessionId, record.updatedBy);
+      const a = this.exactFor(all, exact, t);
+      return { ...a, rule: 'record', reason: `${exact.tool?.label ?? 'The call'} named ${record.table} ${record.sysId ?? record.name ?? ''}`.trim() };
+    }
+    const w = this.windows();
+    const calls = callsOf(all.filter((e) => !(e.tool?.id && this.hub.isBlocked(e.sessionId, e.tool.id))), isWriteTool);
+    const userOf = (sid: string) => this.users.get(sid);
+    let result = byUpdateSet(all, record, t, w) ?? byRunWindow(calls, record, t, w, userOf);
+    if (!result && this.logMatch) {
+      try { result = this.logMatch(change, record); } catch { result = undefined; }
+    }
+    result ??= byTime(calls, record, t, w, userOf);
+    if (!result) return undefined;
+    const intent = this.intent(all, result.sessionId, t);
+    return intent ? { ...result, intent } : result;
   }
 
   stop(): void {
@@ -89,10 +172,11 @@ export class Attributor extends EventEmitter {
     return isWriteTool(e) && !(e.tool?.id && this.hub.isBlocked(e.sessionId, e.tool.id));
   }
 
-  private matches(e: AgentEvent, path: string, at: number): boolean {
+  /** `slack` widens the window on both sides (clock skew between this machine and an instance). */
+  private matches(e: AgentEvent, path: string, at: number, slack = 0): boolean {
     if (!this.candidate(e)) return false;
     const t = timeOf(e);
-    if (t < at - this.before || t > at + this.after) return false;
+    if (t < at - this.before - slack || t > at + this.after + slack) return false;
     const paths = e.type === 'commit' ? e.paths : e.tool?.paths;
     if (paths?.includes(path)) return true;
     const targets = e.tool?.targets;
@@ -101,10 +185,10 @@ export class Attributor extends EventEmitter {
     return !!key && targets.some((x) => sameRecord(x, key));
   }
 
-  private findExact(all: AgentEvent[], change: ChangeSummary): AgentEvent | undefined {
+  private findExact(all: AgentEvent[], change: ChangeSummary, at: number = change.at, slack = 0): AgentEvent | undefined {
     let best: AgentEvent | undefined;
     for (const e of all) {
-      if (!this.matches(e, change.path, change.at)) continue;
+      if (!this.matches(e, change.path, at, slack)) continue;
       if (!best || timeOf(e) >= timeOf(best)) best = e;
     }
     return best;
@@ -135,9 +219,19 @@ export class Attributor extends EventEmitter {
 
   private handle(e: AgentEvent): void {
     if (!this.pending.length || !this.candidate(e)) return;
-    const hit = this.pending.filter((p) => this.matches(e, p.path, p.at));
-    if (!hit.length) return;
     const all = this.hub.events();
+    // Record changes: any write call may now fit a rule; re-run the ones near it and report only an upgrade.
+    const t = timeOf(e);
+    for (const p of this.pending.filter((x) => x.record && Math.abs(t - (x.record.updatedOn ?? x.at)) <= LATE_RECORD_MS)) {
+      const change = { id: p.id, path: p.path, at: p.at } as ChangeSummary;
+      const a = this.attributeRecord(all, change, p.record as RecordKey);
+      if (!a || rank(a) >= p.best) continue;
+      p.best = rank(a);
+      if (a.confidence === 'exact') this.pending = this.pending.filter((x) => x.id !== p.id);
+      try { this.emit('late', p.id, a); } catch { /* a faulty listener must not break hub ingestion */ }
+    }
+    const hit = this.pending.filter((p) => !p.record && this.matches(e, p.path, p.at));
+    if (!hit.length) return;
     for (const p of hit) {
       this.pending = this.pending.filter((x) => x.id !== p.id);
       const a = this.exactFor(all, e, p.at);

@@ -1,6 +1,7 @@
 import type http from 'node:http';
 import type { AgentHub } from '../agents/hub.js';
 import { tokenMatches } from './auth.js';
+import { ingestCapture, isCapture } from '../agents/capture.js';
 
 /**
  * Hook payloads can carry large tool outputs; the hub truncates what it stores.
@@ -71,7 +72,10 @@ function rejectBody(req: http.IncomingMessage, res: http.ServerResponse, json: J
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
-/** `POST /hook`: machine endpoint authenticated only by the `x-livemap-token` header. */
+/**
+ * `POST /hook`: machine endpoint authenticated only by the `x-livemap-token` header. Takes agent hook
+ * payloads (`{agent, event, payload}`) and capture events (`{source: "mcp-proxy", ...}`).
+ */
 export async function handleHook(req: http.IncomingMessage, res: http.ServerResponse, json: Json, token: string, hub: AgentHub | undefined): Promise<void> {
   const h = req.headers['x-livemap-token'];
   if (!tokenMatches(token, Array.isArray(h) ? h[0] : h)) return json(401, { error: 'unauthorized' });
@@ -80,6 +84,11 @@ export async function handleHook(req: http.IncomingMessage, res: http.ServerResp
   const body = await readJsonBody(req, MAX_HOOK_BODY);
   if (!body.ok) return body.status === 413 ? rejectBody(req, res, json, 413, body.error) : json(body.status, { error: body.error });
   const v = body.value;
+  // A tool call captured by `livemap mcp-proxy`: recorded only, never blocked.
+  if (isCapture(v)) {
+    try { ingestCapture(hub, v); } catch { /* a bad capture must not fail the sender */ }
+    return json(200, { block: null });
+  }
   if (!isObj(v) || typeof v.agent !== 'string' || !HOOK_AGENTS.has(v.agent) || typeof v.event !== 'string' || !v.event) {
     return json(400, { error: 'expected {agent, event, payload}' });
   }

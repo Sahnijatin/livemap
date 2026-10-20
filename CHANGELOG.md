@@ -9,4 +9,5 @@ LiveMap is not published yet. This file lists changes that affect data or settin
 - **`BROWSER`** names the program that opens LiveMap's URL, with arguments and `%s` for the URL; `BROWSER=none` opens nothing.
 - **`livemap sn`** mirrors a ServiceNow scope through SkyForge's nexus MCP (read-only) into `.livemap/sn/` and shows it in the Map, Schema and API views. Business rules, client scripts, UI policies and ACLs show as rules on their tables.
 - **`livemap sn` works with real nexus.** It no longer stops with `raw.normalize is not a function` while pulling: reference fields that nexus returns as `{link, value}` objects are read as their value.
+- **`livemap mcp-proxy`** lets LiveMap see the tool calls of a desktop MCP client. The client's nexus entry launches the proxy, which forwards everything unchanged and reports each call, with secrets redacted, to `livemap sn`. Instance changes are matched to calls by record, update set, run window and time, with confidence `exact`, `likely` or `ambiguous`.
 - **CI** runs the unit tests on Windows (Node 22) as well as Ubuntu and macOS.
