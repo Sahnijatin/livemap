@@ -330,6 +330,9 @@ test('a 980 px inspector stored on a 1920 px screen leaves the file tree at its 
   await page.evaluate(() => localStorage.setItem('livemap:layout', JSON.stringify({ w: { files: null, inspector: 980 }, collapsed: { files: false, inspector: false }, last: 'inspector', at: 1896 })));
   await page.reload();
   await expect(page.getByRole('status').filter({ hasText: 'Live' })).toBeAttached({ timeout: 15_000 });
+  // The panels lay out after the first hello: wait for them before measuring.
+  await expect(page.locator('aside.sidebar')).toBeVisible();
+  await expect(page.locator('aside.insp')).toBeVisible();
   expect(Math.round((await page.locator('aside.sidebar').boundingBox())!.width)).toBe(272);
   expect(Math.round((await page.locator('aside.insp').boundingBox())!.width)).toBe(1416 - 444 - 272);
 });

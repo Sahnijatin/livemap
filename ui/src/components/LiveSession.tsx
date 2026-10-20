@@ -46,8 +46,9 @@ function YourFlags() {
 
 /** The latest commits LiveMap saw (merges left out), so work done through git shows even without an agent. */
 function RecentCommits({ events, now }: { events: AgentEvent[]; now: number }) {
-  // By commit time: a pull brings in older commits after newer local ones.
-  const commits = useMemo(() => events.filter(e => e.type === 'commit' && !isMerge(e)).sort((a, b) => b.at - a.at).slice(0, 5), [events]);
+  // By commit time: a pull brings in older commits after newer local ones. Git times are whole seconds, so commits in
+  // one second go newest first by event id (LiveMap reads each batch of commits oldest first).
+  const commits = useMemo(() => events.filter(e => e.type === 'commit' && !isMerge(e)).sort((a, b) => b.at - a.at || b.id - a.id).slice(0, 5), [events]);
   if (!commits.length) return null;
   return (
     <div className="sec">
