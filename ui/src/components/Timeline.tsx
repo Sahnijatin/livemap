@@ -2,7 +2,7 @@ import { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState, 
 import clsx from 'clsx';
 import type { Ticks } from '@shared/history.js';
 import { liveGeneration, useStore } from '../store';
-import { clock } from '../agents';
+import { clock, when } from '../agents';
 import { bucketsFor, dominantKind, historySource, latestThrottle } from '../history';
 import { PauseIcon, PlayIcon } from './icons';
 import { BackToLive } from './Rewound';
@@ -14,8 +14,15 @@ const TICKS_EVERY_MS = 5000;
 
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 
-/** The widest times this locale prints (two-digit hours, morning and evening): they size the reserved time slot. */
-const WIDEST_TIMES = [clock(new Date(2000, 0, 1, 10, 58).getTime()), clock(new Date(2000, 0, 1, 22, 58).getTime())];
+/**
+ * The widest times this locale prints (two-digit hours, morning and evening, and a date with its year, as a
+ * back-dated run shows): they size the reserved time slot.
+ */
+const WIDEST_TIMES = [
+  clock(new Date(2000, 0, 1, 10, 58).getTime()),
+  clock(new Date(2000, 0, 1, 22, 58).getTime()),
+  when(new Date(2000, 8, 28, 22, 58).getTime()),
+];
 
 /**
  * An invisible copy of the REWOUND side (chip, widest time, Back to live) stacked under the shown side,
@@ -31,6 +38,9 @@ function SideGhost({ back }: { back: boolean }) {
     </span>
   );
 }
+
+/** A run separator's title: a ServiceNow version history import (`sn-history-<scope>-...`) ends, or LiveMap restarted. */
+const runTitle = (prevRun: string | undefined): string => (prevRun?.startsWith('sn-history-') ? 'Version history ends' : 'LiveMap restarted');
 
 /** The bucket index holding `seq` (the last bucket starting at or before it); -1 before the first. */
 function bucketOf(t: Ticks, seq: number): number {
@@ -219,7 +229,7 @@ export function Timeline() {
   const events = sums[bi] ?? 0;
   const past = shownSeq !== null;
   const at = (past && rewound?.seq === shownSeq ? rewound.at : bucket?.at) ?? status.lastAt;
-  const valueText = `${past ? '' : 'Live, '}${clock(at)}, ${events} event${events === 1 ? '' : 's'}`;
+  const valueText = `${past ? '' : 'Live, '}${when(at)}, ${events} event${events === 1 ? '' : 's'}`;
   const pct = `${frac * 100}%`;
   const busy = playing || starting;
   const playLabel = busy ? 'Pause playback' : 'Play history';
@@ -257,7 +267,7 @@ export function Timeline() {
             );
           })}
         </div>
-        {ticks?.runStarts.map(r => r > from && <i key={r} className="tl-run" title="LiveMap restarted" style={{ left: `${fracOf(r) * 100}%` }} />)}
+        {ticks?.runStarts.map((r, i) => r > from && <i key={r} className="tl-run" title={runTitle(ticks.prevRuns?.[i])} style={{ left: `${fracOf(r) * 100}%` }} />)}
         <div
           className="thumb"
           role="slider"
@@ -277,7 +287,7 @@ export function Timeline() {
         <span className="tl-side">
           <span className="tl-face">
             <span className="tl-state past">REWOUND</span>
-            <span className="tl-time">{clock(at)}</span>
+            <span className="tl-time">{when(at)}</span>
             <BackToLive className="tl-back-inline" onClick={goLive} />
           </span>
           <SideGhost back={!replay} />

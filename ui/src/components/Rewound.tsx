@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import { useStore } from '../store';
-import { clock } from '../agents';
+import { when } from '../agents';
 
 // Apart from Timeline (which loads after first paint) because the banner shows over the center pane at once.
 
@@ -19,7 +19,7 @@ export function RewoundBanner() {
   return (
     <div className="rw-banner glass" role="status">
       <i className="rw-dot" aria-hidden="true" />
-      <span>Viewing {clock(rewound.at)}. Changes made since then are hidden.</span>
+      <span>Viewing {when(rewound.at)}. Changes made since then are hidden.</span>
       <BackToLive />
     </div>
   );

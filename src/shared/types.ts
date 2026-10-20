@@ -54,6 +54,11 @@ export interface ChangeSummary {
   env: { added: string[]; removed: string[] };
   lines: { added: number; removed: number }; hunks: Hunk[]; truncated: boolean;
   attribution?: Attribution;
+  /**
+   * The instance user who saved the record, from a ServiceNow scope's version history: a save LiveMap did not see
+   * live. Not an attribution; a save matched to no tool call has none.
+   */
+  savedBy?: string;
   /** AI one-liner, when summaries are enabled. Plain text. */
   summary?: string;
 }
