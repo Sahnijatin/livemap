@@ -16,17 +16,24 @@ const byPath = new Map<string, SnRecordInfo>([
 ]);
 
 describe('openUrl', () => {
-  it('links a record on its instance, from a name, a host or a URL', () => {
-    const id = '5f0000000000000000000000000000c2';
-    expect(openUrl('acme', 'sp_widget', id)).toBe(`https://acme.service-now.com/sp_widget.do?sys_id=${id}`);
-    expect(openUrl('acme.service-now.com', 'sp_widget', id)).toBe(`https://acme.service-now.com/sp_widget.do?sys_id=${id}`);
-    expect(openUrl('https://acme.service-now.com/', 'sys_script', id)).toBe(`https://acme.service-now.com/sys_script.do?sys_id=${id}`);
+  const id = '5f0000000000000000000000000000c2';
+  it('links a record on a ServiceNow host, from a name, a host or a URL', () => {
+    expect(openUrl('acme', 'sp_widget', id)).toEqual({ url: `https://acme.service-now.com/sp_widget.do?sys_id=${id}`, host: 'acme.service-now.com', blocked: false });
+    expect(openUrl('ACME.service-now.com', 'sp_widget', id).url).toBe(`https://acme.service-now.com/sp_widget.do?sys_id=${id}`);
+    expect(openUrl('https://acme.service-now.com/', 'sys_script', id).url).toBe(`https://acme.service-now.com/sys_script.do?sys_id=${id}`);
+    expect(openUrl('gov.servicenowservices.com', 'sys_script', id).url).toBe(`https://gov.servicenowservices.com/sys_script.do?sys_id=${id}`);
+  });
+  it('gives no link for another domain unless it is allowed', () => {
+    expect(openUrl('evil.example', 'sp_widget', id)).toEqual({ url: null, host: 'evil.example', blocked: true });
+    expect(openUrl('acme.service-now.com.evil.example', 'sp_widget', id).blocked).toBe(true);
+    expect(openUrl('xservice-now.com', 'sp_widget', id).blocked).toBe(true);
+    expect(openUrl('sn.corp.example', 'sp_widget', id, ['corp.example']).url).toBe(`https://sn.corp.example/sp_widget.do?sys_id=${id}`);
   });
   it('gives no link for a malformed instance, table or sys_id', () => {
-    expect(openUrl('', 'sp_widget', '5f0000000000000000000000000000c2')).toBeNull();
-    expect(openUrl('acme', 'sp_widget"><x', '5f0000000000000000000000000000c2')).toBeNull();
-    expect(openUrl('acme', 'sp_widget', 'not-an-id')).toBeNull();
-    expect(openUrl('ac me', 'sp_widget', '5f0000000000000000000000000000c2')).toBeNull();
+    expect(openUrl('', 'sp_widget', id).url).toBeNull();
+    expect(openUrl('acme', 'sp_widget"><x', id).url).toBeNull();
+    expect(openUrl('acme', 'sp_widget', 'not-an-id').url).toBeNull();
+    expect(openUrl('ac me', 'sp_widget', id)).toEqual({ url: null, host: null, blocked: false });
   });
 });
 

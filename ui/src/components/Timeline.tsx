@@ -44,8 +44,9 @@ function bucketOf(t: Ticks, seq: number): number {
  * run separators and a draggable thumb, and the LIVE or REWOUND state. Dragging, the arrow keys, Home
  * and End rewind the whole UI; releasing at the right end or End returns to live.
  */
-// ServiceNow filters, badge, diagnostics and the notices link: their own chunk, loaded from this one (itself lazy,
-// right after first paint) so the main chunk carries none of it. A replay has no server to ask.
+// ServiceNow filters, badge and diagnostics: their own chunk, loaded from this one (itself lazy, right after first
+// paint) and only for a `livemap sn` mirror, so the main chunk and code projects carry none of it. A replay has no
+// server to ask.
 const SnHost = lazy(() => import('../sn/SnHost'));
 
 export function Timeline() {
@@ -53,6 +54,7 @@ export function Timeline() {
   const rewound = useStore(s => s.rewound);
   const playing = useStore(s => s.playing);
   const replay = useStore(s => s.replay);
+  const sn = useStore(s => s.sn);
 
   const trackRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
@@ -224,8 +226,8 @@ export function Timeline() {
 
   return (
     <div className={clsx('timeline', !status.enabled && 'off', past && 'past')} role="group" aria-label="Session timeline">
-      {/* Renders only portals (into the toolbar, the center and the inspector), never inside the timeline. */}
-      {!replay && import.meta.env.MODE !== 'export' && <Suspense fallback={null}><SnHost /></Suspense>}
+      {/* Renders only portals (into the toolbar and the center), never inside the timeline. */}
+      {sn && !replay && import.meta.env.MODE !== 'export' && <Suspense fallback={null}><SnHost /></Suspense>}
       <button
         type="button"
         className="play"

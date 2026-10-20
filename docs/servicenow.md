@@ -127,7 +127,7 @@ Select any file of a record, for example a widget's `meta.json`, in the file tre
 
 Goal and Step need the conversation, which only the SkyForge terminal plugin sends. For calls from a desktop MCP client, the card shows the Action and the update set instead.
 
-**Open in ServiceNow** opens the record on the instance in a new tab. It is a plain link: LiveMap does not change anything on the instance.
+**Open in ServiceNow** opens the record on the instance in a new tab; hover it to see the host. It is a plain link: LiveMap does not change anything on the instance. It links only to ServiceNow's own domains (`service-now.com` and `servicenowservices.com`), because the instance name comes from the mirror folder, which anything that can write to it could change. For an instance on another domain, start LiveMap with `LIVEMAP_SN_HOSTS` set to that domain, for example `set LIVEMAP_SN_HOSTS=sn.example.com` in cmd (separate several with commas).
 
 ### Confidence levels
 
@@ -177,10 +177,12 @@ The mirror folder is readable only by you. When the folder is inside a git repos
 
 **The instance does not answer.** nexus is running but the instance is offline, asleep or not reachable. The pull stops with the error nexus reports, and the mirror from the last run stays as it was. Wake the instance (a developer instance can sleep), then run `livemap sn` again.
 
+**No Open in ServiceNow link.** The card says the host is not a ServiceNow domain. Set `LIVEMAP_SN_HOSTS` to the instance's domain and start `livemap sn` again.
+
 **Nothing is attributed.** Every change shows as unattributed:
 
 - Check that the proxy or the plugin is set up. Once it is, each agent session shows in LiveMap's activity feed after its first call.
 - Look at **Unknown tools**. If the agent's write tools are listed there, LiveMap cannot tell they are writes yet.
 - Changes made in the ServiceNow UI by a person are unattributed by design.
 
-**Third-party notices.** The licenses of the open source packages LiveMap uses are linked at the bottom of the inspector (**Third-party notices**).
+**Third-party notices.** The licenses of the open source packages LiveMap uses are linked from the inspector's Live session view (**Third-party notices**).

@@ -13,7 +13,8 @@ import { MethodPill } from './MethodPill';
 import { authHeaders } from '../connection';
 import { askAbout } from './Ask';
 
-// The ServiceNow record card: its own chunk, loaded from this one, so its files never join the main chunk's preload list.
+// The ServiceNow record card: its own chunk, loaded from this one in a ServiceNow mirror only, so its files never join
+// the main chunk's preload list.
 const SnRecordCard = lazy(() => import('../sn/SnRecord').then(m => ({ default: m.SnRecordCard })));
 
 /* The inspector's file view. It only shows once a file is selected, so it loads after first paint (see Inspector). */
@@ -222,6 +223,8 @@ function DomainSections({ file }: { file: FileModel }) {
 
 export function FileDetail({ file }: { file: FileModel }) {
   const files = useStore(s => s.files);
+  // Only a ServiceNow mirror loads the record card.
+  const sn = useStore(s => s.sn);
   // The diff shows the latest change the filters let through.
   const changes = useShownChanges();
   const usedByIndex = useStore(s => s.usedBy);
@@ -263,7 +266,7 @@ export function FileDetail({ file }: { file: FileModel }) {
         </div>
       </div>
 
-      <Suspense fallback={null}><SnRecordCard path={file.path} /></Suspense>
+      {sn && <Suspense fallback={null}><SnRecordCard path={file.path} /></Suspense>}
 
       <PlainEnglish path={file.path} />
 

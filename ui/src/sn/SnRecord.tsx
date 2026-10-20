@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import type { SnRecordInfo } from '@shared/sn.js';
 import { useStore } from '../store';
 import { agentName } from '../agents';
@@ -24,8 +24,22 @@ function Expandable({ text }: { text: string }) {
 }
 
 /** The confidence level as a badge, its reason (or what the level means) on hover. */
+/**
+ * The confidence level as a button: hover shows the reason (or what the level means), and a click or Enter shows it
+ * under the badge, where the badge's `aria-describedby` points, so keyboards and screen readers reach it too.
+ */
 export function ConfidenceBadge({ level, reason }: { level: ConfidenceLevel; reason?: string }) {
-  return <span className={`sn-conf c-${level}`} title={reason || CONFIDENCE_HINT[level]}>{CONFIDENCE_LABEL[level]}</span>;
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  const why = reason || CONFIDENCE_HINT[level];
+  return (
+    <>
+      <button type="button" className={`sn-conf c-${level}`} title={why} aria-expanded={open} aria-describedby={id} onClick={() => setOpen(!open)}>
+        {CONFIDENCE_LABEL[level]}
+      </button>
+      <span id={id} className={open ? 'sn-why' : 'sn-why sr-only'}>{why}</span>
+    </>
+  );
 }
 
 /** The first file of a record, to select it: its `meta.json` for a folder record. */
@@ -79,7 +93,7 @@ export function SnRecordCard({ path }: { path: string }) {
   const a = latest?.attribution;
   const level = levelOf(a);
   const why = latest ? whyOf(latest, kind, events, sessions) : {};
-  const url = openUrl(index.instance, r.table, r.sysId);
+  const link = openUrl(index.instance, r.table, r.sysId, index.hosts);
   const who = a ? `${agentName(a.agent)}${why.session?.title ? `, ${why.session.title}` : ''}` : undefined;
 
   return (
@@ -98,7 +112,7 @@ export function SnRecordCard({ path }: { path: string }) {
               <ConfidenceBadge level={level} reason={a?.reason} />
               {level === 'ambiguous' && a?.candidates?.length ? (
                 <ul className="sn-cands" aria-label="Candidate sessions">
-                  {a.candidates.map(c => <li key={`${c.agent}:${c.sessionId}`}>{agentName(c.agent)}{sessions[c.sessionId]?.title ? `, ${sessions[c.sessionId].title}` : `, session ${c.sessionId}`}</li>)}
+                  {a.candidates.map((c, i) => <li key={`${c.agent}:${c.sessionId}:${c.eventId ?? ''}:${i}`}>{agentName(c.agent)}{sessions[c.sessionId]?.title ? `, ${sessions[c.sessionId].title}` : `, session ${c.sessionId}`}</li>)}
                 </ul>
               ) : null}
             </dd>
@@ -123,7 +137,8 @@ export function SnRecordCard({ path }: { path: string }) {
         </dd>
       </dl>
       {!latest && <p className="muted sn-none">No changes to this record since LiveMap started.</p>}
-      {url && <a className="sn-open" href={url} target="_blank" rel="noopener noreferrer">Open in ServiceNow</a>}
+      {link.url && <a className="sn-open" href={link.url} target="_blank" rel="noopener noreferrer" title={`Opens ${link.host} in a new tab`}>Open in ServiceNow</a>}
+      {link.blocked && <p className="muted sn-none">No link: {link.host} is not a ServiceNow domain. Add it to LIVEMAP_SN_HOSTS to allow it.</p>}
     </div>
   );
 }

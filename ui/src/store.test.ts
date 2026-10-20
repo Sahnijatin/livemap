@@ -13,6 +13,13 @@ const hello = (files = [file('a.ts'), file('b.ts'), file('c.ts')]) => ({
 beforeEach(() => useStore.getState().reset());
 
 describe('store.apply', () => {
+  it('hello says whether the project is a ServiceNow mirror (absent means no)', () => {
+    useStore.getState().apply({ ...hello(), sn: true });
+    expect(useStore.getState().sn).toBe(true);
+    useStore.getState().apply(hello());
+    expect(useStore.getState().sn).toBe(false);
+  });
+
   it('hello replaces everything; files upserts and removes', () => {
     const s = useStore.getState();
     s.apply({ type: 'hello', root: '/old', name: 'old', files: [file('zzz.ts')], changes: [change('zzz.ts')], usedBy: [{ file: 'zzz.ts', symbol: 'x', usedIn: [] }], domain: emptyDomain(), indexing: false, events: [], sessions: [], control: { paused: false, flags: [] } });

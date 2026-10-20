@@ -91,7 +91,6 @@ function withPins(g: MapGraph, p: Positions, pins: Pins): Positions {
 /** A camera move waiting for the next layout: first show, overview, a folder, or a file asked for by the palette. */
 type Camera = { kind: 'first' } | { kind: 'overview' } | { kind: 'folder'; id: string } | { kind: 'file'; id: string; at: number };
 
-/** Zoom buttons; a zoom is a user camera move (it pauses Follow). */
 /** The project's files, less those the filter bar hides. */
 function useVisibleFiles(): Record<string, FileModel> {
   const all = useStore(s => s.files);
@@ -104,6 +103,7 @@ function useVisibleFiles(): Record<string, FileModel> {
   }, [all, vf]);
 }
 
+/** Zoom buttons; a zoom is a user camera move (it pauses Follow). */
 function ZoomControls({ fitAll, onZoom }: { fitAll: () => void; onZoom: () => void }) {
   const rf = useReactFlow();
   return (

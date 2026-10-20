@@ -38,15 +38,29 @@ const KIND: Record<string, string> = {
 };
 export const kindOf = (table: string): string => KIND[table] ?? table;
 
+/** ServiceNow's own domains. Others need `LIVEMAP_SN_HOSTS` on the server (sent as `SnIndex.hosts`). */
+export const SN_DOMAINS = ['service-now.com', 'servicenowservices.com'];
+
+/** The instance's host: a name (`acme`) means `acme.service-now.com`; a host or URL keeps its host. Null when malformed. */
+export function instanceHost(instance: string): string | null {
+  const host = instance.trim().replace(/^https?:\/\//i, '').replace(/[/:].*$/, '').toLowerCase();
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)*$/.test(host)) return null;
+  return host.includes('.') ? host : `${host}.service-now.com`;
+}
+
+/** Whether a host is under one of `domains` (the domain itself or a subdomain). */
+const under = (host: string, domains: string[]): boolean => domains.some(d => host === d || host.endsWith(`.${d}`));
+
 /**
- * The record's page on its instance. `instance` is a name (`acme`), a host (`acme.service-now.com`) or a URL; a plain
- * link, opened in a new tab. LiveMap never writes to the instance.
+ * The record's page on its instance: a plain link, opened in a new tab (LiveMap never writes to the instance). The
+ * instance comes from the mirror's manifest, which anything that can write the folder can change, so the host must be
+ * under a ServiceNow domain or one in `extra`. `url` is null when it is not (`blocked` is then true) or is malformed.
  */
-export function openUrl(instance: string, table: string, sysId: string): string | null {
-  const host = instance.trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
-  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)*$/i.test(host) || !/^[a-z0-9_]+$/i.test(table) || !/^[0-9a-f]{32}$/i.test(sysId)) return null;
-  const full = host.includes('.') ? host : `${host}.service-now.com`;
-  return `https://${full}/${table}.do?sys_id=${sysId}`;
+export function openUrl(instance: string, table: string, sysId: string, extra: string[] = []): { url: string | null; host: string | null; blocked: boolean } {
+  const host = instanceHost(instance);
+  if (!host || !/^[a-z0-9_]+$/i.test(table) || !/^[0-9a-f]{32}$/i.test(sysId)) return { url: null, host, blocked: false };
+  if (!under(host, [...SN_DOMAINS, ...extra.map(d => d.trim().toLowerCase()).filter(Boolean)])) return { url: null, host, blocked: true };
+  return { url: `https://${host}/${table}.do?sys_id=${sysId}`, host, blocked: false };
 }
 
 interface SnState {

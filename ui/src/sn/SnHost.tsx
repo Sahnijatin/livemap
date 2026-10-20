@@ -9,8 +9,8 @@ import { activeCount, filtersUrl, readFilters, viewFilter, type Filters } from '
 
 /*
  * The ServiceNow parts of the page, for a `livemap sn` project only: the unattributed badge in the toolbar, the filter
- * bar over the views, and the diagnostics panel. Loaded lazily (from the timeline's chunk) for every live project;
- * without a ServiceNow mirror it renders only the third-party notices footer under the inspector.
+ * bar over the views, and the diagnostics panel. Loaded lazily (from the timeline's chunk) only when the hello says
+ * the project is a ServiceNow mirror.
  */
 
 /** The mirror's records are read again this long after the last change (a burst of saves reads them once). */
@@ -59,11 +59,14 @@ function Select({ label, value, options, onChange }: { label: string; value?: st
   );
 }
 
+/** The diagnostics dialog: takes focus when it opens; Esc or the close button closes it (the opener gets focus back). */
 function Diagnostics({ onClose }: { onClose: () => void }) {
   const events = useStore(s => s.events);
   const list = useMemo(() => unknownTools(events), [events]);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => { box.current?.focus(); }, []);
   return (
-    <div className="sn-diag glass" role="dialog" aria-label="Diagnostics" onKeyDown={e => { if (e.key === 'Escape') onClose(); }}>
+    <div className="sn-diag glass" role="dialog" aria-label="Diagnostics" tabIndex={-1} ref={box} onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}>
       <div className="sn-diag-h">
         <b>Unknown tools</b>
         <button type="button" className="iconbtn" aria-label="Close diagnostics" onClick={onClose}>×</button>
@@ -88,12 +91,11 @@ export default function SnHost() {
   const sessions = useStore(s => s.sessions);
   const [filters, setFilters] = useState<Filters>(() => readFilters(window.location.search));
   const [diag, setDiag] = useState(false);
+  const diagBtn = useRef<HTMLButtonElement>(null);
   const [ok, setOk] = useState(false);
   // The badge sits in the toolbar before its flexible gap; the filter bar between the view tabs and the views.
   const badgeEl = useAdded('span', 'sn-badge', ok, e => document.querySelector('.toolbar > .grow')?.before(e));
   const barEl = useAdded('div', 'sn-filters', ok, e => document.querySelector('main.center > .c-head')?.after(e));
-  // The third-party notices link, as a footer under the inspector, in every live project (this module loads for all).
-  const noticesEl = useAdded('div', 'notices', true, e => document.querySelector('aside.insp')?.append(e));
 
   // Read the records once per project, and again after changes settle (a save can move a record or its update set).
   useEffect(() => {
@@ -101,13 +103,15 @@ export default function SnHost() {
     void loadSn().then(r => { if (live) setOk(r); });
     return () => { live = false; };
   }, [root]);
-  const seen = useRef(changes.length);
+  // Keyed on the newest change's id: the store keeps at most MAX_CHANGES changes, so the count stops moving.
+  const lastId = changes.length ? changes[changes.length - 1].id : 0;
+  const seen = useRef(lastId);
   useEffect(() => {
-    if (!ok || changes.length === seen.current) return;
-    seen.current = changes.length;
+    if (!ok || lastId === seen.current) return;
+    seen.current = lastId;
     const t = window.setTimeout(() => void loadSn(), RELOAD_MS);
     return () => window.clearTimeout(t);
-  }, [ok, changes.length]);
+  }, [ok, lastId]);
 
   // The views read the filter from the store; leaving clears it.
   useEffect(() => {
@@ -134,12 +138,10 @@ export default function SnHost() {
     .sort((a, b) => b.lastAt - a.lastAt)
     .map(s => [s.id, `${agentName(s.agent)}: ${s.title || s.id}`]), [sessions]);
 
-  const notices = noticesEl && createPortal(<a className="notices" href="/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer">Third-party notices</a>, noticesEl);
-  if (!ok || !index) return notices;
+  if (!ok || !index) return null;
   const n = activeCount(filters);
   return (
     <>
-      {notices}
       {badgeEl && createPortal(
         <button
           type="button"
@@ -161,10 +163,10 @@ export default function SnHost() {
           <Select label="Confidence" value={filters.conf} options={CONFIDENCES.map(c => [c, CONFIDENCE_LABEL[c]])} onChange={set('conf')} />
           {n > 0 && <button type="button" className="sn-clear" onClick={() => update({})}>Clear {n === 1 ? 'filter' : `${n} filters`}</button>}
           <span className="grow" />
-          <button type="button" className="sn-diag-b" aria-expanded={diag} onClick={() => setDiag(!diag)}>
+          <button type="button" className="sn-diag-b" aria-expanded={diag} aria-haspopup="dialog" ref={diagBtn} onClick={() => setDiag(!diag)}>
             Unknown tools <b>{unknown.toLocaleString()}</b>
           </button>
-          {diag && <Diagnostics onClose={() => setDiag(false)} />}
+          {diag && <Diagnostics onClose={() => { setDiag(false); diagBtn.current?.focus(); }} />}
         </div>,
         barEl,
       )}

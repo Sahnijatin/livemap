@@ -27,5 +27,7 @@ export interface SnIndex {
   /** The instance the records were pulled from (as given to `--instance`, or the manifest's). */
   instance: string;
   scopes: { scope: string; name?: string; sysId?: string }[];
+  /** Domains besides ServiceNow's own that "Open in ServiceNow" may link to (`LIVEMAP_SN_HOSTS`, comma-separated). */
+  hosts?: string[];
   records: SnRecordInfo[];
 }

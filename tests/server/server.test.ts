@@ -271,6 +271,8 @@ describe('startServer: /api/sn', () => {
     const r = await get(s.port, `/api/sn?t=${s.token}`);
     expect(r.status).toBe(404);
     expect(JSON.parse(r.body)).toEqual({ error: 'not a ServiceNow mirror' });
+    // The hello says nothing about ServiceNow, so the UI never asks.
+    expect(JSON.parse((await get(s.port, `/api/state?t=${s.token}`)).body).sn).toBeUndefined();
   });
 });
 

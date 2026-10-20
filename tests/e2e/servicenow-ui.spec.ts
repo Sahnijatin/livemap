@@ -48,7 +48,10 @@ function startSn(dir: string, nexusUrl: string): Promise<string> {
 }
 
 test.beforeAll(async () => {
-  tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-snui-e2e-')));
+  // A plain project path, as a user would pick, since it shows in the screenshots (the toolbar's project chip).
+  tmp = path.join(fs.realpathSync.native(os.tmpdir()), 'work', 'sn-smoke');
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.mkdirSync(tmp, { recursive: true });
   home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-snui-home-')));
   nexus = await startMockNexus();
   url = await startSn(tmp, nexus.url);
@@ -136,8 +139,17 @@ test('servicenow: filters, the record inspector, the unattributed badge and diag
   const open = card.getByRole('link', { name: 'Open in ServiceNow' });
   await expect(open).toHaveAttribute('href', 'https://inmorphisdemo3.service-now.com/sp_widget.do?sys_id=5f0000000000000000000000000000c2');
   await expect(open).toHaveAttribute('target', '_blank');
+  await expect(open).toHaveAttribute('title', 'Opens inmorphisdemo3.service-now.com in a new tab');
   // The change came from no agent: unattributed, with the meaning on hover.
-  await expect(card.locator('.sn-conf')).toHaveText('Unattributed');
+  const conf = card.getByRole('button', { name: 'Unattributed' });
+  await expect(conf).toHaveText('Unattributed');
+  // The reason reaches keyboards and screen readers: described by text that Enter shows.
+  const why = 'No agent call matched. A person, or a tool LiveMap does not see, made this change.';
+  await expect(conf).toHaveAccessibleDescription(why);
+  await conf.focus();
+  await page.keyboard.press('Enter');
+  await expect(conf).toHaveAttribute('aria-expanded', 'true');
+  await expect(card.getByText(why)).toBeVisible();
   await page.waitForTimeout(800);
   await page.locator('#inspector').screenshot({ path: path.join(shots, 'servicenow-inspector.png'), animations: 'disabled' });
 
@@ -161,7 +173,19 @@ test('servicenow: filters, the record inspector, the unattributed badge and diag
   // Diagnostics list the tool the classifier could not place, with its call count.
   await page.getByRole('button', { name: /Unknown tools/ }).click();
   const diag = page.getByRole('dialog', { name: 'Diagnostics' });
+  await expect(diag).toBeFocused();
   await expect(diag).toBeVisible();
   await expect(diag.getByRole('row', { name: new RegExp(UNKNOWN) })).toContainText('1', { timeout: 10_000 });
   await page.screenshot({ path: path.join(shots, 'servicenow-diagnostics.png'), animations: 'disabled' });
+  // Esc closes it and gives focus back to its button.
+  await page.keyboard.press('Escape');
+  await expect(diag).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Unknown tools/ })).toBeFocused();
+
+  // The notices link stays in the Live session view after a file is selected and closed again.
+  await page.getByRole('button', { name: '‹ Live session' }).click();
+  await expect(page.getByRole('link', { name: 'Third-party notices' })).toBeVisible();
+  await page.getByRole('treeitem', { name: /meta\.json/ }).first().click();
+  await page.getByRole('button', { name: '‹ Live session' }).click();
+  await expect(page.getByRole('link', { name: 'Third-party notices' })).toBeVisible();
 });

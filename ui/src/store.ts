@@ -110,6 +110,8 @@ export interface StoreState {
   helloAt: number;
   root: string;
   name: string;
+  /** The project is a `livemap sn` mirror (from hello): the ServiceNow parts load only then. */
+  sn: boolean;
   files: Record<string, FileModel>;
   changes: ChangeSummary[];
   usedBy: UsedByEntry[];
@@ -232,6 +234,7 @@ const initial = {
   helloAt: 0,
   root: '',
   name: '',
+  sn: false,
   files: dict<FileModel>(),
   changes: [],
   usedBy: [],
@@ -329,6 +332,7 @@ function replaceData(msg: ProjectState, st: StoreState) {
     helloAt: Date.now(),
     root: msg.root,
     name: msg.name,
+    sn: msg.sn === true,
     files,
     changes,
     usedBy: msg.usedBy,
