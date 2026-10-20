@@ -9,7 +9,7 @@ import { WITHHELD_CLASS, type InventoryRow, type ScopeInfo } from './mirror.js';
 
 /** The fields read of a system property: never its value, which can be a key or token stored as plain text. */
 export const PROPERTY_FIELDS = ['sys_id', 'sys_class_name', 'sys_name', 'name', 'type', 'is_private', 'description', 'sys_scope', 'sys_updated_on', 'sys_updated_by'];
-export const INVENTORY_FIELDS = ['sys_id', 'sys_class_name', 'sys_name', 'sys_created_on', 'sys_updated_on', 'sys_updated_by'];
+export const INVENTORY_FIELDS = ['sys_id', 'sys_class_name', 'sys_name', 'sys_created_on', 'sys_created_by', 'sys_updated_on', 'sys_updated_by'];
 const SYS_ID = /^[0-9a-f]{32}$/i;
 
 export class ScopeNotFoundError extends Error {

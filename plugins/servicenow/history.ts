@@ -8,6 +8,8 @@
  *   when the row was last written, which can be a later recapture or bulk rewrite, so non-delete rows take the
  *   record's own `sys_updated_on` and `sys_updated_by` from the payload; a row written well after that save
  *   also gives a `captured` event at the row's time. Delete rows keep the row's time.
+ * - A record whose creation no row shows (its version rows were rewritten in bulk later, say) gets a `created`
+ *   event from its own `sys_created_on` and `sys_created_by`.
  *
  * Only metadata is kept: payloads are parsed for times, authors and names, then dropped, so no field value (a
  * password2, a script, a property value) is stored. Credential classes are skipped entirely, and payloads are
@@ -41,11 +43,15 @@ export interface HistoryEvent {
   /** The table a dictionary entry, business rule or the like belongs to, when known. */
   collection?: string;
   author: string;
-  source: 'version' | 'update_xml';
+  /** `record`: a creation known only from the record's own `sys_created_on` and `sys_created_by`. */
+  source: 'version' | 'update_xml' | 'record';
   confidence: HistoryConfidence;
   /** The matched call (`log`), or every candidate (`likely`). */
   log?: LogRef[];
-  /** Why a `likely` match is no stronger, when that is not plain from its candidates (`author not checked`). */
+  /**
+   * Why a `likely` match is no stronger, when that is not plain from its candidates (`author not checked`), or
+   * why a version is a `captured` event (`update set commit`: rewritten in bulk, see markBulkRewrites).
+   */
   reason?: string;
 }
 
@@ -58,6 +64,10 @@ export interface HistoryResult {
   versionEvents: number;
   xmlEvents: number;
   captured: number;
+  /** Creations from the records' own stamps, where no row shows them. */
+  recordEvents: number;
+  /** Versions found to be an update set commit's bulk rewrite (counted in `captured`; see markBulkRewrites). */
+  commits: number;
   /** Records (update names) whose history came from each source. */
   fromVersions: number;
   fromUpdateXml: number;
@@ -109,15 +119,17 @@ export interface PayloadInfo { table?: string; fields: Record<string, string> }
 
 /**
  * The few fields of a `<record_update>` payload that history needs (ids, times, author, names). Only direct
- * children of the record element (the first `<table action="...">`) are read, after CDATA is removed, so text
- * inside a script or template (`<label>`, `<id>`) and sibling records (`<sys_documentation>`) are never taken
- * for the record's own fields.
+ * children of the record element are read, after CDATA is removed, so text inside a script or template
+ * (`<label>`, `<id>`) and sibling records (`<sys_documentation>`) are never taken for the record's own fields.
+ * The record element is the one named after `record_update`'s `table=`, else the first `<table action="...">`
+ * (a form section's payload lists its `sys_ui_element` children, each with an action, before the section).
  */
 export function parsePayload(xml: string): PayloadInfo {
   const text = xml.replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '');
   const table = /<record_update\b[^>]*\btable="([^"]+)"/.exec(text)?.[1];
   const fields: Record<string, string> = {};
-  const open = /<([a-z_][a-z0-9_]*)\b[^>]*\baction="[^"]*"[^>]*>/i.exec(text);
+  const own = table && /^[a-z_][a-z0-9_]*$/i.test(table) ? new RegExp(`<${table}\\b[^>]*\\baction="[^"]*"[^>]*>`, 'i').exec(text) : null;
+  const open = own ?? /<([a-z_][a-z0-9_]*)\b[^>]*\baction="[^"]*"[^>]*>/i.exec(text);
   if (!open || open[0].endsWith('/>')) return { table, fields };
   const tags = /<(\/?)([a-z_][a-z0-9_]*)\b[^>]*?(\/?)>/gi;
   tags.lastIndex = open.index + open[0].length;
@@ -151,9 +163,19 @@ function keysOf(values: (string | undefined)[]): string[] {
   return [...out];
 }
 
-/** The table an update name belongs to, from the inventory or the row's payload. */
+/** Update names keyed by name, not sys_id: `sys_dictionary_<table>_<element>`, `sys_documentation_<table>_<element>_<lang>`, `sys_choice_<table>_<element>`. */
+const NAME_KEYED = /^(sys_dictionary|sys_documentation|sys_choice)_[a-z0-9]/;
+/** The table an update name names: `<table>_<sys_id>`, or the prefix of a name-keyed one. */
+export const updateTable = (update: string): string | undefined => /^(.+)_[0-9a-f]{32}$/.exec(update)?.[1] ?? NAME_KEYED.exec(update)?.[1];
+/** The table an update name belongs to, from the inventory, the row's payload, or the name itself. */
 const tableOfUpdate = (update: string, byUpdate: Map<string, InventoryRow>, payloadTable?: string): string | undefined =>
-  byUpdate.get(update)?.sys_class_name ?? payloadTable ?? /^(.+)_[0-9a-f]{32}$/.exec(update)?.[1];
+  byUpdate.get(update)?.sys_class_name ?? payloadTable ?? updateTable(update);
+/**
+ * The table a record belongs to (its `collection`), for tables whose records name it: a dictionary entry's
+ * `name` and a form section's `name` are their table.
+ */
+export const collectionOf = (table: string, rec: Record<string, string | undefined> | undefined): string | undefined =>
+  table === 'sys_dictionary' || table === 'sys_ui_section' ? rec?.name : rec?.collection;
 
 /** Never read anything from a credential class, and never a property's value. */
 const withheld = (table: string | undefined, update: string): boolean =>
@@ -290,7 +312,7 @@ export async function importHistory(client: NexusClient, scope: ScopeInfo, inven
     const table = rec?.sys_class_name ?? payload?.table ?? facts.get(update)?.table ?? tableOfUpdate(update, byUpdate) ?? 'unknown';
     const dictionary = table === 'sys_dictionary';
     // A dictionary entry's `name` is its table; its own names are the label and element.
-    const collection = dictionary ? f.name ?? full?.name : f.collection ?? full?.collection;
+    const collection = collectionOf(table, f) ?? collectionOf(table, full);
     const label = display.includes('.') && dictionary ? display.slice(display.lastIndexOf('.') + 1) : display;
     const names = NAME_FIELDS.filter(k => !(dictionary && k === 'name')).flatMap(k => [f[k], full?.[k]]);
     const keys = keysOf([label, rec?.sys_name, ...names]);
@@ -350,10 +372,90 @@ export async function importHistory(client: NexusClient, scope: ScopeInfo, inven
     if (!Number.isNaN(created) && Math.abs(created - e.at) <= 2000) e.kind = 'created';
   }
 
+  // A record with history whose creation no row shows (its versions were rewritten in bulk later, say): its own
+  // stamps, when no row lies within 2 s of them and the creation is not after the record's first event. Not for
+  // deleted records, nor for records with no history at all (the timeline would hold every record's creation).
+  const ofRecord = new Map<string, HistoryEvent[]>();
+  for (const e of events) {
+    if (!e.sysId) continue;
+    const list = ofRecord.get(e.sysId) ?? [];
+    list.push(e);
+    ofRecord.set(e.sysId, list);
+  }
+  let recordEvents = 0;
+  if (!partial) {
+    for (const r of inventory) {
+      if (WITHHELD_CLASS.test(r.sys_class_name)) continue;
+      const full = opts.full?.get(r.sys_id);
+      const at = snTime(r.sys_created_on ?? full?.sys_created_on);
+      if (Number.isNaN(at)) continue;
+      const own = ofRecord.get(r.sys_id);
+      if (!own || own.some(e => e.kind === 'deleted' || Math.abs(e.at - at) <= 2000 || e.at < at)) continue;
+      add({ ...base(own[0].update, own[0].name || r.sys_name || ''), at, kind: 'created', author: r.sys_created_by || full?.sys_created_by || 'unknown', source: 'record' });
+      recordEvents++;
+    }
+    if (recordEvents) events.sort((a, b) => a.at - b.at || a.update.localeCompare(b.update));
+  }
+
   const saves = (source: HistoryEvent['source']) => events.filter(e => e.source === source && e.kind !== 'captured').length;
   return {
     events, versions: versions.length, updateXml: xml.length,
-    versionEvents: saves('version'), xmlEvents: saves('update_xml'), captured: events.filter(e => e.kind === 'captured').length,
+    versionEvents: saves('version'), xmlEvents: saves('update_xml'), captured: events.filter(e => e.kind === 'captured').length, recordEvents, commits: 0,
     fromVersions: versionNames.size, fromUpdateXml: xmlNames.size, versionsBy, queries, partial, warnings,
   };
+}
+
+/** More than this many versions by one author within BULK_SPAN_MS, with no SkyForge activity, are a bulk rewrite. */
+export const BULK_VERSIONS = 100;
+export const BULK_SPAN_MS = 10 * 60_000;
+export const COMMIT_REASON = 'update set commit';
+
+/**
+ * Finds versions written in bulk, not saved one by one: more than BULK_VERSIONS by one author within
+ * BULK_SPAN_MS, with no SkyForge call (`activity`, epoch ms) in that span. Committing or merging an update set
+ * writes a version row for every record in it. Those events become `captured`, with reason `update set commit`,
+ * so they do not look like hundreds of saves. Updates `result`'s counts and returns how many were marked.
+ */
+export function markBulkRewrites(result: HistoryResult, activity: number[]): number {
+  const times = [...activity].sort((a, b) => a - b);
+  const busy = (from: number, to: number): boolean => {
+    let lo = 0;
+    let hi = times.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (times[mid] < from) lo = mid + 1; else hi = mid; }
+    return lo < times.length && times[lo] <= to;
+  };
+  const byAuthor = new Map<string, HistoryEvent[]>();
+  for (const e of result.events) {
+    if (e.source !== 'version' || (e.kind !== 'modified' && e.kind !== 'created')) continue;
+    const list = byAuthor.get(e.author) ?? [];
+    list.push(e);
+    byAuthor.set(e.author, list);
+  }
+  let marked = 0;
+  for (const list of byAuthor.values()) {
+    if (list.length <= BULK_VERSIONS) continue;
+    list.sort((a, b) => a.at - b.at);
+    // Every version in a span of BULK_SPAN_MS holding more than BULK_VERSIONS of them.
+    const bulk = new Array<boolean>(list.length).fill(false);
+    for (let i = 0, j = 0; j < list.length; j++) {
+      while (list[j].at - list[i].at > BULK_SPAN_MS) i++;
+      if (j - i + 1 > BULK_VERSIONS) bulk.fill(true, i, j + 1);
+    }
+    // Runs of them, each dropped when SkyForge was busy then.
+    for (let i = 0; i < list.length;) {
+      if (!bulk[i]) { i++; continue; }
+      let j = i;
+      while (j + 1 < list.length && bulk[j + 1]) j++;
+      // A minute's lead, as a call's start can come before the rows it writes.
+      if (!busy(list[i].at - 60_000, list[j].at)) {
+        for (let k = i; k <= j; k++) { list[k].kind = 'captured'; list[k].reason = COMMIT_REASON; }
+        marked += j - i + 1;
+      }
+      i = j + 1;
+    }
+  }
+  result.versionEvents -= marked;
+  result.captured += marked;
+  result.commits += marked;
+  return marked;
 }

@@ -7,10 +7,11 @@
  *   [2026-06-03T16:01:30.871Z] [INFO] [Tool] sn_create_field ✅ 1756ms
  *
  * Argument values are cut at about 100 characters, long argument lists end in `, ...+N more`, and there is no
- * session id. The instance is only known from the last `[Auth] ✅ Connected to <host>` line. A completion line
- * says the call returned, not that the write succeeded. So a call is matched to a history event only by what it
- * names: the record's sys_id (updates and deletes), else its table and name (creates). A match on table and time
- * alone, a background script, or a call on an unknown instance is never more than `likely`.
+ * session id. The instance is only known from `[Auth] ✅ Connected to <host>` lines, and several SkyForge
+ * processes (one per instance) can write the same file for days. A completion line says the call returned, not
+ * that the write succeeded. So a call is matched to a history event only by what it names: the record's sys_id
+ * (updates and deletes), else its table and name (creates). A match on table and time alone, a background
+ * script, or a call on an unknown instance that names nothing tying it to the record is never more than `likely`.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -43,8 +44,8 @@ export interface LogCall {
   sysId?: string;
   /** Lowercased full names the call gives the record (id, name, title, label, ...). */
   names: string[];
-  /** The instance the log last connected to before this call; unset when unknown or when another instance
-   *  connected in the 10 minutes before it (several SkyForge processes write the same file). */
+  /** The instance this call ran on: set only when every connect line from HOST_SPAN_MS before the last one up
+   *  to this call names that instance (several SkyForge processes write the same file); else unknown. */
   host?: string;
   /** The ServiceNow user SkyForge said it works as (`servicenow_username=`) on this call's instance, lowercased.
    *  Set only when that was said while the log was on the same known instance. */
@@ -54,8 +55,11 @@ export interface LogCall {
 const START = /^\[([^\]]+)\] \[(\w+)\] \[Tool\] (\S+) \| (.*)$/;
 const DONE = /^\[([^\]]+)\] \[(\w+)\] \[Tool\] (\S+) (?:✅|❌|✔|✖)\s*(\d+)\s*ms\b/;
 const AUTH = /^\[([^\]]+)\] \[\w+\] \[Auth\] (?:✅\s*)?Connected to\s+(\S+)/;
-/** Another instance connecting this soon before a call makes the call's instance unknown. */
-export const HOST_MIX_MS = 10 * 60_000;
+/**
+ * How far back connect lines are looked at: a call's instance is known only when every connect line from this
+ * long before the last one up to the call names the same instance. SkyForge processes live for days.
+ */
+export const HOST_SPAN_MS = 7 * 24 * 60 * 60_000;
 const SYS_ID = /^[0-9a-f]{32}$/i;
 const TABLE = /^[a-z][a-z0-9_]*$/;
 
@@ -92,8 +96,9 @@ function full(v: string | undefined): string | undefined {
  * Create tools and the record table they write. `collection` names the argument that holds the table the new
  * record belongs to (for those tools `table=` is not the record's own table).
  */
-const CREATES: Record<string, { table: string; collection?: string }> = {
-  sn_create_field: { table: 'sys_dictionary', collection: 'table' },
+const CREATES: Record<string, { table: string; also?: string[]; collection?: string }> = {
+  // A field's label is a sys_documentation record of its own.
+  sn_create_field: { table: 'sys_dictionary', also: ['sys_documentation'], collection: 'table' },
   sn_create_choice: { table: 'sys_choice', collection: 'table' },
   sn_create_table: { table: 'sys_db_object' },
   sn_create_sp_widget: { table: 'sp_widget' },
@@ -232,7 +237,7 @@ export function toCall(line: number, at: number, outer: string, args: Record<str
   let call: LogCall | null = null;
   const create = CREATES[tool];
   if (create) {
-    call = make('create', [create.table]);
+    call = make('create', [create.table, ...(create.also ?? [])]);
     const coll = create.collection ? full(args[create.collection]) : undefined;
     if (coll) call.collection = coll.toLowerCase();
     // A field's column name is its element, and its update name ends in it.
@@ -321,9 +326,10 @@ export class LogReader {
   private readonly hosts = new Set<string>();
   lines = 0;
   parsed = 0;
-  /** The host of the last connect line (null: one LiveMap cannot name), and when each host last connected. */
-  private host: string | null = null;
-  private readonly connected = new Map<string, number>();
+  /** Every connect line, in log order: its time and host (null: one LiveMap cannot name). */
+  private readonly connects: { at: number; host: string | null }[] = [];
+  /** hostAt's answer for the connect lines read so far (calls come after them in the log). */
+  private hostCache: { n: number; host: string | undefined } | null = null;
   /** The ServiceNow user SkyForge said it works as, per instance it said so on. */
   private readonly users = new Map<string, string>();
   private readonly seen = new Map<string, Set<string>>();
@@ -343,7 +349,7 @@ export class LogReader {
       const args = parseArgs(m[4]);
       // The ServiceNow user SkyForge works as, from scope and update set calls.
       const user = full(args.servicenow_username)?.toLowerCase();
-      const here = this.hostAt(at);
+      const here = this.hostAt();
       if (user && here) {
         this.users.set(here, user);
         if (!this.seen.has(here)) this.seen.set(here, new Set());
@@ -356,7 +362,7 @@ export class LogReader {
         if (tool && toolRole(tool) === 'unknown') this.unknownTools[tool] = (this.unknownTools[tool] ?? 0) + 1;
         return;
       }
-      const host = this.hostAt(at);
+      const host = this.hostAt();
       if (host) call.host = host;
       const agent = host ? this.users.get(host) : undefined;
       if (agent) call.user = agent;
@@ -369,12 +375,11 @@ export class LogReader {
     m = AUTH.exec(text);
     if (m) {
       this.parsed++;
-      this.host = instanceName(m[2]);
+      const host = instanceName(m[2]);
+      if (host) this.hosts.add(host);
       const at = Date.parse(m[1]);
-      if (this.host) {
-        this.hosts.add(this.host);
-        if (!Number.isNaN(at)) this.connected.set(this.host, at);
-      } else if (!Number.isNaN(at)) this.connected.set('', at);
+      // A connect line with no time still says the instance changed; it counts as at the last one's time.
+      this.connects.push({ at: Number.isNaN(at) ? this.connects.at(-1)?.at ?? -Infinity : at, host });
       return;
     }
     m = DONE.exec(text);
@@ -399,13 +404,23 @@ export class LogReader {
   }
 
   /**
-   * The instance a call at `at` ran on: the last connect line's, unless another instance (or one LiveMap cannot
-   * name) connected within HOST_MIX_MS before it. Then two SkyForge processes may share the log.
+   * The instance a call ran on: known only when every connect line from HOST_SPAN_MS before the last one up to
+   * the call (every line read so far) names the same instance. Another one in that span means several SkyForge
+   * processes may be writing the log, so any of them may have made the call.
    */
-  private hostAt(at: number): string | undefined {
-    if (!this.host) return undefined;
-    for (const [h, t] of this.connected) if (h !== this.host && t <= at && at - t < HOST_MIX_MS) return undefined;
-    return this.host;
+  private hostAt(): string | undefined {
+    const n = this.connects.length;
+    if (this.hostCache?.n === n) return this.hostCache.host;
+    let host: string | undefined;
+    const last = this.connects[n - 1];
+    if (last?.host) {
+      host = last.host;
+      for (let i = n - 2; i >= 0 && this.connects[i].at >= last.at - HOST_SPAN_MS; i--) {
+        if (this.connects[i].host !== host) { host = undefined; break; }
+      }
+    }
+    this.hostCache = { n, host };
+    return host;
   }
 
   result(): LogScan {
@@ -488,11 +503,22 @@ export interface MatchCounts {
 
 export interface MatchOptions {
   windowMs?: number;
-  /** The mirrored instance. Calls on another instance are dropped; calls on an unknown one stay `likely`. */
+  /**
+   * The mirrored instance. Calls known to be on another instance are dropped; a call on an unknown one gives
+   * `log` only when it is tied to the record (see matchHistory), else it stays `likely`.
+   */
   instance: string | null;
+  /** The mirrored scope (`x_snc_cc_offering`): a call naming a record on one of its tables is tied to it. */
+  scope?: string;
   /** The ServiceNow user nexus works as on this instance (`sn_session_context`). It wins over the log's. */
   agentUser?: string | null;
 }
+
+const AUTHOR_UNCHECKED = 'author not checked';
+
+/** `update` is the name-keyed update name `name`, or that name with a label's language (`_en`, `_pt_br`). */
+const namedUpdate = (update: string, name: string): boolean =>
+  update === name || (update.startsWith(`${name}_`) && /^_[a-z]{2}(_[a-z]{2})?$/.test(update.slice(name.length)));
 
 const ref = (c: LogCall): LogRef => (c.ms === undefined ? { line: c.line, at: c.at, tool: c.tool } : { line: c.line, at: c.at, tool: c.tool, ms: c.ms });
 
@@ -508,9 +534,12 @@ const KINDS: Record<HistoryEvent['kind'], LogCall['kind'][]> = {
  *   mirrored instance. It writes the event's table with the right kind of call, or can write any table. It is
  *   not for another collection, and does not name another sys_id.
  * - It names the event's record when its sys_id matches, or one of its names does (for a dictionary entry,
- *   also when `sys_dictionary_<collection>_<name>` is the update name).
- * - One naming candidate on a known instance: `log`, and that call is used up for table and time matches.
- *   Several, or one on an unknown instance: `likely`, with all of them. Candidates that name nothing (table
+ *   also when `sys_dictionary_<collection>_<name>` is the update name, with a label's language suffix too).
+ * - One naming candidate that is tied to the record gives `log`, and that call is used up for table and time
+ *   matches. It is tied when it ran on the mirrored instance, names the record's sys_id, or names a record on
+ *   one of the scope's own tables (the event's table, or the call's collection as the event's collection or
+ *   update name prefix). Names on global tables (a widget id, a page id) need the instance. Several naming
+ *   candidates, or one not tied: `likely`, with all of them. Candidates that name nothing (table
  *   and time only, or any table): `likely`, with all of them, never `log`, and only when the save's author is
  *   the agent's ServiceNow user (`agentUser`, else the call's `user`). With no known user they still count, as
  *   `author not checked`. None: the event stays `history`.
@@ -520,6 +549,11 @@ export function matchHistory(events: HistoryEvent[], calls: LogCall[], opts: Mat
   const instance = opts.instance ? instanceName(opts.instance) : null;
   const sorted = calls.filter(c => !c.host || !instance || c.host === instance).sort((a, b) => a.at - b.at);
   const known = (c: LogCall) => Boolean(c.host && instance);
+  const scoped = opts.scope ? (t: string | undefined) => Boolean(t?.toLowerCase().startsWith(`${opts.scope!.toLowerCase()}_`)) : () => false;
+  /** One naming call is the record's when it ran here, names its sys_id, or names it on one of the scope's tables. */
+  const tied = (c: LogCall, e: HistoryEvent): boolean =>
+    known(c) || (c.sysId !== undefined && c.sysId === e.sysId?.toLowerCase()) || scoped(e.table)
+    || (scoped(c.collection) && (c.collection === e.collection?.toLowerCase() || e.update.startsWith(`${e.table}_${c.collection}_`)));
   const agentUser = opts.agentUser?.toLowerCase() || undefined;
   const counts: MatchCounts = { events: 0, matched: 0, ambiguous: 0, hostUnknown: 0, timeOnly: 0, authorUnchecked: 0, unmatched: 0 };
   const plans = events.map(e => {
@@ -549,7 +583,7 @@ export function matchHistory(events: HistoryEvent[], calls: LogCall[], opts: Mat
       const sameId = c.sysId !== undefined && c.sysId === sysId;
       if (!c.tables.includes(e.table) && !sameId) continue;
       if (c.collection && e.collection && c.collection !== e.collection.toLowerCase()) continue;
-      const dictName = c.collection !== undefined && c.names.some(n => e.update === `${e.table}_${c.collection}_${n}`);
+      const dictName = c.collection !== undefined && c.names.some(n => namedUpdate(e.update, `${e.table}_${c.collection}_${n}`));
       if (sameId || dictName || c.names.some(n => e.keys.includes(n))) named.push(c);
       else loose(c);
     }
@@ -557,15 +591,16 @@ export function matchHistory(events: HistoryEvent[], calls: LogCall[], opts: Mat
   });
   // Calls that name exactly one record's save are spent on it.
   const used = new Set<LogCall>();
-  for (const p of plans) if (p.named.length === 1 && known(p.named[0])) used.add(p.named[0]);
+  for (const p of plans) if (p.named.length === 1 && tied(p.named[0], p.e)) used.add(p.named[0]);
   for (const { e, near, named, unchecked } of plans) {
     const tally = e.kind !== 'captured';
     if (tally) counts.events++;
     delete e.log;
-    delete e.reason;
+    // Only the reason this sets; one the history gave (an update set commit) stays.
+    if (e.reason === AUTHOR_UNCHECKED) delete e.reason;
     const rest = near.filter(c => !used.has(c));
     let outcome: Exclude<keyof MatchCounts, 'events'>;
-    if (named.length === 1 && known(named[0])) {
+    if (named.length === 1 && tied(named[0], e)) {
       e.confidence = 'log';
       e.log = [ref(named[0])];
       outcome = 'matched';
@@ -578,7 +613,7 @@ export function matchHistory(events: HistoryEvent[], calls: LogCall[], opts: Mat
       e.log = rest.map(ref);
       // A candidate whose user is unknown: the save may be anyone's.
       const anyUnchecked = unchecked && rest.some(c => !(agentUser ?? c.user));
-      if (anyUnchecked) e.reason = 'author not checked';
+      if (anyUnchecked) e.reason = AUTHOR_UNCHECKED;
       outcome = anyUnchecked ? 'authorUnchecked' : 'timeOnly';
     } else {
       e.confidence = 'history';
