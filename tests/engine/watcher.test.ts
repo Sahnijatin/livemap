@@ -12,6 +12,8 @@ let model: ProjectModel;
 let watcher: Watcher | null;
 let changes: { change: ChangeSummary; touched: FileModel[]; t: number }[];
 let errors: Error[];
+/** The last change id the macOS sentinel used (0 elsewhere): a test's first change has id `idBase + 1`. */
+let idBase = 0;
 
 /** Slower CI runners scale wall-clock budgets (LIVEMAP_TIME_SCALE, set by CI: 2 on Ubuntu, 3 on macOS and Windows). */
 const TIME_SCALE = Number(process.env.LIVEMAP_TIME_SCALE) || 1;
@@ -44,6 +46,7 @@ async function startWatcher(opts: WatcherOptions = {}): Promise<Watcher> {
     await waitFor(() => changes.some(c => c.change.path === 'lm-sentinel.ts'));
     fs.rmSync(path.join(root, 'lm-sentinel.ts'));
     await waitFor(() => changes.some(c => c.change.path === 'lm-sentinel.ts' && c.change.kind === 'deleted'));
+    idBase = Math.max(...changes.map(c => c.change.id));
     changes.length = 0;
   }
   return w;
@@ -55,6 +58,7 @@ beforeEach(() => {
   put('src/keep.ts', 'export const keep = 1;\n');
   changes = [];
   errors = [];
+  idBase = 0;
   watcher = null;
 });
 afterEach(async () => {
@@ -73,7 +77,7 @@ describe('Watcher', { timeout: 15_000 * TIME_SCALE }, () => {
     const c = changes[0].change;
     expect(c.kind).toBe('created');
     expect(c.path).toBe('src/x.ts');
-    expect(c.id).toBe(1);
+    expect(c.id).toBe(idBase + 1);
     expect(names(c)).toContain('x');
     expect(model.get('src/x.ts')).toBeDefined();
   });
@@ -175,10 +179,7 @@ describe('Watcher', { timeout: 15_000 * TIME_SCALE }, () => {
     await waitFor(() => changes.length >= 1);
     put('src/b.ts', 'export const b = 1;\n');
     await waitFor(() => changes.length >= 2);
-    // Consecutive: no id skipped or reused (a macOS sentinel may have taken the first ones).
-    const [a, b] = changes.map(c => c.change.id);
-    if (process.platform !== 'darwin') expect(a).toBe(1);
-    expect(b).toBe(a + 1);
+    expect(changes.map(c => c.change.id)).toEqual([idBase + 1, idBase + 2]);
   });
 
   it('emits error and keeps processing when an update throws', async () => {
@@ -273,7 +274,7 @@ describe('Watcher', { timeout: 15_000 * TIME_SCALE }, () => {
     await sleep(100);
     expect(relinkAt.length).toBeGreaterThanOrEqual(5);
     const gaps = relinkAt.slice(1).map((t, i) => t - relinkAt[i]);
-    expect(Math.max(...gaps)).toBeLessThan(400);
+    expect(Math.max(...gaps)).toBeLessThan(400 * TIME_SCALE);
   });
 
   it('watches a self-ignoring nested .gitignore (without indexing it) and reloads when it is edited', async () => {
