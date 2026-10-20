@@ -24,6 +24,20 @@ describe('pins', () => {
     expect(loadPins('/work/other')).toEqual({ files: {}, functions: {}, folders: {} });
   });
 
+  it('keeps pins for files named __proto__ or constructor across a reload (#72)', () => {
+    memStorage();
+    const pins: Pins = { files: {}, functions: {}, folders: {} };
+    pins.files = Object.assign(Object.create(null) as Record<string, { x: number; y: number }>, { ['__proto__']: { x: 1, y: 2 } });
+    savePins('/p', pins);
+    const back = loadPins('/p');
+    expect(Object.keys(back.files)).toEqual(['__proto__']);
+    expect(back.files['__proto__']).toEqual({ x: 1, y: 2 });
+    expect(Object.getPrototypeOf(back.files)).toBeNull();
+    expect(filePins(back, 'files').constructor).toBeUndefined();
+    expect(filePins(back, 'folders').constructor).toBeUndefined();
+    expect(filePins(loadPins('/none'), 'functions').constructor).toBeUndefined();
+  });
+
   it('resetPins clears them', () => {
     memStorage();
     savePins('/r', { files: { a: { x: 1, y: 2 } }, functions: {}, folders: {} });

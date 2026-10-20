@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { Pos } from '../layout/elk';
-import { loadPins, resetPins, savePins, type Pins } from './pins';
+import { dict } from '../dict';
+import { emptyPins, loadPins, resetPins, savePins, type Pins } from './pins';
 
 /** Pins are written this long after the last drop. */
 export const SAVE_DELAY = 300;
@@ -35,14 +36,14 @@ export function usePins(root: string): PinStore {
       get: () => state.current!.pins,
       pin(kind, id, p) {
         const cur = state.current!.pins;
-        state.current!.pins = { ...cur, [kind]: { ...cur[kind], [id]: { x: p.x, y: p.y } } };
+        state.current!.pins = { ...cur, [kind]: dict(cur[kind], { [id]: { x: p.x, y: p.y } }) };
         if (timer.current !== null) window.clearTimeout(timer.current);
         timer.current = window.setTimeout(flush, SAVE_DELAY);
       },
       reset() {
         if (timer.current !== null) { window.clearTimeout(timer.current); timer.current = null; }
         resetPins(state.current!.root);
-        state.current!.pins = { files: {}, functions: {}, folders: {} };
+        state.current!.pins = emptyPins();
       },
     };
     return { store, flush };

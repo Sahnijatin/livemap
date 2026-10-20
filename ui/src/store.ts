@@ -7,6 +7,7 @@ import type { AgentEvent, AgentSession, ChangeSummary, ControlState, Dep, FileMo
 import { LARGE_PROJECT, codeFileCount, edgeBaseline, type Level } from './map/mapBase';
 import { historySource, type HistoryRecord, type HistoryState, type LiveState } from './history';
 import { loadLayout, saveLayout, type Panel, type PanelLayout } from './panelLayout';
+import { dict } from './dict';
 
 export const MAX_CHANGES = 2000;
 export const MAX_EVENTS = 2000;
@@ -90,11 +91,6 @@ function pushHistory(history: string[], path: string): string[] {
 }
 export type ConnectionState = 'connecting' | 'open' | 'closed' | 'unauthorized';
 
-/**
- * A record keyed by file path, with no prototype: a file named `constructor` or `__proto__` reads as absent until
- * set, and setting it never changes the record's prototype.
- */
-export const dict = <T>(...from: Record<string, T>[]): Record<string, T> => Object.assign(Object.create(null) as Record<string, T>, ...from);
 /** Summaries with their per-file record keyed safely (see dict); none means the empty state. */
 const summariesOf = (s: SummariesState = emptySummaries()): SummariesState => ({ ...s, files: dict(s.files) });
 

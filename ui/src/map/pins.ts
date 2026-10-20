@@ -1,5 +1,6 @@
 import type { Pos } from '../layout/elk';
 import type { Level } from './mapModel';
+import { dict } from '../dict';
 
 /**
  * Positions the user dragged nodes to. File cards by path, kept per level (`files` at the files level,
@@ -10,8 +11,9 @@ export type Pins = { files: Record<string, Pos>; functions: Record<string, Pos>;
 
 export const pinsKey = (root: string): string => `livemap:pins:${root}`;
 
-const empty = (): Pins => ({ files: {}, functions: {}, folders: {} });
-const NONE: Record<string, Pos> = Object.freeze({}) as Record<string, Pos>;
+/** No pins. Each record is a `dict`, so a file named `__proto__` or `constructor` keeps its pin. */
+export const emptyPins = (): Pins => ({ files: dict(), functions: dict(), folders: dict() });
+const NONE: Record<string, Pos> = Object.freeze(dict<Pos>());
 
 /** Which pins hold file cards at `level`. */
 export const fileKind = (level: Level): 'files' | 'functions' => (level === 'functions' ? 'functions' : 'files');
@@ -21,7 +23,7 @@ export const filePins = (pins: Pins, level: Level): Record<string, Pos> =>
   level === 'folders' ? NONE : pins[fileKind(level)];
 
 function positions(v: unknown): Record<string, Pos> {
-  const out: Record<string, Pos> = {};
+  const out = dict<Pos>();
   if (!v || typeof v !== 'object' || Array.isArray(v)) return out;
   for (const [k, p] of Object.entries(v as Record<string, unknown>)) {
     const q = p as Partial<Pos> | null;
@@ -34,12 +36,12 @@ function positions(v: unknown): Record<string, Pos> {
 export function loadPins(root: string): Pins {
   try {
     const raw = globalThis.localStorage?.getItem(pinsKey(root));
-    if (!raw) return empty();
+    if (!raw) return emptyPins();
     const v = JSON.parse(raw) as { files?: unknown; functions?: unknown; folders?: unknown } | null;
-    if (!v || typeof v !== 'object') return empty();
+    if (!v || typeof v !== 'object') return emptyPins();
     return { files: positions(v.files), functions: positions(v.functions), folders: positions(v.folders) };
   } catch {
-    return empty();
+    return emptyPins();
   }
 }
 

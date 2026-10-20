@@ -139,3 +139,18 @@ describe('play', () => {
     expect(live).not.toHaveBeenCalled();
   });
 });
+
+describe('embedded code keys (#72)', () => {
+  it('an export without a file named constructor reads it as absent', async () => {
+    const { embeddedCode, setEmbeddedCode } = await import('./history');
+    setEmbeddedCode(JSON.parse('{"src/a.ts":"a","__proto__":"p"}') as Record<string, string>);
+    expect(embeddedCode()?.constructor).toBeUndefined();
+    expect(embeddedCode()?.['__proto__']).toBe('p');
+    expect(embeddedCode()?.['src/a.ts']).toBe('a');
+    setEmbeddedCode(undefined);
+    expect(embeddedCode()).toBeUndefined();
+    setEmbeddedCode(null);
+    expect(embeddedCode()).toBeNull();
+    setEmbeddedCode(undefined);
+  });
+});

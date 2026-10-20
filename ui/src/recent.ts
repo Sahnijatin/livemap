@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { dict } from './dict';
 
 /** How long NEW / EDITED badges stay after a change. */
 export const RECENT_MS = 60_000;
@@ -22,7 +23,7 @@ export function isRecent(entry: { at: number } | undefined, now: number): boolea
 
 /** Badges for the entries still inside the recent window. */
 export function liveRecent(recent: Record<string, RecentEntry>, now: number): Record<string, LiveBadge> {
-  const out: Record<string, LiveBadge> = Object.create(null); // keyed by path: no inherited keys
+  const out = dict<LiveBadge>();
   for (const [path, r] of Object.entries(recent)) if (isRecent(r, now)) out[path] = r.kind === 'created' ? 'new' : 'edited';
   return out;
 }
@@ -39,7 +40,7 @@ function sameBadges(a: Record<string, LiveBadge>, b: Record<string, LiveBadge>):
  */
 export function useLiveRecent(recent: Record<string, RecentEntry>): Record<string, LiveBadge> {
   const [tick, setTick] = useState(0);
-  const prev = useRef<Record<string, LiveBadge>>(Object.create(null)); // keyed by path: no inherited keys
+  const prev = useRef(dict<LiveBadge>());
   const now = Date.now();
   const next = liveRecent(recent, now);
   if (!sameBadges(prev.current, next)) prev.current = next;
