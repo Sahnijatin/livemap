@@ -41,10 +41,72 @@ Pulling new changes from the instance while LiveMap runs comes with the live pol
 
 LiveMap links a change to an agent call only when it sees the call. There are two ways it sees calls:
 
-- **Desktop MCP client.** Put `livemap mcp-proxy` in front of nexus in the client's MCP config. The proxy passes every call through unchanged and copies the call's details (never the record content) to LiveMap. The setup steps for Windows are in [pull request #86](https://github.com/Sahnijatin/livemap/pull/86), under "Windows steps". They will be copied here when that work is merged.
+- **Desktop MCP client.** Put `livemap mcp-proxy` in front of nexus in the client's MCP config. The proxy passes every call through unchanged and copies the call's details (never the record content) to LiveMap. The steps for Windows are below, and every proxy option is in the [guide](guide.md#livemap-mcp-proxy).
 - **SkyForge terminal app.** A small plugin file in SkyForge's plugin folder sends the same details, plus the prompt and the agent's messages. Its setup steps will be added here when the plugin is merged.
 
 Both are fail-open: if LiveMap is not running, calls go through as usual.
+
+### Set up the desktop client proxy (Windows)
+
+You make these changes yourself; LiveMap does not edit the client's config. The examples assume LiveMap is built at `C:\src\livemap`.
+
+1. Quit the desktop client completely, also from the tray icon.
+2. Open its MCP config file: in the client, Settings > Developer > Edit Config. This opens the folder under `%APPDATA%` that holds the `..._desktop_config.json` file you edited to add nexus.
+3. Back it up. In cmd, from that folder:
+   ```
+   copy /Y <config file name>.json <config file name>.json.bak
+   ```
+4. Find the nexus entry under `mcpServers`. It looks like one of these.
+
+   Before (HTTP bridge):
+   ```json
+   {
+     "mcpServers": {
+       "skyforge-nexus": {
+         "command": "npx",
+         "args": ["-y", "mcp-remote", "http://127.0.0.1:3006/mcp", "--header", "X-SN-Instance:<instance>"]
+       }
+     }
+   }
+   ```
+   Before (stdio command):
+   ```json
+   {
+     "mcpServers": {
+       "skyforge-nexus": { "command": "skyforge", "args": ["mcp", "serve"] }
+     }
+   }
+   ```
+5. Replace that one entry. Keep the same key, and use doubled backslashes in JSON.
+
+   After (HTTP upstream, recommended):
+   ```json
+   {
+     "mcpServers": {
+       "skyforge-nexus": {
+         "command": "C:\\Program Files\\nodejs\\node.exe",
+         "args": ["C:\\src\\livemap\\dist\\cli.js", "mcp-proxy", "--upstream", "http://127.0.0.1:3006/mcp", "--header", "X-SN-Instance=<instance>"]
+       }
+     }
+   }
+   ```
+   After (stdio command upstream):
+   ```json
+   {
+     "mcpServers": {
+       "skyforge-nexus": {
+         "command": "C:\\Program Files\\nodejs\\node.exe",
+         "args": ["C:\\src\\livemap\\dist\\cli.js", "mcp-proxy", "--upstream-cmd", "skyforge mcp serve"]
+       }
+     }
+   }
+   ```
+   Use the full path to `node.exe`: desktop apps do not always see your PATH. `where node` prints it.
+6. Save, start the desktop client, and check that the nexus tools are listed as before.
+
+To check it works, run `livemap sn` as in [First run](#first-run), then ask the client for one read, such as "Query 1 active business rule in scope `<scope>`". The answer looks the same as before, and LiveMap's activity feed shows a new MCP client session with the call.
+
+To undo it, quit the client, run `copy /Y <config file name>.json.bak <config file name>.json`, and start it again.
 
 ## Reading the inspector
 
