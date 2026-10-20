@@ -112,17 +112,21 @@ export async function runServiceNow(argv: string[], core: CoreHooks): Promise<vo
     });
     if (process.stdout.isTTY) process.stdout.write('\r\x1b[K');
     const root = snRoot(project);
-    // Each record's last change (update set, user, time), from its latest update_xml row.
+    // Each record's last change: the update set from its latest update_xml row, the user and time from the
+    // record. After a good pull, any failure here (a refusal, a timeout, nexus going away) is only a warning.
     let changeRows: SnRecord[] = [];
     const setNames = new Map<string, string>();
     let facts = new Map<string, ChangeFacts>();
+    const invById = new Map(pulled.inventory.map(r => [r.sys_id, r]));
     try {
       changeRows = await readChangeRows(client, scope);
       await updateSetNames(client, changeRows, setNames);
-      facts = changeFacts(changeRows, updateNameIndex(pulled.full), setNames);
+      facts = changeFacts(changeRows, updateNameIndex(pulled.full), setNames, undefined, id => {
+        const r = pulled.full.get(id) ?? invById.get(id);
+        return r ? { on: r.sys_updated_on, by: r.sys_updated_by } : undefined;
+      });
     } catch (e) {
-      if (!(e instanceof NexusToolError)) throw e;
-      process.stderr.write(`livemap sn: warning: update sets and change users are not shown (${e.message})\n`);
+      process.stderr.write(`livemap sn: warning: update sets and change users are not shown (${e instanceof Error ? e.message : String(e)})\n`);
     }
     const { files, manifest } = layoutMirror({ instance: info?.name ?? args.instance ?? '', scope, ...pulled, rootAbs: root, facts });
     const res = writeMirror(root, files, manifest);
@@ -181,6 +185,8 @@ export async function runServiceNow(argv: string[], core: CoreHooks): Promise<vo
       onReady: h => { handles = h; },
     });
     if (args.pollSec === null) { say('Live polling: off (--poll off).'); return; }
+    // No handles: LiveMap was stopped while it indexed, so there is nothing to poll for.
+    if (!handles) return;
     // Its own connection, which fails fast: a poll that cannot reach nexus marks the instance offline and
     // backs off. It is named "livemap" like every LiveMap session, so its calls are never attributed.
     let wasOffline = false;
@@ -200,8 +206,11 @@ export async function runServiceNow(argv: string[], core: CoreHooks): Promise<vo
       // New saves join the history file, matched to SkyForge's log like the imported ones.
       ...(liveHistory ? { onSaves: (rows, ctx, m) => liveHistory!.addSaves(rows, ctx.full, m, ctx.inventory) } : {}),
       warn: m => process.stderr.write(`livemap sn: warning: ${m}\n`),
+      onFirstPoll: lines => { for (const l of lines) say(`First poll: ${l}`); },
     });
-    handles?.onRecordGap(g => poller.learnGap(g));
+    handles.onRecordGap(g => poller.learnGap(g));
+    // No poll may write after shutdown has begun.
+    handles.onShutdown(() => poller.stop());
     poller.start();
     say(`Live polling every ${args.pollSec} s (read-only).`);
   } catch (e) {

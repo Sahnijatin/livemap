@@ -18,9 +18,13 @@ export interface ScopeInfo { sys_id: string; scope: string; name: string; versio
  * What a record's latest `sys_update_xml` row says about its last change, as ServiceNow writes it:
  * `updatedOn` is `YYYY-MM-DD HH:MM:SS` (UTC), `updateSet` the update set's sys_id.
  */
-export interface ChangeFacts { updateSet?: string; updateSetName?: string; updatedBy?: string; updatedOn?: string }
+export interface ChangeFacts {
+  updateSet?: string; updateSetName?: string; updatedBy?: string; updatedOn?: string;
+  /** The newest update_xml row's own time (kept in memory to tell a later save outside update sets; never written). */
+  rowOn?: string;
+}
 
-export interface ManifestEntry extends ChangeFacts {
+export interface ManifestEntry extends Omit<ChangeFacts, 'rowOn'> {
   class: string; name: string; path: string;
   /** Only the inventory fields were available (the class query failed or skipped this record). */
   partial?: true;
@@ -52,9 +56,9 @@ export interface MirrorInput {
 }
 
 /** Credential classes: their records are never fetched or written, only named. */
-export const WITHHELD_CLASS = /^(sys_auth_profile|oauth_entity)|^discovery_credentials$/;
+export const WITHHELD_CLASS = /^(sys_auth_profile|oauth_entity)|_credentials?$|^(sys_certificate|sys_user|sys_alias|sys_email_account|ldap_server_config|jdbc_connection|http_connection|sys_connection|sys_hub_connection.*)$/;
 /** Fields never written, whatever the class: passwords, secrets, tokens, keys and credentials. */
-export const SECRET_FIELD = /(password|passwd|secret|token|private_?key|api_?key|credential)/i;
+export const SECRET_FIELD = /(password|passwd|passphrase|secret|token|private_?key|api_?key|credential)/i;
 
 /** A record without secret fields (and without a system property's value), keys sorted so a re-pull writes the same bytes. */
 export function clean(r: SnRecord): SnRecord {
@@ -96,8 +100,8 @@ function factFields(f: ChangeFacts | undefined): Record<string, unknown> {
   };
 }
 /** The same in a script header (camelCase), and in the manifest. */
-const factKeys = (f: ChangeFacts | undefined): ChangeFacts =>
-  (f ? Object.fromEntries(Object.entries(f).filter(([, v]) => v)) as ChangeFacts : {});
+const factKeys = (f: ChangeFacts | undefined): Omit<ChangeFacts, 'rowOn'> =>
+  (f ? Object.fromEntries(Object.entries(f).filter(([k, v]) => v && k !== 'rowOn')) : {});
 
 interface Out { files: Map<string, string>; records: Record<string, ManifestEntry> }
 

@@ -247,9 +247,12 @@ async function serve(root: string, args: Args, opts: ServeOptions = {}): Promise
   void git?.start(); // not awaited: git must never delay indexing
 
   let stopping = false;
+  /** Sources that write into the folder (the ServiceNow poller): stopped first. */
+  const stopListeners: (() => void)[] = [];
   const shutdown = async (): Promise<void> => {
     if (stopping) process.exit(0); // second signal: stop waiting
     stopping = true;
+    for (const f of stopListeners.splice(0)) { try { f(); } catch { /* stopping anyway */ } }
     removeRuntime(root);
     setTimeout(() => process.exit(0), 3000).unref(); // failsafe if cleanup hangs
     try {
@@ -279,10 +282,12 @@ async function serve(root: string, args: Args, opts: ServeOptions = {}): Promise
   if (stopping) return;
   if (model.truncated) process.stderr.write(`livemap: indexed the first ${model.limit} files only\n`);
   server.ready();
+  if (stopping) return;
   opts.onReady?.({
     setSkewMs: ms => attributor.setSkewMs(ms),
     onRecordGap: listener => { attributor.on('recordGap', listener); },
     setSource: status => server.setSource(status),
+    onShutdown: listener => { stopListeners.push(listener); },
   });
 }
 

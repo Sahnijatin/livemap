@@ -10,7 +10,7 @@ import { sessionUser } from './backfill.js';
 import { DEFAULT_HISTORY_BUDGET_MS, importHistory, type HistoryEvent, type HistoryOptions, type HistoryResult } from './history.js';
 import { updateNameIndex } from './changes.js';
 import { writeHistory } from './writer.js';
-import { DEFAULT_LOG_WINDOW_MS, instanceName, matchHistory, readLogFile, type LogScan, type MatchCounts } from './skyforge-log.js';
+import { DEFAULT_LOG_WINDOW_MS, instanceName, LogTail, matchHistory, readLogFile, type LogScan, type MatchCounts } from './skyforge-log.js';
 
 export interface TimelineOptions {
   /** The SkyForge log to read; null skips log attribution. */
@@ -114,10 +114,24 @@ export interface LiveTimelineOptions {
  * matched to SkyForge's log like the imported history, and the file is written again.
  */
 export class LiveTimeline {
-  private readonly seen = new Set<string>();
+  /** Times of the saves already in the file, by update name. */
+  private readonly seen = new Map<string, number[]>();
+  private readonly tail: LogTail | null;
 
   constructor(private readonly doc: TimelineDoc, private readonly opts: LiveTimelineOptions) {
-    for (const e of doc.events) this.seen.add(`${e.update}|${e.kind}|${e.at}`);
+    for (const e of doc.events) if (e.kind !== 'captured') this.remember(e.update, e.at);
+    this.tail = opts.logFile ? new LogTail(opts.logFile) : null;
+  }
+
+  private remember(update: string, at: number): void {
+    const list = this.seen.get(update) ?? [];
+    list.push(at);
+    this.seen.set(update, list);
+  }
+
+  /** A save already in the file: the same update name within 2 s (the import and a poll can both see it). */
+  private known(update: string, at: number): boolean {
+    return (this.seen.get(update) ?? []).some(t => Math.abs(t - at) <= 2000);
   }
 
   /** Adds the saves in `rows` (the poll's new update_xml rows) and returns them; the file is rewritten when any. */
@@ -134,9 +148,8 @@ export class LiveTimeline {
       const del = r.action === 'DELETE';
       const created = !del && rec?.sys_created_on && Math.abs(Date.parse(`${rec.sys_created_on.replace(' ', 'T')}Z`) - at) <= 2000;
       const kind: TimelineEvent['kind'] = del ? 'deleted' : created ? 'created' : 'modified';
-      const key = `${r.name}|${kind}|${at}`;
-      if (this.seen.has(key)) continue;
-      this.seen.add(key);
+      if (this.known(r.name, at)) continue;
+      this.remember(r.name, at);
       const dictionary = table === 'sys_dictionary';
       const display = r.target_name || rec?.sys_name || r.name;
       const label = dictionary && display.includes('.') ? display.slice(display.lastIndexOf('.') + 1) : display;
@@ -153,12 +166,8 @@ export class LiveTimeline {
     }
     if (!added.length) return added;
     const windowMs = this.opts.windowMs ?? DEFAULT_LOG_WINDOW_MS;
-    let calls: LogScan['calls'] = [];
-    if (this.opts.logFile) {
-      const times = added.map(e => e.at);
-      const log = await readLogFile(this.opts.logFile, { from: Math.min(...times) - windowMs - 60 * 60_000, to: Math.max(...times) + windowMs + 60 * 60_000 });
-      calls = log?.calls ?? [];
-    }
+    // Only the lines added since the last read; the reader keeps the rest.
+    const calls = (await this.tail?.update())?.calls ?? [];
     const counts = matchHistory(added, calls, { windowMs, instance: this.doc.instance || null, agentUser: this.opts.agentUser ?? this.doc.log?.agentUser ?? null });
     for (const k of Object.keys(counts) as (keyof MatchCounts)[]) this.doc.counts[k] += counts[k];
     this.doc.events.push(...added);

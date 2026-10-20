@@ -156,9 +156,10 @@ describe('history import from the BharatBank fixture', () => {
     const { scope, pulled, manifest } = await pull(c);
     m.calls.length = 0;
     const t = await buildTimeline(c, scope, pulled.inventory, manifest, { logFile: null });
-    // The property's and mailbox's changes are in the timeline (dates and author only); the credential record is not.
+    // The property's change is in the timeline (dates and author only); the credential record and the mailbox
+    // (a class with a password field, withheld like credentials) are not.
     expect(t.doc.events.some(e => e.update === extra[0].name)).toBe(true);
-    expect(t.doc.events.some(e => e.update === extra[2].name)).toBe(true);
+    expect(t.doc.events.some(e => e.update === extra[2].name)).toBe(false);
     expect(t.doc.events.some(e => e.update === extra[1].name || e.table.startsWith('sys_auth'))).toBe(false);
     // None of their payloads was asked for, and no version query names the credential record.
     // (A chunk of ids is read in pages, so the same query appears once per page.)

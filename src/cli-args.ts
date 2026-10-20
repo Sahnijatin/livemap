@@ -11,6 +11,8 @@ export interface ServeHandles {
   onRecordGap(listener: (gapMs: number) => void): void;
   /** Shows the source's state in the UI (an instance going offline and coming back). */
   setSource(status: SourceStatus): void;
+  /** Calls `listener` once shutdown begins, before anything is closed, so the source stops writing. */
+  onShutdown(listener: () => void): void;
 }
 
 /** How a source other than a plain folder (the ServiceNow mirror) runs the server on its files. */

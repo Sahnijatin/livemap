@@ -433,6 +433,37 @@ export async function readLogFile(file: string, range?: { from: number; to: numb
   return r.result();
 }
 
+/**
+ * SkyForge's log, read as it grows: the first read takes the whole file, later reads only the bytes added since,
+ * up to the last complete line. The reader keeps its state (instance, users, open calls, line numbers) between
+ * reads. A file that got shorter was rotated or truncated: it is read again from the start.
+ */
+export class LogTail {
+  private reader = new LogReader();
+  private offset = 0;
+  constructor(private readonly file: string) {}
+
+  /** Reads what was added; returns the scan so far, or null when the file does not exist. */
+  async update(): Promise<LogScan | null> {
+    let size: number;
+    try { size = fs.statSync(this.file).size; } catch { return null; }
+    if (size < this.offset) { this.reader = new LogReader(); this.offset = 0; }
+    if (size > this.offset) {
+      const text = await new Promise<string>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        fs.createReadStream(this.file, { start: this.offset, end: size - 1 }).on('data', c => chunks.push(c as Buffer)).on('end', () => resolve(Buffer.concat(chunks).toString('utf8'))).on('error', reject);
+      });
+      const last = text.lastIndexOf('\n');
+      if (last >= 0) {
+        const done = text.slice(0, last);
+        this.offset += Buffer.byteLength(text.slice(0, last + 1));
+        for (const line of done.split('\n')) this.reader.add(line.replace(/\r$/, ''));
+      }
+    }
+    return this.reader.result();
+  }
+}
+
 export interface MatchCounts {
   /** Saves matched (recaptures are matched too, but not counted). */
   events: number;
