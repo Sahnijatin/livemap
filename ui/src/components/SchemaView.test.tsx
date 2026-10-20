@@ -283,7 +283,8 @@ describe('SchemaView palette focus (tableFocus)', () => {
     reduced();
     await mount([bare('FocA'), bare('FocB'), bare('FocC')]);
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    act(() => useStore.getState().focusTable('focc'));
+    // The camera moves after any first fit still queued, a microtask later.
+    await act(async () => useStore.getState().focusTable('focc'));
     expect(Math.abs(centerX('focc'))).toBeLessThan(1);
     expect(wrap('focc')!.classList.contains('pulse')).toBe(true);
     expect(wrap('foca')!.classList.contains('pulse')).toBe(false);
