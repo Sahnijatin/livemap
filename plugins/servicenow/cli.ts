@@ -13,7 +13,7 @@ import { DEFAULT_NEXUS_URL, NexusClient, NexusOfflineError, NexusToolError } fro
 import { recordResolver } from './records.js';
 import { DEFAULT_LOG_WINDOW_MS, DEFAULT_SKYFORGE_LOG } from './skyforge-log.js';
 import { DEFAULT_POLL_MS, initialState, ScopePoller } from './poller.js';
-import { buildTimeline } from './timeline.js';
+import { buildTimeline, LiveTimeline } from './timeline.js';
 import { ensureGitignored, historyPath, readPollState, snRoot, writeHistory, writeMirror } from './writer.js';
 import type { ServeHandles } from '../../src/cli-args.js';
 import type { SnRecord } from './nexus.js';
@@ -133,6 +133,7 @@ export async function runServiceNow(argv: string[], core: CoreHooks): Promise<vo
     if (ignored === 'added') say('Added .livemap/ to .gitignore');
     for (const f of pulled.failedClasses) process.stderr.write(`livemap sn: warning: ${f.class}: kept names and dates only (${f.error})\n`);
     const t1 = Date.now();
+    let liveHistory: LiveTimeline | undefined;
     if (!args.history) say('History: skipped (--no-history).');
     else {
       // History is extra: any failure is a warning, and the mirror and UI go on without it.
@@ -141,6 +142,7 @@ export async function runServiceNow(argv: string[], core: CoreHooks): Promise<vo
           logFile: args.skyforgeLog, windowMs: args.logWindowSec * 1000, full: pulled.full, ...(changeRows.length ? { history: { updateXml: changeRows } } : {}),
         });
         writeHistory(root, scope.scope, timeline.doc);
+        liveHistory = new LiveTimeline(timeline.doc, { root, logFile: args.skyforgeLog, windowMs: args.logWindowSec * 1000 });
         const h = timeline.history;
         const recaptures = h.captured ? `, plus ${n(h.captured)} recaptures` : '';
         say(`Versions imported: ${n(h.versionEvents + h.xmlEvents)} (${n(h.versionEvents)} from sys_update_version, ${n(h.xmlEvents)} from sys_update_xml${recaptures}) for ${n(h.fromVersions + h.fromUpdateXml)} records in ${secs(Date.now() - t1)} (${n(h.queries)} queries).`);
@@ -195,6 +197,8 @@ export async function runServiceNow(argv: string[], core: CoreHooks): Promise<vo
         wasOffline = st.state === 'offline';
       },
       onSkew: ms => handles?.setSkewMs(ms),
+      // New saves join the history file, matched to SkyForge's log like the imported ones.
+      ...(liveHistory ? { onSaves: (rows, ctx, m) => liveHistory!.addSaves(rows, ctx.full, m, ctx.inventory) } : {}),
       warn: m => process.stderr.write(`livemap sn: warning: ${m}\n`),
     });
     handles?.onRecordGap(g => poller.learnGap(g));

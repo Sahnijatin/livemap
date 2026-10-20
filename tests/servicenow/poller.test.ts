@@ -8,7 +8,8 @@ import { layoutMirror, readHeader, type ChangeFacts } from '../../plugins/servic
 import { NexusClient, NexusOfflineError } from '../../plugins/servicenow/nexus.js';
 import { initialState, ScopePoller } from '../../plugins/servicenow/poller.js';
 import { recordResolver } from '../../plugins/servicenow/records.js';
-import { readManifest, readPollState, snRoot, writeMirror } from '../../plugins/servicenow/writer.js';
+import { LiveTimeline, type TimelineDoc } from '../../plugins/servicenow/timeline.js';
+import { readHistory, readManifest, readPollState, snRoot, writeMirror } from '../../plugins/servicenow/writer.js';
 import type { SourceStatus } from '../../src/shared/protocol.js';
 import { rmTree } from '../helpers/platform.js';
 import { loadFixture, startMockNexus, type MockNexus } from '../helpers/mock-nexus.js';
@@ -165,6 +166,44 @@ describe('live polling', () => {
     await until(() => statuses.at(-1)?.state === 'online', 10_000);
     await until(() => read(file).includes('// made while offline'));
     expect(statuses.map(s => s.state)).toEqual(['offline', 'online']);
+  });
+
+  it('adds new saves to the history file, matched to the SkyForge log', async () => {
+    const { m, root, scope, pulled } = await setup();
+    const log = path.join(dir, 'skyforge-mcp.log');
+    fs.writeFileSync(log, [
+      '[2026-10-20T11:00:00.000Z] [INFO] [Auth] ✅ Connected to inmorphisdemo3.service-now.com',
+      `[2026-10-20T12:00:04.000Z] [INFO] [Tool] tool_execute | tool=sn_edit_by_sysid, table=sys_script, sys_id=${rule.sys_id}, field=script, value=// fix`,
+      '[2026-10-20T12:00:04.900Z] [INFO] [Tool] sn_edit_by_sysid ✅ 900ms',
+    ].join('\n'));
+    const doc = {
+      instance: 'inmorphisdemo3', scope: { sys_id: scope.sys_id, scope: scope.scope, name: scope.name },
+      sources: { versions: 0, updateXml: 0, fromVersions: 0, fromUpdateXml: 0, captured: 0, versionsBy: null, partial: false }, log: null,
+      counts: { events: 0, matched: 0, ambiguous: 0, hostUnknown: 0, timeOnly: 0, authorUnchecked: 0, unmatched: 0 }, events: [],
+    } as TimelineDoc;
+    const history = new LiveTimeline(doc, { root, logFile: log, agentUser: 'admin' });
+    const live = new NexusClient({ url: m.url, instance: 'inmorphisdemo3', attempts: 1 });
+    open.push(live);
+    const ctx = { instance: 'inmorphisdemo3', scope, inventory: pulled.inventory, full: pulled.full, facts: new Map(), setNames: new Map() };
+    const poller = new ScopePoller(live, ctx, initialState(scope.scope, await readChangeRows(live, scope), pulled.inventory), {
+      root, onSaves: (rows, c, man) => history.addSaves(rows, c.full, man, c.inventory),
+    });
+    m.live.rows.sys_update_xml = [
+      xmlRow(40, 'sys_script', rule.sys_id, '2026-10-20 12:00:05'),
+      xmlRow(41, 'sp_widget', widget.sys_id, '2026-10-20 12:10:00', { sys_updated_by: 'jane.dev' }),
+    ];
+    await poller.tick();
+    const stored = readHistory<TimelineDoc>(root, scope.scope)!;
+    expect(stored.events.map(e => [e.table, e.sysId, e.kind, e.author, e.confidence])).toEqual([
+      ['sys_script', rule.sys_id, 'modified', 'dev.one', 'log'],
+      ['sp_widget', widget.sys_id, 'modified', 'jane.dev', 'history'],
+    ]);
+    expect(stored.events[0].log).toEqual([{ line: 2, at: Date.parse('2026-10-20T12:00:04.000Z'), tool: 'sn_edit_by_sysid', ms: 900 }]);
+    expect(stored.events[0].path).toBe(readManifest(root, scope.scope)!.records[rule.sys_id].path);
+    expect(stored.counts).toMatchObject({ events: 2, matched: 1, unmatched: 1 });
+    // The same rows again add nothing.
+    await poller.tick();
+    expect(readHistory<TimelineDoc>(root, scope.scope)!.events).toHaveLength(2);
   });
 
   it('learns the clock skew from exact matches, and keeps it for the next run', async () => {

@@ -95,6 +95,7 @@ While the UI runs, LiveMap reads the instance every 5 seconds (`--poll`) and upd
 
 - **What it reads.** `sys_update_xml` rows of the scope and `sys_metadata` records of the scope, each since the last change it saw. When nothing changed, that is two queries. Changed records are then read in full. Deleted records come from update_xml rows with action `DELETE`, and from `sys_metadata_delete` every 30 seconds.
 - **Where it stops.** The last time seen in each source is kept in `.livemap/sn/state.json`. A restart catches up from there.
+- **History.** Each new save is added to `.livemap/sn/<scope>.history.json` and matched to SkyForge's log, as in the history import. In the UI, a change made through SkyForge (its plugin or `livemap mcp-proxy`) shows as `exact`.
 - **Clock skew.** Each change matched exactly to a tool call shows how far the instance clock is from this machine's. LiveMap uses the median of the last 21 to widen its matching windows, and keeps it in `state.json`.
 - **Offline.** When nexus does not answer, the status chip says "Offline: instance offline", the map shows the last mirror, and LiveMap tries again less often, up to once a minute. Once nexus answers, it catches up from where it stopped.
 - **LiveMap's own calls.** Its nexus session is named `livemap`, so the proxy and the plugin never report its reads as agent activity.

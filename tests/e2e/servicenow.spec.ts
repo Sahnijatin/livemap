@@ -5,6 +5,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
 import { loadFixture, startMockNexus, type MockNexus } from '../helpers/mock-nexus';
+import { runtimeFor } from '../../src/agents/runtime';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../..');
@@ -124,7 +125,7 @@ test('livemap sn: mirrors the BharatBank scope and shows it in the Map and Schem
   await page.screenshot({ path: path.join(shots, 'servicenow-schema.png'), animations: 'disabled' });
 });
 
-test('livemap sn: a record saved on the instance shows within 8 s, and an outage shows the instance offline', async ({ page }) => {
+test('livemap sn: a record saved on the instance shows within 8 s, a SkyForge change is exact, and an outage shows offline', async ({ page }) => {
   await expect.poll(() => out, { timeout: 30_000 }).toContain('Live polling every 2 s (read-only).');
   await page.goto(url);
   await expect(page.getByRole('status').filter({ hasText: 'Live' })).toBeAttached({ timeout: 30_000 });
@@ -145,6 +146,30 @@ test('livemap sn: a record saved on the instance shows within 8 s, and an outage
   expect(manifest.records[rule.sys_id]).toMatchObject({ updateSet: '5f0000000000000000000000000fe001', updateSetName: 'Card refresh', updatedBy: 'dev.one', updatedOn: now });
   // Polls only read.
   expect(new Set(nexus.calls.map(c => c.inner ?? c.tool))).toEqual(new Set(['sn_query_table', 'sn_get_instance_info', 'sn_session_context']));
+
+  // A change made through SkyForge: its plugin reports the call to LiveMap's /hook, then the poll sees the save.
+  process.env.LIVEMAP_HOME = home;
+  const run = runtimeFor(path.join(tmp, '.livemap', 'sn'));
+  expect(run, 'the runtime entry of livemap sn').toBeTruthy();
+  const widget = fx.tables.sp_widget[0] as Record<string, string>;
+  const t = Date.now();
+  const capture = {
+    source: 'skyforge-plugin', sessionId: 'e2e-skyforge', callId: 'e2e-call-1', tool: 'tool_execute', innerTool: 'sn_record_manage',
+    args: { tool: 'sn_record_manage', args: { table: 'sp_widget', sys_id: widget.sys_id, action: 'update' } },
+    targets: [{ kind: 'record', instance: 'inmorphisdemo3', table: 'sp_widget', sysId: widget.sys_id }], resultSysIds: [],
+    instance: 'inmorphisdemo3', user: 'admin', start: t - 1500, end: t - 500, ok: true,
+  };
+  const posted = await fetch(`http://127.0.0.1:${run!.port}/hook`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-livemap-token': run!.token }, body: JSON.stringify(capture) });
+  expect(posted.status).toBe(200);
+  const at = new Date(t).toISOString().slice(0, 19).replace('T', ' ');
+  nexus.live.rows.sys_update_xml.push({
+    sys_id: '5e0000000000000000000000000000e2', name: `sp_widget_${widget.sys_id}`, type: 'Widget', target_name: widget.name, action: 'INSERT_OR_UPDATE',
+    update_set: '5f0000000000000000000000000fe001', sys_created_by: 'admin', sys_updated_by: 'admin', sys_updated_on: at, payload: '',
+  });
+  nexus.live.rows.sp_widget = [{ ...widget, css: '.changed-through-skyforge { color: red; }', sys_updated_on: at, sys_updated_by: 'admin' }];
+  nexus.live.rows.sys_metadata.push({ sys_id: widget.sys_id, sys_class_name: 'sp_widget', sys_name: widget.sys_name, sys_updated_on: at, sys_updated_by: 'admin', sys_scope: fx.scope.sys_id });
+  const viaSkyForge = page.locator('article.f-chg').filter({ has: page.locator('.p', { hasText: widget.sys_id }) });
+  await expect(viaSkyForge.locator('.ag-badge.exact').first()).toBeVisible({ timeout: 8000 });
 
   // nexus goes down: the chip says so, and the map stays.
   nexus.live.down = true;

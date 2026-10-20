@@ -16,9 +16,9 @@
 import type { SourceStatus } from '../../src/shared/protocol.js';
 import { PROPERTY_FIELDS, INVENTORY_FIELDS } from './backfill.js';
 import { CHANGE_FIELDS, changeFacts, updateNameIndex, updateSetNames } from './changes.js';
-import { layoutMirror, WITHHELD_CLASS, type ChangeFacts, type InventoryRow, type ScopeInfo } from './mirror.js';
+import { layoutMirror, WITHHELD_CLASS, type ChangeFacts, type InventoryRow, type Manifest, type ScopeInfo } from './mirror.js';
 import { NexusOfflineError, NexusToolError, type NexusClient, type SnRecord } from './nexus.js';
-import { writeMirror, writePollState, type PollState, type WriteResult } from './writer.js';
+import { readManifest, writeMirror, writePollState, type PollState, type WriteResult } from './writer.js';
 
 export const DEFAULT_POLL_MS = 5000;
 const MAX_BACKOFF_MS = 60_000;
@@ -47,6 +47,8 @@ export interface PollerOptions {
   onStatus?: (s: SourceStatus) => void;
   onSkew?: (ms: number) => void;
   onApplied?: (r: PollResult) => void;
+  /** The poll's new update_xml rows, after the mirror is written (the history file adds them as saves). */
+  onSaves?: (rows: SnRecord[], ctx: PollContext, manifest: Manifest) => Promise<unknown> | void;
   warn?: (message: string) => void;
   now?: () => number;
 }
@@ -247,10 +249,21 @@ export class ScopePoller {
     }
 
     let written: WriteResult | null = null;
+    let manifest: Manifest | null = null;
     if (changed.size || deleted.size) {
       ctx.inventory = [...inv.values()];
-      const { files, manifest } = layoutMirror({ instance: ctx.instance, scope: ctx.scope, inventory: ctx.inventory, full: ctx.full, facts: ctx.facts, rootAbs: this.opts.root, ...(ctx.pulledAt ? { pulledAt: ctx.pulledAt } : {}) });
-      written = writeMirror(this.opts.root, files, manifest);
+      const laid = layoutMirror({ instance: ctx.instance, scope: ctx.scope, inventory: ctx.inventory, full: ctx.full, facts: ctx.facts, rootAbs: this.opts.root, ...(ctx.pulledAt ? { pulledAt: ctx.pulledAt } : {}) });
+      manifest = laid.manifest;
+      written = writeMirror(this.opts.root, laid.files, laid.manifest);
+    }
+    if (xml.length && this.opts.onSaves) {
+      // The history file is extra: a failure there never stops polling.
+      try {
+        const m = manifest ?? readManifest(this.opts.root, ctx.scope.scope);
+        if (m) await this.opts.onSaves(xml, ctx, m);
+      } catch (e) {
+        this.opts.warn?.(`history: could not add new saves (${(e as Error)?.message ?? String(e)})`);
+      }
     }
     this.advance('updateXml', xml);
     this.advance('metadata', meta);
