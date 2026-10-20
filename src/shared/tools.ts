@@ -113,6 +113,8 @@ export function recordTargetsOf(args: Obj, defaults: { table?: string; nameKeys?
 }
 
 const records = (a: Obj) => recordTargetsOf(a);
+/** `sn_update_set_manage` actions that only read. */
+const UPDATE_SET_READS = new Set(['current', 'list', 'get', 'preview', 'export']);
 const lowerAction = (a: Obj) => str(a.action)?.toLowerCase();
 
 /** ServiceNow (SkyForge nexus) tools. Rules are tried in order; the first match wins. */
@@ -130,10 +132,15 @@ const SERVICENOW_RULES: ToolRule[] = [
   { match: 'sn_record_manage', access: actionAccess, targets: records },
   { match: 'sn_push_artifact', access: 'write', targets: records },
   {
+    // Actions seen live: switch, create, current, add_artifact, force_capture, export, list, preview, ignore.
     match: 'sn_update_set_manage',
-    access: (a) => (lowerAction(a) === 'list' || lowerAction(a) === 'get' ? 'read' : 'write'),
+    access: (a) => (UPDATE_SET_READS.has(lowerAction(a) ?? '') ? 'read' : 'write'),
     targets: (a) => recordTargetsOf(a, { table: 'sys_update_set', nameKeys: [...NAME_KEYS, ...UPDATE_SET_KEYS] }),
   },
+  // Makes the named update set current, creating it when missing.
+  { match: 'sn_ensure_active_update_set', access: 'write', targets: (a) => recordTargetsOf(a, { table: 'sys_update_set' }) },
+  // Changes the session's application scope (and with create_update_set, its current update set): no app record changes.
+  { match: 'sn_switch_application_scope', access: 'other' },
   { match: 'sn_execute_background_script', access: 'write' },
   { match: 'sn_schedule_script_job', access: 'write' },
   // Actions: get (read), and create_flow, create_subflow, update_flow, delete_flow, promote, populate_inputs, add_component,

@@ -21,6 +21,7 @@ export const MOCK_TOOLS = [
   { name: 'slow', inputSchema: { type: 'object' as const, properties: { ms: { type: 'number' } } } },
   { name: 'sn_record_manage', inputSchema: { type: 'object' as const, additionalProperties: true } },
   { name: 'sn_session_context', inputSchema: { type: 'object' as const } },
+  { name: 'sn_push_artifact', inputSchema: { type: 'object' as const, additionalProperties: true } },
   { name: 'tool_execute', inputSchema: { type: 'object' as const, properties: { tool: { type: 'string' }, args: { type: 'object' } } } },
 ];
 
@@ -32,6 +33,12 @@ export interface MockUpstream {
   calls: { tool: string; args: Record<string, unknown> }[];
   /** Ids of `slow` calls whose abort signal fired. */
   aborted: string[];
+  /** HTTP method of every request, in order. */
+  methods: string[];
+  /** JSON-RPC methods of POSTed messages (with request ids), in order. */
+  rpc: { method: string; id?: unknown }[];
+  /** Forgets every session, as a restarted server would: old session ids then get 404. */
+  restart(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -43,6 +50,7 @@ export function runTool(tool: string, a: Record<string, unknown>): unknown {
       if (a.action === 'create') return { success: true, data: { sys_id: SYS_ID_NEW, table: a.table } };
       return { success: true, data: { sys_id: a.sys_id, table: a.table } };
     case 'sn_session_context': return { success: true, data: { user_name: 'agent.user', roles: ['admin'] } };
+    case 'sn_push_artifact': return { success: true, data: { sys_id: SYS_ID_NEW, blob: 'x'.repeat(2 * 1024 * 1024) } };
     default: return { success: true, data: { ran: tool } };
   }
 }
@@ -51,6 +59,8 @@ export async function startMockUpstream(): Promise<MockUpstream> {
   const headers: http.IncomingHttpHeaders[] = [];
   const calls: MockUpstream['calls'] = [];
   const aborted: string[] = [];
+  const methods: string[] = [];
+  const rpc: MockUpstream['rpc'] = [];
   const makeServer = () => {
     const server = new Server({ name: 'mock-upstream', version: '1.2.3' }, { capabilities: { tools: { listChanged: true } }, instructions: 'Mock upstream for proxy tests.' });
     server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: MOCK_TOOLS }));
@@ -85,9 +95,19 @@ export async function startMockUpstream(): Promise<MockUpstream> {
   });
   const httpServer = http.createServer(async (req, res) => {
     headers.push(req.headers);
+    methods.push(req.method ?? '');
     const sid = req.headers['mcp-session-id'];
     let transport = typeof sid === 'string' ? sessions.get(sid) : undefined;
     const body = req.method === 'POST' ? await readBody(req) : undefined;
+    for (const m of Array.isArray(body) ? body : [body]) {
+      const o = (m ?? {}) as { method?: unknown; id?: unknown };
+      if (typeof o.method === 'string') rpc.push({ method: o.method, ...(o.id !== undefined ? { id: o.id } : {}) });
+    }
+    if (!transport && typeof sid === 'string') {
+      // A session this server does not know (it restarted): 404, as the SDK server answers.
+      res.writeHead(404, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message: 'Session not found' }, id: null }));
+      return;
+    }
     if (!transport) {
       if (req.method !== 'POST') { res.writeHead(400).end(); return; }
       const t: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
@@ -103,7 +123,11 @@ export async function startMockUpstream(): Promise<MockUpstream> {
   const port = (httpServer.address() as AddressInfo).port;
   return {
     url: `http://127.0.0.1:${port}/mcp`,
-    headers, calls, aborted,
+    headers, calls, aborted, methods, rpc,
+    restart: async () => {
+      for (const t of sessions.values()) await t.close().catch(() => {});
+      sessions.clear();
+    },
     close: async () => {
       for (const t of sessions.values()) await t.close().catch(() => {});
       httpServer.closeAllConnections();

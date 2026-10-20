@@ -86,7 +86,7 @@ describe('rule 2: update set', () => {
 
   it('matches by name when the session only named the update set', () => {
     const s = setup();
-    s.call('A', 'sn_update_set_manage', { action: 'set_current', name: 'Card offers v2' }, T0 - 10_000, T0 - 9000);
+    s.call('A', 'sn_update_set_manage', { action: 'switch', name: 'Card offers v2' }, T0 - 10_000, T0 - 9000);
     expect(s.attr.attribute(s.change({ table: 'sys_script', sysId: SYS(3), updatedOn: T0, updateSet: US1, updateSetName: 'Card offers v2' }))?.rule).toBe('update_set');
   });
 
@@ -154,7 +154,11 @@ describe('rule 3: run window', () => {
     expect(s.attr.attribute(s.change({ table: 'sys_script', sysId: SYS(1), updatedOn: T0 - 59_000, updatedBy: 'svc.a' }))?.confidence).toBe('exact');
     s.bg('A', T0 - 1000, T0 + 1000);
     s.bg('B', T0 - 1000, T0 + 1000);
-    expect(s.attr.attribute(s.change({ table: 'x', sysId: SYS(7), updatedOn: T0, updatedBy: 'admin' }))).toMatchObject({ sessionId: 'B', confidence: 'likely' });
+    // A is left out (it acts as svc.a); B's user is unknown, so a human edit is still possible.
+    const a = s.attr.attribute(s.change({ table: 'x', sysId: SYS(7), updatedOn: T0, updatedBy: 'admin' }));
+    expect(a).toMatchObject({ sessionId: 'B', confidence: 'ambiguous', rule: 'run_window' });
+    expect(a?.candidates?.map((c) => c.sessionId)).toEqual(['B']);
+    expect(a?.reason).toContain('session user unknown, human edit possible');
   });
 
   it('a script still running counts', () => {
@@ -218,13 +222,14 @@ describe('late upgrades', () => {
     s.attr.on('late', (_id: number, a: Attribution) => got.push(a));
     const c = s.change({ table: 'sys_script', sysId: SYS(40), updatedOn: T0 });
     expect(s.attr.attribute(c)).toBeUndefined();
+    s.user('A', 'agent.a', T0 - 60_000);
     s.bg('A', T0 - 1000, T0 + 500);
-    expect(got.map((a) => a.rule)).toEqual(['run_window']);
+    expect(got.map((a) => [a.confidence, a.rule])).toEqual([['ambiguous', 'run_window']]);
     s.read('B', T0);
     s.bg('C', T0 - 5000, T0 + 6000);
     expect(got).toHaveLength(1);
     s.update('D', 'sys_script', SYS(40), T0 - 500);
-    expect(got.map((a) => [a.confidence, a.sessionId])).toEqual([['likely', 'A'], ['exact', 'D']]);
+    expect(got.map((a) => [a.confidence, a.sessionId])).toEqual([['ambiguous', 'A'], ['exact', 'D']]);
     s.update('E', 'sys_script', SYS(40), T0);
     expect(got).toHaveLength(2);
   });
@@ -313,5 +318,68 @@ describe('fixture replay: sys_update_xml rows against synthetic calls', () => {
   it('no agent activity: every row is human', () => {
     const s = setup();
     expect(tally(s, rows)).toEqual({ human: rows.length });
+  });
+});
+
+describe('review fixes', () => {
+  it('a call with no end stops counting after STALE_TOOL_MS', () => {
+    const s = setup();
+    s.hub.ingestRaw(captureEvents({ source: 'mcp-proxy', sessionId: 'A', callId: 'open', tool: 'sn_execute_background_script', args: {}, start: T0 - 20 * 60_000, end: T0 - 20 * 60_000, ok: true }, T0).slice(0, 1), { agent: 'mcp-client', cwd: '', hooks: true });
+    expect(s.attr.attribute(s.change({ table: 'x', sysId: SYS(50), updatedOn: T0, updatedBy: 'admin' }))).toBeUndefined();
+  });
+
+  it('time only: three writes of one session are likely, not ambiguous', () => {
+    const s = setup();
+    s.update('A', 'sys_script', SYS(51), T0 - 9000);
+    s.update('A', 'sys_script', SYS(52), T0 - 6000);
+    s.update('A', 'sys_script', SYS(53), T0 - 3000);
+    const a = s.attr.attribute(s.change({ table: 'sp_widget', sysId: SYS(54), updatedOn: T0 }));
+    expect(a).toMatchObject({ sessionId: 'A', confidence: 'likely', rule: 'time' });
+    expect(a?.candidates).toBeUndefined();
+  });
+
+  it('update set: another instance or another user does not match', () => {
+    const s = setup();
+    // Earlier than the time rule's window, so only the update set rule can match.
+    s.updateSet('A', US1, 'Card offers v2', T0 - 60_000);
+    expect(s.attr.attribute(s.change({ instance: 'prod', table: 'x', sysId: SYS(55), updatedOn: T0, updateSet: US1 }))).toBeUndefined();
+    s.user('A', 'agent.a', T0 - 10_000);
+    expect(s.attr.attribute(s.change({ table: 'x', sysId: SYS(56), updatedOn: T0, updateSet: US1, updatedBy: 'jane.doe' }))).toBeUndefined();
+    expect(s.attr.attribute(s.change({ table: 'x', sysId: SYS(57), updatedOn: T0, updateSet: US1, updatedBy: 'agent.a' }))?.rule).toBe('update_set');
+  });
+
+  it('update set: sys_id wins over a matching name, and "Default" never matches by name', () => {
+    const s = setup();
+    s.updateSet('A', US1, 'Card offers v2', T0 - 60_000);
+    expect(s.attr.attribute(s.change({ table: 'x', sysId: SYS(58), updatedOn: T0, updateSet: 'f'.repeat(32), updateSetName: 'Card offers v2' }))).toBeUndefined();
+    const d = setup();
+    d.call('B', 'sn_update_set_manage', { action: 'switch', name: 'Default' }, T0 - 50_000, T0 - 49_000);
+    expect(d.attr.attribute(d.change({ table: 'x', sysId: SYS(59), updatedOn: T0, updateSet: 'Default', updateSetName: 'Default' }))).toBeUndefined();
+  });
+
+  it('after a scope switch the old update set no longer claims changes', () => {
+    const s = setup();
+    s.updateSet('A', US1, 'Card offers v2', T0 - 60_000);
+    s.call('A', 'sn_switch_application_scope', { scope: 'x_other', create_update_set: true }, T0 - 30_000, T0 - 29_000);
+    expect(s.attr.attribute(s.change({ table: 'x', sysId: SYS(60), updatedOn: T0, updateSet: US1 }))).toBeUndefined();
+    expect(s.attr.attribute(s.change({ table: 'x', sysId: SYS(61), updatedOn: T0 - 40_000, updateSet: US1 }))?.rule).toBe('update_set');
+  });
+
+  it('sn_ensure_active_update_set counts like switch', () => {
+    const s = setup();
+    s.call('A', 'sn_ensure_active_update_set', { name: 'Card offers v2', sync_with_user: true }, T0 - 20_000, T0 - 19_000, text({ success: true, data: { sys_id: US1, name: 'Card offers v2' } }));
+    expect(s.attr.attribute(s.change({ table: 'x', sysId: SYS(62), updatedOn: T0, updateSet: US1 }))).toMatchObject({ sessionId: 'A', rule: 'update_set' });
+  });
+
+  it('a capture batch re-attributes once, with the call already ended', () => {
+    const s = setup();
+    const got: Attribution[] = [];
+    s.attr.on('late', (_id: number, a: Attribution) => got.push(a));
+    s.attr.attribute(s.change({ table: 'x', sysId: SYS(63), updatedOn: T0, updatedBy: 'agent.a' }));
+    s.user('A', 'agent.a', T0 - 60_000);
+    s.bg('A', T0 - 1000, T0 + 500);
+    expect(got).toHaveLength(1);
+    expect(got[0]).toMatchObject({ confidence: 'likely', rule: 'run_window' });
+    expect(got[0].reason).not.toContain('still running');
   });
 });

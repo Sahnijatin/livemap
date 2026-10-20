@@ -1,14 +1,14 @@
 /**
  * `livemap mcp-proxy`: a stdio MCP server that forwards every message to an upstream MCP server
- * (Streamable HTTP or stdio) and back, unchanged. On the side it times each `tools/call` and hands a
- * redacted capture event to LiveMap. The proxy never originates a request of its own, and nothing it does
- * for LiveMap can delay, change or fail a message.
+ * (Streamable HTTP or stdio) and back as it came: no schema check, batches kept whole. On the side it times
+ * each `tools/call` and hands a redacted capture event to LiveMap after the answer went out. The proxy
+ * originates no tool call. It answers on its own only when it must: a line that is not JSON, a message too
+ * large, or a request the upstream could not take. Over HTTP it also re-opens an expired upstream session
+ * by replaying the client's own `initialize`.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
-import { argNames, buildCapture, SessionContext, type CaptureEvent, type ClientInfo } from './capture.js';
+import { argNames, buildCapture, needsResult, SessionContext, type CaptureEvent, type ClientInfo } from './capture.js';
 import { baseToolName } from '../shared/tools.js';
 
 /** The MCP client name LiveMap's own nexus session carries (plugins/servicenow/nexus.ts). */
@@ -16,33 +16,49 @@ export const LIVEMAP_CLIENT_NAME = 'livemap';
 /** nexus picks the instance from this header; its value is the instance name, kept as capture metadata. */
 export const INSTANCE_HEADER = 'x-sn-instance';
 /** One stdio message may not exceed this (a large query result can run to tens of MB). */
-const MAX_LINE = 256 * 1024 * 1024;
+export const MAX_LINE = 256 * 1024 * 1024;
 /** Calls the proxy is still timing; past this, the oldest is forgotten (its answer still passes through). */
 const MAX_PENDING = 1000;
+/** Results larger than this are not parsed for the capture: only their `isError` flag counts. */
+export const MAX_PARSED_RESULT = 1024 * 1024;
+/** Default per-request timeout for an HTTP upstream: background scripts can run for minutes. */
+export const DEFAULT_TIMEOUT_MS = 600_000;
 
 type Msg = Record<string, unknown>;
 const rec = (v: unknown): Msg => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Msg) : {});
+const items = (m: unknown): Msg[] => (Array.isArray(m) ? m : [m]).filter((x): x is Msg => !!x && typeof x === 'object' && !Array.isArray(x));
+const isRequest = (m: Msg) => typeof m.method === 'string' && m.id !== undefined && m.id !== null;
+const isResponse = (m: Msg) => m.method === undefined && m.id !== undefined && m.id !== null && ('result' in m || 'error' in m);
+const idKey = (id: unknown) => `${typeof id}:${String(id)}`;
 
 export interface Endpoint {
-  onmessage?: (m: Msg) => void;
+  /** One message as it came (an object, a batch array, or any JSON value), with its size in bytes. */
+  onmessage?: (m: unknown, bytes: number) => void;
   onclose?: () => void;
+  /** A line that could not be read (stdio endpoints only). */
+  onBadLine?: (why: BadLine) => void;
   start(): Promise<void>;
-  send(m: Msg): Promise<void>;
+  send(m: unknown): Promise<void>;
   close(): Promise<void>;
 }
 
+export type BadLine = 'parse' | 'size';
+
 /**
- * Newline-delimited JSON over a pair of streams, as MCP's stdio transport defines it. Messages are parsed
- * and written as plain JSON with no schema check, so nothing is dropped or reshaped on the way through.
+ * Newline-delimited JSON over a pair of streams, as MCP's stdio transport defines it. Lines are parsed and
+ * written as plain JSON with no schema check. A line that is not JSON, or longer than MAX_LINE, is reported
+ * through `onBadLine` (the rest of an oversized line is skipped).
  */
 export class LineEndpoint implements Endpoint {
-  onmessage?: (m: Msg) => void;
+  onmessage?: (m: unknown, bytes: number) => void;
   onclose?: () => void;
+  onBadLine?: (why: BadLine) => void;
   private buf: Buffer[] = [];
   private size = 0;
+  private skipping = false;
   private closed = false;
 
-  constructor(private readonly input: Readable, private readonly output: Writable, private readonly onBadLine?: (why: string) => void) {}
+  constructor(private readonly input: Readable, private readonly output: Writable, private readonly maxLine = MAX_LINE) {}
 
   async start(): Promise<void> {
     this.input.on('data', (chunk: Buffer | string) => this.data(typeof chunk === 'string' ? Buffer.from(chunk) : chunk));
@@ -55,25 +71,37 @@ export class LineEndpoint implements Endpoint {
   private data(chunk: Buffer): void {
     let start = 0;
     for (let i = chunk.indexOf(10); i >= 0; i = chunk.indexOf(10, start)) {
-      this.buf.push(chunk.subarray(start, i));
-      const line = Buffer.concat(this.buf).toString('utf8').replace(/\r$/, '');
+      if (this.skipping) {
+        this.skipping = false;
+      } else {
+        const bytes = this.size + (i - start);
+        if (bytes > this.maxLine) this.onBadLine?.('size');
+        else {
+          this.buf.push(chunk.subarray(start, i));
+          const line = Buffer.concat(this.buf).toString('utf8').replace(/\r$/, '');
+          if (line.trim()) this.line(line, bytes);
+        }
+      }
       this.buf = [];
       this.size = 0;
       start = i + 1;
-      if (line.trim()) this.line(line);
     }
-    if (start < chunk.length) {
+    if (start < chunk.length && !this.skipping) {
       this.buf.push(chunk.subarray(start));
       this.size += chunk.length - start;
-      if (this.size > MAX_LINE) { this.buf = []; this.size = 0; this.onBadLine?.('message too large'); }
+      if (this.size > this.maxLine) {
+        this.buf = [];
+        this.size = 0;
+        this.skipping = true;
+        this.onBadLine?.('size');
+      }
     }
   }
 
-  private line(line: string): void {
+  private line(line: string, bytes: number): void {
     let m: unknown;
-    try { m = JSON.parse(line); } catch { this.onBadLine?.('not JSON'); return; }
-    if (Array.isArray(m)) { for (const x of m) this.onmessage?.(rec(x)); return; }
-    this.onmessage?.(rec(m));
+    try { m = JSON.parse(line); } catch { this.onBadLine?.('parse'); return; }
+    this.onmessage?.(m, bytes);
   }
 
   private end(): void {
@@ -82,7 +110,7 @@ export class LineEndpoint implements Endpoint {
     this.onclose?.();
   }
 
-  send(m: Msg): Promise<void> {
+  send(m: unknown): Promise<void> {
     return new Promise((resolve, reject) => {
       if (this.closed) return reject(new Error('closed'));
       this.output.write(`${JSON.stringify(m)}\n`, (err) => (err ? reject(err) : resolve()));
@@ -94,29 +122,225 @@ export class LineEndpoint implements Endpoint {
   }
 }
 
-/** Streamable HTTP upstream through the SDK transport (it handles sessions, SSE streams and resumption). */
-export class HttpEndpoint implements Endpoint {
-  onmessage?: (m: Msg) => void;
-  onclose?: () => void;
-  private readonly t: StreamableHTTPClientTransport;
+/** The upstream answered with an HTTP error status. `body` is its text, which may hold a JSON-RPC error. */
+export class HttpStatusError extends Error {
+  constructor(readonly status: number, readonly body: string) {
+    super(`HTTP ${status}`);
+    this.name = 'HttpStatusError';
+  }
+}
 
-  constructor(readonly url: URL, headers: Record<string, string>) {
-    this.t = new StreamableHTTPClientTransport(url, { requestInit: { headers } });
-    this.t.onmessage = (m) => this.onmessage?.(m as unknown as Msg);
-    this.t.onclose = () => this.onclose?.();
-    this.t.onerror = () => { /* each failed send rejects, and the proxy answers for it */ };
+/** A failed send, with the ids of the responses that still reached the client before it failed. */
+type SendError = Error & { delivered?: Set<string> };
+
+/**
+ * Streamable HTTP upstream, done with plain fetch so responses pass through as sent: JSON bodies and SSE
+ * events are parsed as JSON only, never checked against a schema. Keeps the session id and protocol
+ * version, opens the server's GET stream after `notifications/initialized`, and on a 404 for a stale
+ * session replays the client's `initialize` under an internal id, then retries the message once.
+ */
+export class HttpEndpoint implements Endpoint {
+  onmessage?: (m: unknown, bytes: number) => void;
+  onclose?: () => void;
+  sessionId?: string;
+  protocolVersion?: string;
+  private initParams?: unknown;
+  private initId?: string;
+  private reiniting?: Promise<void>;
+  private reinits = 0;
+  private stream?: AbortController;
+  private readonly aborts = new Set<AbortController>();
+  private closed = false;
+
+  constructor(readonly url: URL, private readonly extra: Record<string, string>, private readonly timeoutMs = DEFAULT_TIMEOUT_MS) {}
+
+  async start(): Promise<void> { /* connects on the first message */ }
+
+  private headers(accept: string): Record<string, string> {
+    return {
+      ...this.extra,
+      accept,
+      ...(this.sessionId ? { 'mcp-session-id': this.sessionId } : {}),
+      ...(this.protocolVersion ? { 'mcp-protocol-version': this.protocolVersion } : {}),
+    };
   }
 
-  start(): Promise<void> { return this.t.start(); }
-  send(m: Msg): Promise<void> { return this.t.send(m as unknown as JSONRPCMessage); }
-  close(): Promise<void> { return this.t.close(); }
-  /** The HTTP transport sends the negotiated version on every request after `initialize`. */
-  setProtocolVersion(v: string): void { this.t.setProtocolVersion(v); }
+  async send(m: unknown): Promise<void> {
+    for (const x of items(m)) {
+      if (x.method === 'initialize' && isRequest(x)) { this.initParams = x.params; this.initId = idKey(x.id); }
+    }
+    await this.post(m, true, (msg, bytes) => this.deliver(msg, bytes));
+  }
+
+  /** Hands one upstream message on, noting the protocol version from the client's initialize response. */
+  private deliver(m: unknown, bytes: number): void {
+    for (const x of items(m)) {
+      if (this.initId && isResponse(x) && idKey(x.id) === this.initId) {
+        const v = rec(x.result).protocolVersion;
+        if (typeof v === 'string') this.protocolVersion = v;
+        this.initId = undefined;
+      }
+    }
+    this.onmessage?.(m, bytes);
+  }
+
+  private timed(): { ac: AbortController; done: () => void } {
+    const ac = new AbortController();
+    this.aborts.add(ac);
+    const timer = setTimeout(() => ac.abort(new Error(`no answer within ${Math.round(this.timeoutMs / 1000)} s`)), this.timeoutMs);
+    timer.unref?.();
+    return { ac, done: () => { clearTimeout(timer); this.aborts.delete(ac); } };
+  }
+
+  /** POSTs one message (or batch) and hands every message of the answer to `sink`. */
+  private async post(m: unknown, mayRetry: boolean, sink: (msg: unknown, bytes: number) => void): Promise<void> {
+    if (this.closed) throw new Error('closed');
+    const requests = new Set(items(m).filter(isRequest).map((x) => idKey(x.id)));
+    const delivered = new Set<string>();
+    const track = (msg: unknown, bytes: number) => {
+      for (const x of items(msg)) if (isResponse(x)) delivered.add(idKey(x.id));
+      sink(msg, bytes);
+    };
+    const { ac, done } = this.timed();
+    try {
+      const res = await fetch(this.url, {
+        method: 'POST',
+        headers: { ...this.headers('application/json, text/event-stream'), 'content-type': 'application/json' },
+        body: JSON.stringify(m),
+        signal: ac.signal,
+      });
+      const sid = res.headers.get('mcp-session-id');
+      const stale = res.status === 404 && !!this.sessionId && !items(m).some((x) => x.method === 'initialize');
+      if (stale && mayRetry && this.initParams !== undefined) {
+        await res.body?.cancel().catch(() => {});
+        done();
+        await this.reinit();
+        return await this.post(m, false, sink);
+      }
+      if (sid) this.sessionId = sid;
+      if (!res.ok) throw new HttpStatusError(res.status, await res.text().catch(() => ''));
+      if (res.status === 202 || !requests.size) {
+        await res.body?.cancel().catch(() => {});
+        if (items(m).some((x) => x.method === 'notifications/initialized')) this.openStream();
+        return;
+      }
+      const type = res.headers.get('content-type') ?? '';
+      if (type.includes('text/event-stream')) await this.readSse(res, track, () => [...requests].every((id) => delivered.has(id)));
+      else {
+        const text = await res.text();
+        if (text.trim()) {
+          let parsed: unknown;
+          try { parsed = JSON.parse(text); } catch { throw new HttpStatusError(res.status, text); }
+          track(parsed, Buffer.byteLength(text));
+        }
+      }
+    } catch (e) {
+      // An answer that already reached the client stands; only the requests left unanswered fail.
+      if ([...requests].every((id) => delivered.has(id)) && requests.size) return;
+      const err = (e instanceof Error ? e : new Error(String(e))) as SendError;
+      err.delivered = delivered;
+      throw err;
+    } finally {
+      done();
+    }
+  }
+
+  /** Reads an SSE body, handing each event's JSON to `sink`, until it ends or `enough()` says all answers came. */
+  private async readSse(res: Response, sink: (msg: unknown, bytes: number) => void, enough: () => boolean = () => false): Promise<void> {
+    if (!res.body) return;
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    const flush = (block: string) => {
+      let event = 'message';
+      const data: string[] = [];
+      for (const raw of block.split(/\r?\n/)) {
+        if (raw.startsWith(':')) continue;
+        const at = raw.indexOf(':');
+        const field = at < 0 ? raw : raw.slice(0, at);
+        const value = at < 0 ? '' : raw.slice(at + 1).replace(/^ /, '');
+        if (field === 'event') event = value;
+        else if (field === 'data') data.push(value);
+      }
+      if (event !== 'message' || !data.length) return;
+      const text = data.join('\n');
+      try { sink(JSON.parse(text), Buffer.byteLength(text)); } catch { /* not JSON: nothing to forward */ }
+    };
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let cut: RegExpExecArray | null;
+        while ((cut = /\r?\n\r?\n/.exec(buf))) {
+          flush(buf.slice(0, cut.index));
+          buf = buf.slice(cut.index + cut[0].length);
+        }
+        if (enough()) break;
+      }
+      if (buf.trim()) flush(buf);
+    } finally {
+      reader.cancel().catch(() => {});
+    }
+  }
+
+  /** The server's GET stream for its own requests and notifications; reopened with backoff while the session lives. */
+  private openStream(): void {
+    if (this.closed || this.stream) return;
+    const ac = new AbortController();
+    this.stream = ac;
+    let wait = 1000;
+    const run = async () => {
+      while (!this.closed && this.stream === ac) {
+        try {
+          const res = await fetch(this.url, { method: 'GET', headers: this.headers('text/event-stream'), signal: ac.signal });
+          if (res.status === 405 || res.status === 404 || !res.ok) { await res.body?.cancel().catch(() => {}); break; }
+          wait = 1000;
+          await this.readSse(res, (msg, bytes) => this.deliver(msg, bytes));
+        } catch { if (ac.signal.aborted) break; }
+        if (this.closed || this.stream !== ac) break;
+        await new Promise((r) => setTimeout(r, wait).unref?.());
+        wait = Math.min(wait * 2, 30_000);
+      }
+      if (this.stream === ac) this.stream = undefined;
+    };
+    void run();
+  }
+
+  /** A new upstream session: the client's initialize replayed under an internal id, its answer kept here. */
+  private reinit(): Promise<void> {
+    this.reiniting ??= (async () => {
+      this.sessionId = undefined;
+      this.stream?.abort();
+      this.stream = undefined;
+      const id = `livemap-proxy-reinit-${++this.reinits}`;
+      await this.post({ jsonrpc: '2.0', id, method: 'initialize', params: this.initParams }, false, (msg) => {
+        for (const x of items(msg)) {
+          const v = rec(x.result).protocolVersion;
+          if (x.id === id && typeof v === 'string') this.protocolVersion = v;
+        }
+      });
+      await this.post({ jsonrpc: '2.0', method: 'notifications/initialized' }, false, () => {});
+    })().finally(() => { this.reiniting = undefined; });
+    return this.reiniting;
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    this.stream?.abort();
+    for (const ac of this.aborts) ac.abort();
+    if (!this.sessionId) return;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 2000);
+    try { await fetch(this.url, { method: 'DELETE', headers: this.headers('application/json'), signal: ac.signal }); } catch { /* the session expires on its own */ }
+    clearTimeout(timer);
+  }
 }
 
 /** A stdio upstream: the command runs as a child; its stderr goes to the proxy's stderr. */
 export class ChildEndpoint implements Endpoint {
-  onmessage?: (m: Msg) => void;
+  onmessage?: (m: unknown, bytes: number) => void;
   onclose?: () => void;
   private child?: ChildProcess;
   private lines?: LineEndpoint;
@@ -128,13 +352,15 @@ export class ChildEndpoint implements Endpoint {
     // Windows runs `npx`, `livemap` and other bare names through .cmd shims, which need a shell; a full
     // path to an .exe does not, and must not get one (a shell would split it at its spaces).
     const shell = process.platform === 'win32' && needsShell(this.command);
-    const args = shell ? this.args.map(quoteForCmd) : this.args;
-    const child = spawn(shell ? quoteForCmd(this.command) : this.command, args, { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true, shell });
+    const child = shell
+      ? spawn([escapeCmd(this.command), ...this.args.map(quoteForCmd)].join(' '), { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true, shell: true })
+      : spawn(this.command, this.args, { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
     this.child = child;
     const lines = new LineEndpoint(child.stdout as Readable, child.stdin as Writable);
     this.lines = lines;
-    lines.onmessage = (m) => this.onmessage?.(m);
-    child.once('exit', (code) => { this.exitCode = code; this.onclose?.(); });
+    lines.onmessage = (m, bytes) => this.onmessage?.(m, bytes);
+    // 'close' comes after stdout has ended, so the child's last messages are not lost.
+    child.once('close', (code) => { this.exitCode = code; this.onclose?.(); });
     child.once('error', (err) => {
       try { process.stderr.write(`livemap mcp-proxy: could not start ${this.command}: ${err.message}\n`); } catch { /* closed */ }
       this.exitCode = 1;
@@ -143,7 +369,7 @@ export class ChildEndpoint implements Endpoint {
     await lines.start();
   }
 
-  send(m: Msg): Promise<void> {
+  send(m: unknown): Promise<void> {
     return this.lines ? this.lines.send(m) : Promise.reject(new Error('not started'));
   }
 
@@ -155,9 +381,19 @@ export class ChildEndpoint implements Endpoint {
 }
 
 /** A bare command name or a .cmd/.bat script: on Windows it needs cmd.exe to run. */
-export const needsShell = (cmd: string): boolean => /\.(cmd|bat)$/i.test(cmd) || !/[\\/]/.test(cmd) && !/\.exe$/i.test(cmd);
-/** Quotes an argument for cmd.exe when it has spaces or quotes. */
-export const quoteForCmd = (a: string): string => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a);
+export const needsShell = (cmd: string): boolean => /\.(cmd|bat)$/i.test(cmd) || (!/[\\/]/.test(cmd) && !/\.exe$/i.test(cmd));
+/** Characters cmd.exe treats specially; each gets a `^` in front. */
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
+/** A command name for cmd.exe: its special characters escaped. */
+export const escapeCmd = (cmd: string): string => cmd.replace(CMD_META, '^$1');
+/**
+ * One argument for cmd.exe: quoted for the program's own argument parser (backslashes before quotes
+ * doubled), then every special character escaped for cmd.exe, quotes included.
+ */
+export function quoteForCmd(a: string): string {
+  const quoted = `"${a.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1')}"`;
+  return quoted.replace(CMD_META, '^$1');
+}
 
 /** Splits a command line on spaces, keeping "double" or 'single' quoted parts together. */
 export function splitCommand(cmd: string): string[] {
@@ -194,82 +430,100 @@ export interface ProxyOptions {
 
 interface Pending { name: string; args: unknown; start: number }
 
-/** Error code for "the upstream server could not be reached"; JSON-RPC reserves -32000 to -32099 for servers. */
+/** JSON-RPC codes the proxy answers with. -32000 is "the upstream could not be reached" (no HTTP status). */
 export const UPSTREAM_UNREACHABLE = -32000;
+export const PARSE_ERROR = -32700;
+export const INVALID_REQUEST = -32600;
+export const INTERNAL_ERROR = -32603;
+
+/** The JSON-RPC error a failed send turns into: the upstream's own JSON-RPC error when its HTTP body holds one. */
+export function errorFor(err: unknown, upstreamName: string): { code: number; message: string; data?: unknown } {
+  if (err instanceof HttpStatusError) {
+    try {
+      const body = rec(JSON.parse(err.body));
+      const e = rec(Array.isArray(body) ? body[0]?.error : body.error);
+      if (typeof e.code === 'number' && typeof e.message === 'string') return e as { code: number; message: string };
+    } catch { /* not JSON */ }
+    return { code: INTERNAL_ERROR, message: `The upstream MCP server (${upstreamName}) answered HTTP ${err.status}` };
+  }
+  const why = err instanceof Error && err.message ? `: ${err.message.split('\n')[0].slice(0, 200)}` : '';
+  return { code: UPSTREAM_UNREACHABLE, message: `The upstream MCP server (${upstreamName}) did not take the request${why}` };
+}
 
 /**
- * Wires a client endpoint to an upstream endpoint. Resolves when either side closes. Every message goes
- * through as it came; only a request the upstream cannot take is answered by the proxy, with an error, so
- * the client is not left waiting.
+ * Wires a client endpoint to an upstream endpoint. Resolves when the client closes, or when a stdio
+ * upstream exits. Messages are forwarded first; capture bookkeeping runs after, off the message path.
  */
 export function runProxy(o: ProxyOptions): Promise<void> {
   const now = o.now ?? Date.now;
   const sessionId = o.sessionId ?? `mcp:${process.pid}-${now().toString(36)}`;
   const ctx = new SessionContext(o.instance);
   const pending = new Map<string, Pending>();
-  let initId: string | undefined;
   let clientInfo: ClientInfo | undefined;
   let own = false;
-  const key = (id: unknown) => `${typeof id}:${String(id)}`;
 
-  const emit = (id: string, p: Pending, extra: { result?: unknown; rpcError?: unknown; cancelled?: boolean }) => {
+  const emit = (id: unknown, p: Pending, extra: { result?: unknown; rpcError?: unknown; cancelled?: boolean; skipResult?: boolean }) => {
     try {
-      const ev = buildCapture({ ...(clientInfo ? { client: clientInfo } : {}), sessionId, callId: id, name: p.name, args: p.args, start: p.start, end: now(), own, ...extra }, ctx);
+      const ev = buildCapture({ ...(clientInfo ? { client: clientInfo } : {}), sessionId, callId: String(id), name: p.name, args: p.args, start: p.start, end: now(), own, ...extra }, ctx);
       o.debug?.(`${extra.cancelled ? 'cancelled' : 'done'} ${ev.innerTool ?? ev.tool} ok=${ev.ok}`);
       if (!own) o.capture(ev);
     } catch { /* capture must never affect the call */ }
   };
 
-  const fromClient = (m: Msg) => {
+  const reply = (id: unknown, error: { code: number; message: string; data?: unknown }) => {
+    o.client.send({ jsonrpc: '2.0', id, error }).catch(() => {});
+  };
+
+  const fromClient = (m: unknown) => {
+    const end = now();
+    const list = items(m);
     try {
-      const method = typeof m.method === 'string' ? m.method : undefined;
-      const hasId = m.id !== undefined && m.id !== null;
-      if (method === 'initialize' && hasId) {
-        initId = key(m.id);
-        const ci = rec(rec(m.params).clientInfo);
-        if (typeof ci.name === 'string') {
-          clientInfo = { name: ci.name, ...(typeof ci.version === 'string' ? { version: ci.version } : {}) };
-          own = ci.name === LIVEMAP_CLIENT_NAME;
+      for (const x of list) {
+        const method = typeof x.method === 'string' ? x.method : undefined;
+        if (method === 'initialize' && isRequest(x)) {
+          const ci = rec(rec(x.params).clientInfo);
+          if (typeof ci.name === 'string') {
+            clientInfo = { name: ci.name, ...(typeof ci.version === 'string' ? { version: ci.version } : {}) };
+            own = ci.name === LIVEMAP_CLIENT_NAME;
+          }
+        } else if (method === 'tools/call' && isRequest(x)) {
+          const p = rec(x.params);
+          const name = typeof p.name === 'string' ? p.name : '';
+          pending.set(idKey(x.id), { name, args: p.arguments ?? {}, start: end });
+          if (pending.size > MAX_PENDING) pending.delete(pending.keys().next().value as string);
+          o.debug?.(`call ${baseToolName(name)} args: ${argNames(p.arguments).join(', ')}`);
+        } else if (method === 'notifications/cancelled') {
+          const id = rec(x.params).requestId;
+          const p = pending.get(idKey(id));
+          if (p) { pending.delete(idKey(id)); setImmediate(() => emit(id, p, { cancelled: true })); }
         }
-      } else if (method === 'tools/call' && hasId) {
-        const p = rec(m.params);
-        const name = typeof p.name === 'string' ? p.name : '';
-        pending.set(key(m.id), { name, args: p.arguments ?? {}, start: now() });
-        if (pending.size > MAX_PENDING) pending.delete(pending.keys().next().value as string);
-        o.debug?.(`call ${baseToolName(name)} args: ${argNames(p.arguments).join(', ')}`);
-      } else if (method === 'notifications/cancelled') {
-        const id = rec(m.params).requestId;
-        const k = key(id);
-        const p = pending.get(k);
-        if (p) { pending.delete(k); emit(String(id), p, { cancelled: true }); }
       }
     } catch { /* bookkeeping only */ }
-    o.upstream.send(m).catch((err: unknown) => {
-      if (m.method === undefined || m.id === undefined || m.id === null) return;
-      pending.delete(key(m.id));
-      const why = err instanceof Error && err.message ? `: ${err.message.split('\n')[0].slice(0, 200)}` : '';
-      o.client.send({ jsonrpc: '2.0', id: m.id, error: { code: UPSTREAM_UNREACHABLE, message: `The upstream MCP server (${o.upstreamName}) did not take the request${why}` } }).catch(() => {});
+    o.upstream.send(m).catch((err: SendError) => {
+      for (const x of list) {
+        if (!isRequest(x) || err?.delivered?.has(idKey(x.id))) continue;
+        pending.delete(idKey(x.id));
+        reply(x.id, errorFor(err, o.upstreamName));
+      }
     });
   };
 
-  const fromUpstream = (m: Msg) => {
-    try {
-      const isResponse = m.method === undefined && m.id !== undefined && m.id !== null;
-      if (isResponse) {
-        const k = key(m.id);
-        if (k === initId) {
-          initId = undefined;
-          const v = rec(m.result).protocolVersion;
-          if (typeof v === 'string' && o.upstream instanceof HttpEndpoint) o.upstream.setProtocolVersion(v);
-        }
-        const p = pending.get(k);
-        if (p) {
-          pending.delete(k);
-          emit(String(m.id), p, m.error !== undefined ? { rpcError: m.error } : { result: m.result });
-        }
-      }
-    } catch { /* bookkeeping only */ }
+  const fromUpstream = (m: unknown, bytes: number) => {
     o.client.send(m).catch(() => {});
+    setImmediate(() => {
+      try {
+        for (const x of items(m)) {
+          if (!isResponse(x)) continue;
+          const p = pending.get(idKey(x.id));
+          if (!p) continue;
+          pending.delete(idKey(x.id));
+          // Parse only what the capture needs: a write's new sys_ids, a context tool's answer, a small error's message.
+          const failed = rec(x.result).isError === true;
+          const skipResult = bytes > MAX_PARSED_RESULT || (!failed && !needsResult(p.name, p.args));
+          emit(x.id, p, x.error !== undefined ? { rpcError: x.error } : { result: x.result, skipResult });
+        }
+      } catch { /* bookkeeping only */ }
+    });
   };
 
   return new Promise<void>((resolve) => {
@@ -282,10 +536,19 @@ export function runProxy(o: ProxyOptions): Promise<void> {
       resolve();
     };
     o.client.onmessage = fromClient;
+    o.client.onBadLine = badLineReply(o.client);
     o.upstream.onmessage = fromUpstream;
     o.client.onclose = finish;
     // An HTTP upstream has no lasting connection to lose; only a stdio child that exits ends the proxy.
     if (!(o.upstream instanceof HttpEndpoint)) o.upstream.onclose = finish;
     o.upstream.start().then(() => o.client.start()).catch(finish);
   });
+}
+
+/** The client endpoint's bad-line handler: a JSON-RPC error with id null, as the spec says for an unreadable message. */
+export function badLineReply(client: Endpoint): (why: BadLine) => void {
+  return (why) => {
+    const error = why === 'parse' ? { code: PARSE_ERROR, message: 'Parse error' } : { code: INVALID_REQUEST, message: `Invalid Request: message larger than ${MAX_LINE} bytes` };
+    client.send({ jsonrpc: '2.0', id: null, error }).catch(() => {});
+  };
 }

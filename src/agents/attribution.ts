@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { AgentEvent, Attribution, ChangeSummary, Confidence } from '../shared/types.js';
 import type { AgentHub } from './hub.js';
 import { classifyTool, sameRecord } from '../shared/tools.js';
-import { byRunWindow, byTime, byUpdateSet, callsOf, type RecordFacts, type RuleWindows } from './record-rules.js';
+import { byRunWindow, byTime, byUpdateSet, callsOf, type Call, type RecordFacts, type RuleWindows } from './record-rules.js';
 
 const MAX_INTENT = 500;
 const MAX_PENDING = 200;
@@ -77,6 +77,7 @@ export class Attributor extends EventEmitter {
   private readonly users = new Map<string, string>();
   private pending: Pending[] = [];
   private readonly onEvent = (e: AgentEvent) => this.handle(e);
+  private readonly onEvents = (evs: AgentEvent[]) => this.handleBatch(evs);
 
   constructor(private readonly hub: AgentHub, opts: AttributorOptions = {}) {
     super();
@@ -90,6 +91,7 @@ export class Attributor extends EventEmitter {
     this.runTailMs = opts.runTailMs ?? 3000;
     this.spanTailMs = opts.spanTailMs ?? 60_000;
     hub.on('event', this.onEvent);
+    hub.on('events', this.onEvents);
   }
 
   /** The clock skew margin for record changes. The live poller sets it once it has measured the skew. */
@@ -135,7 +137,7 @@ export class Attributor extends EventEmitter {
    * A record change, through the rules in order (the first match wins): record key (exact), update set,
    * run window, log, time only. No match means a human or an unknown writer: no attribution.
    */
-  private attributeRecord(all: AgentEvent[], change: ChangeSummary, record: RecordKey): Attribution | undefined {
+  private attributeRecord(all: AgentEvent[], change: ChangeSummary, record: RecordKey, calls: Call[] = this.callsIn(all)): Attribution | undefined {
     const t = record.updatedOn ?? change.at;
     const exact = this.findExact(all, change, t, this.skewMs);
     if (exact) {
@@ -144,9 +146,8 @@ export class Attributor extends EventEmitter {
       return { ...a, rule: 'record', reason: `${exact.tool?.label ?? 'The call'} named ${record.table} ${record.sysId ?? record.name ?? ''}`.trim() };
     }
     const w = this.windows();
-    const calls = callsOf(all.filter((e) => !(e.tool?.id && this.hub.isBlocked(e.sessionId, e.tool.id))), isWriteTool);
     const userOf = (sid: string) => this.users.get(sid);
-    let result = byUpdateSet(all, record, t, w) ?? byRunWindow(calls, record, t, w, userOf);
+    let result = byUpdateSet(all, record, t, w, userOf) ?? byRunWindow(calls, record, t, w, userOf);
     if (!result && this.logMatch) {
       try { result = this.logMatch(change, record); } catch { result = undefined; }
     }
@@ -156,8 +157,14 @@ export class Attributor extends EventEmitter {
     return intent ? { ...result, intent } : result;
   }
 
+  /** Tool calls of the events, paired, without calls LiveMap blocked. */
+  private callsIn(all: AgentEvent[]): Call[] {
+    return callsOf(all.filter((e) => !(e.tool?.id && this.hub.isBlocked(e.sessionId, e.tool.id))), isWriteTool);
+  }
+
   stop(): void {
     this.hub.off('event', this.onEvent);
+    this.hub.off('events', this.onEvents);
     this.pending = [];
   }
 
@@ -217,21 +224,37 @@ export class Attributor extends EventEmitter {
     return undefined;
   }
 
-  private handle(e: AgentEvent): void {
-    if (!this.pending.length || !this.candidate(e)) return;
+  /**
+   * Record changes, once per batch of hub events (a capture's start and end arrive together): a new call, or a
+   * new current update set, may now fit a rule. The pending changes near the batch are re-run, and only an
+   * upgrade is reported.
+   */
+  private handleBatch(evs: AgentEvent[]): void {
+    if (!this.pending.some((p) => p.record)) return;
+    const relevant = evs.filter((e) => this.candidate(e) || !!e.tool?.sn?.updateSet);
+    if (!relevant.length) return;
+    const times = relevant.map(timeOf);
+    const near = (at: number) => times.some((t) => Math.abs(t - at) <= LATE_RECORD_MS);
+    const todo = this.pending.filter((x) => x.record && near(x.record.updatedOn ?? x.at));
+    if (!todo.length) return;
     const all = this.hub.events();
-    // Record changes: any write call may now fit a rule; re-run the ones near it and report only an upgrade.
-    const t = timeOf(e);
-    for (const p of this.pending.filter((x) => x.record && Math.abs(t - (x.record.updatedOn ?? x.at)) <= LATE_RECORD_MS)) {
+    const calls = this.callsIn(all);
+    for (const p of todo) {
       const change = { id: p.id, path: p.path, at: p.at } as ChangeSummary;
-      const a = this.attributeRecord(all, change, p.record as RecordKey);
+      const a = this.attributeRecord(all, change, p.record as RecordKey, calls);
       if (!a || rank(a) >= p.best) continue;
       p.best = rank(a);
       if (a.confidence === 'exact') this.pending = this.pending.filter((x) => x.id !== p.id);
       try { this.emit('late', p.id, a); } catch { /* a faulty listener must not break hub ingestion */ }
     }
+  }
+
+  /** File changes: a write naming the path upgrades a pending change to exact. */
+  private handle(e: AgentEvent): void {
+    if (!this.pending.length || !this.candidate(e)) return;
     const hit = this.pending.filter((p) => !p.record && this.matches(e, p.path, p.at));
     if (!hit.length) return;
+    const all = this.hub.events();
     for (const p of hit) {
       this.pending = this.pending.filter((x) => x.id !== p.id);
       const a = this.exactFor(all, e, p.at);

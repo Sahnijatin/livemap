@@ -3,36 +3,41 @@
  * Node built-ins, so the SkyForge plugin can share the same rules. Values are redacted here, before
  * anything leaves the proxy.
  */
-import { classifyTool, resultSysIds, type RecordTarget } from '../shared/tools.js';
+import { classifyTool, resultSysIds, unwrapTool, type RecordTarget } from '../shared/tools.js';
 
 type Obj = Record<string, unknown>;
 const rec = (v: unknown): Obj => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Obj) : {});
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
 
 export const REDACTED = '[redacted]';
-/** Keys whose values never leave the proxy: exact names, and names ending in them (`refresh_token`, `db_password`). */
-const SECRET_KEY = /(^|[_-])(password2?|passwd|token|secret|client_secret|authorization|api[_-]?key|apikey|private[_-]?key|credentials?)$/i;
+/**
+ * Secret keys, matched on the key lowercased with `_` and `-` removed, so `client_secret`, `clientSecret`,
+ * `refresh-token`, `X-Api-Key` and `db_password` all match.
+ */
+const SECRET_KEY = /(password|passwd|passphrase|pwd|token|secret|apikey|privatekey|credentials?|cookie|authorization|auth)\d*$/;
+/** Keys that hold code: a script can embed a password, so its value never leaves the proxy. */
+const SCRIPT_KEY = /(script|condition)$/;
 /** Keys that hold headers: every value under them is redacted. */
-const HEADER_KEYS = /^(headers?|http_headers|request_headers)$/i;
+const HEADER_KEYS = /^(headers?|httpheaders|requestheaders)$/;
+/** Name-value pairs (`{name: 'password', value: 'x'}`): the value is secret when the name is. */
+const PAIR_NAME_KEYS = ['name', 'key', 'field', 'property'];
+const PAIR_VALUE_KEYS = ['value', 'default_value', 'defaultValue'];
 /** Tables whose records hold credentials or secret settings: a call on them keeps arg names only. */
 const SECRET_TABLE = /^(sys_auth_profile.*|oauth_entity.*|discovery_credentials|sys_properties)$/i;
 const MAX_DEPTH = 32;
 const MAX_ERROR = 300;
 
-export const isSecretKey = (k: string): boolean => SECRET_KEY.test(k);
+const norm = (k: string) => k.replace(/[_-]/g, '').toLowerCase();
+export const isSecretKey = (k: string): boolean => SECRET_KEY.test(norm(k));
+export const isScriptKey = (k: string): boolean => SCRIPT_KEY.test(norm(k));
 export const isSecretTable = (t: string | undefined): boolean => !!t && SECRET_TABLE.test(t);
 
-/** A deep copy with secret values replaced; header objects lose every value. */
-export function redact(v: unknown, depth = 0): unknown {
-  if (depth > MAX_DEPTH || !v || typeof v !== 'object') return v;
-  if (Array.isArray(v)) return v.map((x) => redact(x, depth + 1));
-  const out: Obj = {};
-  for (const [k, x] of Object.entries(v as Obj)) {
-    if (isSecretKey(k)) out[k] = REDACTED;
-    else if (HEADER_KEYS.test(k)) out[k] = namesOnly(x);
-    else out[k] = redact(x, depth + 1);
-  }
-  return out;
+const SECRET_TEXT = /\b([\w-]*(?:password2?|passwd|passphrase|pwd|token|secret|api[_-]?key|private[_-]?key|credentials?|cookie|authorization))(["']?\s*[:=]\s*["']?)([^\s"',;}&]+)/gi;
+const BEARER = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/g;
+
+/** Free text with `key=value` and `key: value` secrets and bearer tokens cut out. */
+export function redactText(s: string): string {
+  return s.replace(SECRET_TEXT, `$1$2${REDACTED}`).replace(BEARER, `$1 ${REDACTED}`);
 }
 
 /** The same shape with every leaf value replaced: arg names survive, values do not. */
@@ -47,9 +52,25 @@ export function namesOnly(v: unknown, depth = 0): unknown {
   return REDACTED;
 }
 
-/** `key=value` and `key: value` pairs in free text with a secret key lose their value. */
-export function redactText(s: string): string {
-  return s.replace(/\b([\w-]*(?:password2?|passwd|token|secret|authorization|api[_-]?key|apikey))(["']?\s*[:=]\s*["']?)([^\s"',;}&]+)/gi, `$1$2${REDACTED}`);
+/**
+ * A deep copy safe to send: secret, script and header values replaced, the value of a secret name-value
+ * pair replaced, secrets cut out of every string, and anything nested past MAX_DEPTH replaced whole.
+ */
+export function redact(v: unknown, depth = 0): unknown {
+  if (depth > MAX_DEPTH) return REDACTED;
+  if (typeof v === 'string') return redactText(v);
+  if (!v || typeof v !== 'object') return v;
+  if (Array.isArray(v)) return v.map((x) => redact(x, depth + 1));
+  const o = v as Obj;
+  const pairName = PAIR_NAME_KEYS.map((k) => o[k]).find((x): x is string => typeof x === 'string');
+  const secretPair = !!pairName && isSecretKey(pairName);
+  const out: Obj = {};
+  for (const [k, x] of Object.entries(o)) {
+    if (isSecretKey(k) || (secretPair && PAIR_VALUE_KEYS.includes(k))) out[k] = REDACTED;
+    else if (isScriptKey(k) || HEADER_KEYS.test(norm(k))) out[k] = namesOnly(x, depth + 1);
+    else out[k] = redact(x, depth + 1);
+  }
+  return out;
 }
 
 /** Arg names only, for debug logs: top-level keys, and the inner tool's keys for a gateway call. */
@@ -60,12 +81,22 @@ export function argNames(args: unknown): string[] {
   return Object.keys(inner).length ? [...keys, ...Object.keys(inner).map((k) => `args.${k}`)] : keys;
 }
 
-/** The redacted args of a call: names only when it touches a secret table. */
+/**
+ * The args to send for a call. A gateway call is sent as `{tool, args}` with the inner args parsed when
+ * they came as a JSON string, and as names only when that string does not parse. A call on a secret table
+ * keeps arg names only.
+ */
 export function safeArgs(name: string, args: unknown): unknown {
   const c = classifyTool(name, args);
   const a = rec(c.args);
   const table = str(a.table) ?? str(a.table_name) ?? str(a.tableName);
-  return isSecretTable(table) || c.targets.some((t) => isSecretTable(t.table)) ? namesOnly(args) : redact(args);
+  const secret = isSecretTable(table) || c.targets.some((t) => isSecretTable(t.table));
+  if (!c.inner) return secret ? namesOnly(args) : redact(args);
+  const { args: inner } = unwrapTool(name, args);
+  const rest: Obj = { ...rec(args) };
+  delete rest.args;
+  const safeInner = typeof inner === 'string' || secret ? namesOnly(inner) : redact(inner);
+  return { ...(redact(rest) as Obj), args: safeInner };
 }
 
 /**
@@ -86,11 +117,15 @@ export function resultPayload(result: unknown): unknown {
   return undefined;
 }
 
-/** Whether a call failed, and its message: an MCP error result, a JSON-RPC error, or `{success: false}`. */
-export function outcome(result: unknown, rpcError?: unknown): { ok: boolean; error?: string } {
+/**
+ * Whether a call failed, and its message: an MCP error result, a JSON-RPC error, or `{success: false}`.
+ * With `shallow`, only the result's `isError` flag is read (a large result is not parsed).
+ */
+export function outcome(result: unknown, rpcError?: unknown, shallow = false): { ok: boolean; error?: string } {
   const cut = (s: string) => redactText(s.length > MAX_ERROR ? s.slice(0, MAX_ERROR) : s);
   if (rpcError !== undefined) return { ok: false, error: cut(str(rec(rpcError).message) ?? 'error') };
   const r = rec(result);
+  if (shallow) return r.isError === true ? { ok: false, error: 'error' } : { ok: true };
   const payload = resultPayload(result);
   const p = rec(payload);
   if (r.isError === true || p.success === false) {
@@ -100,7 +135,8 @@ export function outcome(result: unknown, rpcError?: unknown): { ok: boolean; err
   return { ok: true };
 }
 
-export interface UpdateSetRef { sysId?: string; name?: string }
+/** An update set; `unknown` marks a session whose current set changed to one the proxy cannot name yet. */
+export interface UpdateSetRef { sysId?: string; name?: string; unknown?: true }
 export interface ClientInfo { name: string; version?: string }
 
 /** The body posted to `/hook` for one tool call. Times are epoch ms on this machine. */
@@ -112,6 +148,7 @@ export interface CaptureEvent {
   /** The called tool's base name (`tool_execute` for a gateway call). */
   tool: string;
   innerTool?: string;
+  /** Redacted args as called; for a gateway call, `{tool, args}`. */
   args: unknown;
   targets: RecordTarget[];
   resultSysIds: string[];
@@ -127,16 +164,30 @@ export interface CaptureEvent {
   own?: boolean;
 }
 
-/** Actions of `sn_update_set_manage` that make an update set the current one. */
-const SETS_CURRENT = new Set(['create', 'set_current', 'set', 'switch', 'use', 'change', 'select', 'make_current', 'activate']);
+/** Tools whose results say who the session is or which update set is current: their results are always read. */
+export const CONTEXT_TOOLS = new Set(['sn_session_context', 'sn_get_instance_info', 'sn_update_set_manage', 'sn_ensure_active_update_set', 'sn_switch_application_scope']);
 const USER_KEYS = ['user_name', 'username', 'userName', 'user_id', 'user'];
+const SYS_ID = /^[0-9a-f]{32}$/i;
 
 function userOf(payload: unknown): string | undefined {
   for (const o of [rec(payload), rec(rec(payload).data), rec(rec(rec(payload).result).data), rec(rec(rec(payload).data).user)]) {
     for (const k of USER_KEYS) {
       const v = o[k];
       const s = str(v) ?? str(rec(v).value) ?? str(rec(v).user_name);
-      if (s && !/^[0-9a-f]{32}$/i.test(s)) return s;
+      if (s && !SYS_ID.test(s)) return s;
+    }
+  }
+  return undefined;
+}
+
+/** The update set a result describes: `{sys_id, name}` at the top, under `data`, `result.data`, or their `update_set`/`current`. */
+function updateSetOf(payload: unknown): UpdateSetRef | undefined {
+  const tops = [rec(payload), rec(rec(payload).data), rec(rec(rec(payload).result).data)];
+  for (const t of tops) {
+    for (const o of [rec(t.update_set), rec(t.current), rec(t.current_update_set), t]) {
+      const sysId = str(o.sys_id) ?? str(rec(o.sys_id).value);
+      const name = str(o.name) ?? str(rec(o.name).value);
+      if (sysId && SYS_ID.test(sysId)) return { sysId, ...(name ? { name } : {}) };
     }
   }
   return undefined;
@@ -144,7 +195,9 @@ function userOf(payload: unknown): string | undefined {
 
 /**
  * What a session has said about itself so far: its instance, its ServiceNow user (from `sn_session_context`
- * or `sn_get_instance_info` results), and the update set it made current (from `sn_update_set_manage`).
+ * or `sn_get_instance_info` results), and its current update set. SkyForge changes the current set with
+ * `sn_update_set_manage` (`create`, `switch`), `sn_ensure_active_update_set` and
+ * `sn_switch_application_scope`; `sn_update_set_manage` `current` reads it back.
  */
 export class SessionContext {
   instance?: string;
@@ -158,22 +211,43 @@ export class SessionContext {
   /** Learns from one finished call; `real` is the inner tool of a gateway call. */
   learn(real: string, args: unknown, payload: unknown, ok: boolean): void {
     if (!ok) return;
-    if (real === 'sn_session_context' || real === 'sn_get_instance_info') {
-      const u = userOf(payload);
-      if (u) this.user = u;
-      const inst = str(rec(rec(payload).data).instance_name) ?? str(rec(payload).instance_name);
-      if (inst && !this.instance) this.instance = inst;
-      return;
-    }
-    if (real !== 'sn_update_set_manage') return;
     const a = rec(args);
-    const action = str(a.action)?.toLowerCase();
-    if (!action || !SETS_CURRENT.has(action)) return;
-    const name = str(a.name) ?? str(a.update_set) ?? str(a.update_set_name);
-    const ids = resultSysIds(payload);
-    const sysId = str(a.sys_id) ?? str(a.update_set_id) ?? ids[0];
-    if (!name && !sysId) return;
-    this.updateSet = { ...(sysId ? { sysId } : {}), ...(name ? { name } : {}) };
+    const fromResult = () => updateSetOf(payload);
+    const set = (u: UpdateSetRef | undefined) => { if (u && (u.sysId || u.name || u.unknown)) this.updateSet = u; };
+    switch (real) {
+      case 'sn_session_context':
+      case 'sn_get_instance_info': {
+        const u = userOf(payload);
+        if (u) this.user = u;
+        const inst = str(rec(rec(payload).data).instance_name) ?? str(rec(payload).instance_name);
+        if (inst && !this.instance) this.instance = inst;
+        return;
+      }
+      case 'sn_update_set_manage': {
+        const action = str(a.action)?.toLowerCase();
+        const r = fromResult();
+        if (action === 'current') set(r);
+        else if (action === 'create') set({ ...(r?.sysId ? { sysId: r.sysId } : {}), ...((str(a.name) ?? r?.name) ? { name: str(a.name) ?? r?.name } : {}) });
+        else if (action === 'switch') {
+          const sysId = str(a.update_set_id) ?? str(a.sys_id) ?? r?.sysId;
+          const name = r?.name ?? str(a.name);
+          set(sysId || name ? { ...(sysId ? { sysId } : {}), ...(name ? { name } : {}) } : { unknown: true });
+        }
+        return;
+      }
+      case 'sn_ensure_active_update_set': {
+        const r = fromResult();
+        const name = str(a.name) ?? r?.name;
+        set({ ...(r?.sysId ? { sysId: r.sysId } : {}), ...(name ? { name } : {}) });
+        return;
+      }
+      case 'sn_switch_application_scope': {
+        // The scope's current set changes, to a set the args do not name (a new one with create_update_set).
+        const r = fromResult();
+        set(r ?? { unknown: true });
+        return;
+      }
+    }
   }
 }
 
@@ -190,15 +264,23 @@ export interface CallInput {
   rpcError?: unknown;
   /** Set for a cancelled call. */
   cancelled?: boolean;
+  /** Do not parse the result (it is large, or the call reads): only its `isError` flag counts. */
+  skipResult?: boolean;
   start: number;
   end: number;
   own?: boolean;
 }
 
+/** Whether a call's result must be parsed: writes (for new sys_ids) and context tools. */
+export function needsResult(name: string, args: unknown): boolean {
+  const c = classifyTool(name, args);
+  return c.access === 'write' || CONTEXT_TOOLS.has(c.inner ?? c.name);
+}
+
 /** Builds the capture event for a finished call and updates the session's context from it. */
 export function buildCapture(call: CallInput, ctx: SessionContext): CaptureEvent {
-  const payload = call.result === undefined ? undefined : resultPayload(call.result);
-  const res = call.cancelled ? { ok: false, error: 'cancelled' } : outcome(call.result, call.rpcError);
+  const payload = call.result === undefined || call.skipResult ? undefined : resultPayload(call.result);
+  const res = call.cancelled ? { ok: false, error: 'cancelled' } : outcome(call.result, call.rpcError, !!call.skipResult);
   const c = classifyTool(call.name, call.args, payload === undefined ? {} : { output: payload, ...(ctx.instance ? { instance: ctx.instance } : {}) });
   const real = c.inner ?? c.name;
   ctx.learn(real, c.args, payload, res.ok);

@@ -6,9 +6,13 @@
  * 2. Update set: the change's update set is the one a session made current, inside that session's span.
  * 3. Run window: the change landed while a background script of a session ran, by that session's user.
  * 4. Log: a caller-supplied matcher (tool log lines); see AttributorOptions.logMatch.
- * 5. Time only: one write-capable call around the change is `likely`, more are `ambiguous`.
+ * 5. Time only: write calls of one session around the change are `likely`; of several sessions, `ambiguous`.
+ *
+ * Rules 2 and 3 need the change's facts (`updatedOn`, `updatedBy`, `updateSet`) from the instance's change
+ * rows; without them, rule 2 never matches and rule 3 can only say `ambiguous`.
  */
 import type { AgentEvent, Attribution, AttributionCandidate } from '../shared/types.js';
+import { STALE_TOOL_MS } from './hub.js';
 
 /** What a record change says about itself. Times are epoch ms; `updateSet` is the update set's sys_id or name. */
 export interface RecordFacts {
@@ -17,7 +21,7 @@ export interface RecordFacts {
   updatedOn?: number;
   /** `sys_updated_by`: the instance user that wrote it. */
   updatedBy?: string;
-  /** The `sys_update_xml.update_set` of the change: a sys_id, a name, or both. */
+  /** The `sys_update_xml.update_set` of the change: its sys_id (preferred) or its name. */
   updateSet?: string;
   updateSetName?: string;
 }
@@ -35,11 +39,19 @@ export interface RuleWindows {
 
 /** Tools that change records without naming them: everything the session's user changes while they run is theirs. */
 export const RUN_WINDOW_TOOLS = new Set(['sn_execute_background_script', 'sn_schedule_script_job']);
+/** Every instance has a "Default" update set; many sessions and people share it, so its name proves nothing. */
+const DEFAULT_SET = /^default$/i;
+const SYS_ID = /^[0-9a-f]{32}$/i;
 
-/** One tool call, its start and end paired from hub events. `end` is Infinity while it still runs. */
+/**
+ * One tool call, its start and end paired from hub events. A call with no end yet runs until its end
+ * arrives, for at most STALE_TOOL_MS (a call that never reports an end must not match every later change).
+ */
 export interface Call {
   sessionId: string; agent: AgentEvent['agent']; toolId: string; start: number; end: number;
   real: string; write: boolean; startEvent: AgentEvent; endEvent?: AgentEvent;
+  /** True while no end has arrived. */
+  open: boolean;
   instance?: string; user?: string;
 }
 
@@ -55,11 +67,13 @@ export function callsOf(events: AgentEvent[], isWrite: (e: AgentEvent) => boolea
     const key = `${e.sessionId}\u0000${id}`;
     let c = byKey.get(key);
     if (!c) {
-      c = { sessionId: e.sessionId, agent: e.agent, toolId: id, start: e.at, end: e.type === 'tool_end' ? e.at : Infinity, real: realName(e), write: isWrite(e), startEvent: e };
+      const open = e.type === 'tool_start';
+      c = { sessionId: e.sessionId, agent: e.agent, toolId: id, start: e.at, end: open ? e.at + STALE_TOOL_MS : e.at, open, real: realName(e), write: isWrite(e), startEvent: e };
       byKey.set(key, c);
       out.push(c);
     } else if (e.type === 'tool_end') {
       c.end = Math.max(e.at, c.start);
+      c.open = false;
       c.endEvent = e;
       c.write ||= isWrite(e);
     }
@@ -73,83 +87,103 @@ export function callsOf(events: AgentEvent[], isWrite: (e: AgentEvent) => boolea
 export type UserOf = (sessionId: string) => string | undefined;
 
 const sameInstance = (a?: string, b?: string) => !a || !b || a === b;
+/** False only when both users are known and differ. */
 const userFits = (sessionUser: string | undefined, f: RecordFacts) => !sessionUser || !f.updatedBy || sessionUser === f.updatedBy;
 
-function decide(rule: string, hits: { call: Call; reason: string }[]): Attribution | undefined {
+interface Hit { call: Call; reason: string; uncertain?: string }
+
+/**
+ * One attribution from the hits of a rule, grouped by session (the latest call of each). One session gives
+ * `likely`; several sessions, or a hit that could not be checked (`uncertain`), give `ambiguous`.
+ */
+function decide(rule: string, hits: Hit[]): Attribution | undefined {
   if (!hits.length) return undefined;
-  const bySession = new Map<string, { call: Call; reason: string }>();
+  const bySession = new Map<string, Hit>();
   for (const h of hits) {
     const prev = bySession.get(h.call.sessionId);
-    if (!prev || h.call.start >= prev.call.start) bySession.set(h.call.sessionId, h);
+    if (!prev || h.call.start >= prev.call.start) bySession.set(h.call.sessionId, { ...h, uncertain: h.uncertain ?? prev?.uncertain });
   }
-  const pick = [...bySession.values()].sort((a, b) => b.call.start - a.call.start)[0];
+  const all = [...bySession.values()].sort((a, b) => b.call.start - a.call.start);
+  const pick = all[0];
   const ev = pick.call.endEvent ?? pick.call.startEvent;
   const base: Attribution = { agent: pick.call.agent, sessionId: pick.call.sessionId, eventId: ev.id, confidence: 'likely', rule, reason: pick.reason };
-  if (bySession.size === 1) return base;
-  const candidates: AttributionCandidate[] = [...bySession.values()].map((h) => ({ agent: h.call.agent, sessionId: h.call.sessionId, eventId: (h.call.endEvent ?? h.call.startEvent).id }));
-  return { ...base, confidence: 'ambiguous', candidates, reason: `${bySession.size} sessions fit: ${pick.reason}` };
+  const uncertain = all.find((h) => h.uncertain)?.uncertain;
+  if (all.length === 1 && !uncertain) return base;
+  const candidates: AttributionCandidate[] = all.map((h) => ({ agent: h.call.agent, sessionId: h.call.sessionId, eventId: (h.call.endEvent ?? h.call.startEvent).id }));
+  const why = all.length > 1 ? `${all.length} sessions fit: ${pick.reason}` : pick.reason;
+  return { ...base, confidence: 'ambiguous', candidates, reason: uncertain ? `${why}; ${uncertain}` : why };
 }
 
 const fmt = (ms: number) => new Date(ms).toISOString().slice(11, 19);
 
+type SetRef = { sysId?: string; name?: string; unknown?: true };
+
+/** Same update set: by sys_id when both sides have one; else by name, never the shared "Default" set. */
+function sameSet(u: SetRef, f: RecordFacts): boolean {
+  if (u.unknown) return false;
+  const fId = f.updateSet && SYS_ID.test(f.updateSet) ? f.updateSet : undefined;
+  if (u.sysId && fId) return u.sysId === fId;
+  const fName = f.updateSetName ?? (f.updateSet && !fId ? f.updateSet : undefined);
+  return !!u.name && !!fName && !DEFAULT_SET.test(u.name) && u.name === fName;
+}
+
 /** Rule 2. Sessions whose current update set (as of the change) is the change's, with the change inside the session's span. */
-export function byUpdateSet(events: AgentEvent[], f: RecordFacts, t: number, w: RuleWindows): Attribution | undefined {
+export function byUpdateSet(events: AgentEvent[], f: RecordFacts, t: number, w: RuleWindows, userOf: UserOf): Attribution | undefined {
   if (!f.updateSet && !f.updateSetName) return undefined;
-  const fits = (u: { sysId?: string; name?: string }) =>
-    (!!u.sysId && (u.sysId === f.updateSet)) || (!!u.name && (u.name === f.updateSetName || u.name === f.updateSet));
-  const sessions = new Map<string, { current?: { sysId?: string; name?: string }; since?: number; last: number; ev?: AgentEvent; agent: AgentEvent['agent'] }>();
+  interface S { current?: SetRef; since?: number; last: number; ev?: AgentEvent; agent: AgentEvent['agent']; instance?: string; user?: string }
+  const sessions = new Map<string, S>();
   for (const e of events) {
-    if (e.agent === 'git' || e.at > t + w.skewMs) continue;
+    if (e.agent === 'git') continue;
     const s = sessions.get(e.sessionId) ?? { last: e.at, agent: e.agent };
+    sessions.set(e.sessionId, s);
+    // A session's span runs on to its latest event, whenever that was.
     s.last = Math.max(s.last, e.at);
+    if (e.tool?.sn?.instance) s.instance = e.tool.sn.instance;
+    if (e.tool?.sn?.user) s.user = e.tool.sn.user;
+    if (e.at > t + w.skewMs) continue;
     const u = e.tool?.sn?.updateSet;
-    if (u && (u.sysId || u.name)) {
-      const same = s.current && s.current.sysId === u.sysId && s.current.name === u.name;
+    if (u && (u.sysId || u.name || u.unknown)) {
+      const same = s.current && s.current.sysId === u.sysId && s.current.name === u.name && !!s.current.unknown === !!u.unknown;
       if (!same) { s.current = u; s.since = e.at; }
       s.ev = e;
     }
-    sessions.set(e.sessionId, s);
   }
-  // A session's last event may come after the change: its span runs on to its latest event, whenever that was.
-  for (const e of events) { const s = sessions.get(e.sessionId); if (s && e.at > s.last) s.last = e.at; }
-  const hits: { call: Call; reason: string }[] = [];
+  const hits: Hit[] = [];
   for (const [sessionId, s] of sessions) {
-    if (!s.current || !s.ev || s.since === undefined || !fits(s.current)) continue;
+    if (!s.current || !s.ev || s.since === undefined || !sameSet(s.current, f)) continue;
+    if (!sameInstance(s.instance, f.instance) || !userFits(userOf(sessionId) ?? s.user, f)) continue;
     if (t < s.since - w.skewMs || t > s.last + w.spanTailMs) continue;
     const ev = s.ev;
-    const call: Call = { sessionId, agent: s.agent, toolId: ev.tool?.id ?? `@${ev.id}`, start: s.since, end: s.last, real: realName(ev), write: true, startEvent: ev };
+    const call: Call = { sessionId, agent: s.agent, toolId: ev.tool?.id ?? `@${ev.id}`, start: s.since, end: s.last, open: false, real: realName(ev), write: true, startEvent: ev };
     hits.push({ call, reason: `Update set ${s.current.name ?? s.current.sysId} is current in this session since ${fmt(s.since)}` });
   }
   return decide('update_set', hits);
 }
 
-/** Rule 3. Background scripts running when the change landed (plus the tail and skew), by the session's user. */
+/**
+ * Rule 3. Background scripts running when the change landed (plus the tail and skew), by the session's user.
+ * When the session's user or the change's user is not known, a human could have made the change: the
+ * match is `ambiguous`.
+ */
 export function byRunWindow(calls: Call[], f: RecordFacts, t: number, w: RuleWindows, userOf: UserOf): Attribution | undefined {
-  const hits: { call: Call; reason: string }[] = [];
+  const hits: Hit[] = [];
   for (const c of calls) {
     if (!RUN_WINDOW_TOOLS.has(c.real) || !sameInstance(c.instance, f.instance)) continue;
     if (t < c.start - w.skewMs || t > c.end + w.runTailMs + w.skewMs) continue;
     const user = userOf(c.sessionId) ?? c.user;
     if (!userFits(user, f)) continue;
-    const who = user ? `by ${user}` : 'session user unknown';
-    const end = Number.isFinite(c.end) ? fmt(c.end) : 'still running';
-    hits.push({ call: c, reason: `Changed while ${c.real} ran (${fmt(c.start)} to ${end}), ${who}` });
+    const end = c.open ? 'still running' : fmt(c.end);
+    const reason = `Changed while ${c.real} ran (${fmt(c.start)} to ${end})${user && f.updatedBy ? `, by ${user}` : ''}`;
+    const uncertain = !user ? 'session user unknown, human edit possible' : !f.updatedBy ? 'change user unknown, human edit possible' : undefined;
+    hits.push({ call: c, reason, ...(uncertain ? { uncertain } : {}) });
   }
   return decide('run_window', hits);
 }
 
-/** Rule 5. Write-capable calls that ran in the window before the change. One is `likely`; more are `ambiguous`. Never `exact`. */
+/** Rule 5. Write calls that ran in the window before the change, grouped by session. Never `exact`. */
 export function byTime(calls: Call[], f: RecordFacts, t: number, w: RuleWindows, userOf: UserOf): Attribution | undefined {
   const lo = t - w.likelyMs - w.skewMs;
   const hi = t + w.skewMs;
   const hits = calls.filter((c) => c.write && c.start <= hi && c.end >= lo && sameInstance(c.instance, f.instance) && userFits(userOf(c.sessionId) ?? c.user, f));
-  if (!hits.length) return undefined;
-  const reason = (c: Call) => `${c.real} ran ${fmt(c.start)}, near the change at ${fmt(t)}`;
-  if (hits.length === 1) return decide('time', [{ call: hits[0], reason: reason(hits[0]) }]);
-  const latest = hits.reduce((a, b) => (b.start >= a.start ? b : a));
-  const sessions = new Map<string, Call>();
-  for (const c of hits) if (!sessions.has(c.sessionId) || c.start >= (sessions.get(c.sessionId) as Call).start) sessions.set(c.sessionId, c);
-  const candidates: AttributionCandidate[] = [...sessions.values()].map((c) => ({ agent: c.agent, sessionId: c.sessionId, eventId: (c.endEvent ?? c.startEvent).id }));
-  const ev = latest.endEvent ?? latest.startEvent;
-  return { agent: latest.agent, sessionId: latest.sessionId, eventId: ev.id, confidence: 'ambiguous', rule: 'time', candidates, reason: `${hits.length} write calls ran near the change at ${fmt(t)}` };
+  return decide('time', hits.map((c) => ({ call: c, reason: `${c.real} ran ${fmt(c.start)}, near the change at ${fmt(t)}` })));
 }

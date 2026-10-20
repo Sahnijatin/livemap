@@ -71,7 +71,8 @@ export interface AgentTool {
   /** ServiceNow context a capture knew at the call: instance, the instance user, and the session's current update set. */
   sn?: SnContext;
 }
-export interface SnContext { instance?: string; user?: string; updateSet?: { sysId?: string; name?: string } }
+/** `updateSet.unknown`: the session's current update set changed to one not named yet (a scope switch). */
+export interface SnContext { instance?: string; user?: string; updateSet?: { sysId?: string; name?: string; unknown?: true } }
 /**
  * `paths` and `seenAt` are set on git commit events: the root-relative files the commit changed and when LiveMap saw it.
  * `merge` says whether a commit has more than one parent (absent on events recorded before LiveMap set it).

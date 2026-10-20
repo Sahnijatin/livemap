@@ -51,7 +51,9 @@ export function captureEvents(v: Obj, now: number = Date.now()): RawAgentEvent[]
   const inner = str(v.innerTool);
   const args = v.args;
   const name = tool;
-  const input = inner ? { tool: inner, args } : args;
+  // A gateway capture already carries `{tool, args}`; wrapping it again would hide the inner action.
+  const wrapped = isObj(args) && typeof args.tool === 'string';
+  const input = inner && !wrapped ? { tool: inner, args } : args;
   const c = classifyTool(name, input);
   const targets: RecordTarget[] = c.access === 'write' ? [...c.targets] : [];
   const add = (t: RecordTarget) => { if (!targets.some((x) => x.table === t.table && x.sysId === t.sysId && x.name === t.name)) targets.push(t); };
@@ -68,7 +70,7 @@ export function captureEvents(v: Obj, now: number = Date.now()): RawAgentEvent[]
   if (str(v.user)) sn.user = str(v.user);
   if (isObj(v.updateSet) && (str(v.updateSet.sysId) || str(v.updateSet.name))) {
     sn.updateSet = { ...(str(v.updateSet.sysId) ? { sysId: str(v.updateSet.sysId) } : {}), ...(str(v.updateSet.name) ? { name: str(v.updateSet.name) } : {}) };
-  }
+  } else if (isObj(v.updateSet) && v.updateSet.unknown === true) sn.updateSet = { unknown: true };
   const base: AgentTool = {
     id: callId, name: tool, label: toolLabel(name, input), paths: [],
     ...(c.inner ? { inner: c.inner } : {}), access: c.access, ...(targets.length ? { targets } : {}), ...(Object.keys(sn).length ? { sn } : {}),

@@ -50,6 +50,8 @@ async function direct(): Promise<Client> {
 }
 
 const http_ = (headers: Record<string, string> = {}) => new HttpEndpoint(new URL(up.url), headers);
+/** Capture runs after the answer went out, on a later tick. */
+const settle = () => new Promise<void>((r) => setImmediate(() => setImmediate(r)));
 const until = async (f: () => boolean, ms = 3000) => { const t = Date.now(); while (!f()) { if (Date.now() - t > ms) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 10)); } };
 
 describe('mcp-proxy pass-through (Streamable HTTP upstream)', () => {
@@ -68,6 +70,7 @@ describe('mcp-proxy pass-through (Streamable HTTP upstream)', () => {
     const args = { name: 'echo', arguments: { text: 'hello' } };
     const viaRes = await client.callTool(args);
     expect(viaRes).toEqual(await d.callTool(args));
+    await settle();
     expect(captured).toHaveLength(1);
     expect(captured[0]).toMatchObject({ source: 'mcp-proxy', tool: 'echo', args: { text: 'hello' }, ok: true, client: { name: 'desktop-test', version: '1.0.0' } });
     expect(captured[0].end).toBeGreaterThanOrEqual(captured[0].start);
@@ -77,6 +80,7 @@ describe('mcp-proxy pass-through (Streamable HTTP upstream)', () => {
     const { client, captured } = await viaProxy(http_());
     const d = await direct();
     expect(await client.callTool({ name: 'fail', arguments: {} })).toEqual(await d.callTool({ name: 'fail', arguments: {} }));
+    await settle();
     expect(captured[0]).toMatchObject({ tool: 'fail', ok: false, error: 'Record not found' });
   });
 
@@ -86,6 +90,7 @@ describe('mcp-proxy pass-through (Streamable HTTP upstream)', () => {
     const viaErr = await client.callTool({ name: 'boom', arguments: {} }).catch((e: unknown) => e as { code: number; message: string });
     const dErr = await d.callTool({ name: 'boom', arguments: {} }).catch((e: unknown) => e as { code: number; message: string });
     expect(viaErr).toMatchObject({ code: dErr.code, message: dErr.message });
+    await settle();
     expect(captured[0]).toMatchObject({ tool: 'boom', ok: false });
     expect(captured[0].error).toContain('boom');
   });
@@ -105,6 +110,7 @@ describe('mcp-proxy pass-through (Streamable HTTP upstream)', () => {
     ac.abort();
     await expect(p).rejects.toThrow();
     await until(() => up.aborted.length > before);
+    await settle();
     expect(captured.find((e) => e.tool === 'slow')).toMatchObject({ ok: false, error: 'cancelled' });
   });
 
@@ -113,6 +119,7 @@ describe('mcp-proxy pass-through (Streamable HTTP upstream)', () => {
     up.headers.length = 0;
     await client.callTool({ name: 'echo', arguments: { text: 'x' } });
     expect(up.headers.some((h) => h['x-sn-instance'] === 'devtest' && h.authorization === 'Bearer s3cret-value')).toBe(true);
+    await settle();
     expect(captured[0].instance).toBe('devtest');
     expect(JSON.stringify(captured)).not.toContain('s3cret');
   });
@@ -121,6 +128,7 @@ describe('mcp-proxy pass-through (Streamable HTTP upstream)', () => {
     const { client, captured } = await viaProxy(http_(), { instance: 'devtest' });
     await client.callTool({ name: 'sn_session_context', arguments: {} });
     await client.callTool({ name: 'tool_execute', arguments: { tool: 'sn_record_manage', args: { action: 'create', table: 'sys_script', data: { name: 'Set priority', script: 'x' } } } });
+    await settle();
     const c = captured[1];
     expect(c).toMatchObject({ tool: 'tool_execute', innerTool: 'sn_record_manage', user: 'agent.user', instance: 'devtest', ok: true, resultSysIds: [SYS_ID_NEW] });
     expect(c.targets).toContainEqual({ kind: 'record', instance: 'devtest', table: 'sys_script', sysId: SYS_ID_NEW, name: 'Set priority' });
@@ -130,6 +138,7 @@ describe('mcp-proxy pass-through (Streamable HTTP upstream)', () => {
     expect(LIVEMAP_CLIENT_NAME).toBe(CLIENT_NAME);
     const { client, captured } = await viaProxy(http_(), { clientName: CLIENT_NAME });
     await client.callTool({ name: 'echo', arguments: { text: 'x' } });
+    await settle();
     expect(captured).toEqual([]);
   });
 
@@ -157,6 +166,7 @@ describe('mcp-proxy with a stdio upstream (--upstream-cmd)', () => {
     const sysId = 'b'.repeat(32);
     const r = await client.callTool({ name: 'sn_record_manage', arguments: { action: 'update', table: 'sp_widget', sys_id: sysId, data: { template: '<div/>' } } });
     expect(JSON.parse((r.content as { text: string }[])[0].text)).toEqual({ success: true, data: { sys_id: sysId, table: 'sp_widget' } });
+    await settle();
     expect(captured[0].targets).toEqual([{ kind: 'record', instance: '', table: 'sp_widget', sysId }]);
   });
 
@@ -236,6 +246,7 @@ describe('mcp-proxy to a running LiveMap', () => {
     const poster = new HookPoster({ runtimes: () => [{ root: '/p/.livemap/sn', port: (s.address() as AddressInfo).port, token: 'tok', pid: process.pid }] });
     const { client } = await viaProxy(http_(), { capture: (e) => poster.send(e), instance: 'devtest' });
     await client.callTool({ name: 'sn_record_manage', arguments: { action: 'update', table: 'sys_script', sys_id: 'c'.repeat(32), password: 'hunter2' } });
+    await settle();
     await poster.flushed();
     const evs = hub.events();
     expect(evs.map((e) => [e.agent, e.type])).toEqual([['mcp-client', 'tool_start'], ['mcp-client', 'tool_end']]);

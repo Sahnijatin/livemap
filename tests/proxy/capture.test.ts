@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import { HookPoster, liveRuntimes } from '../../src/proxy/poster.js';
 import { argNames, buildCapture, isSecretTable, outcome, redact, redactText, REDACTED, SessionContext, type CallInput } from '../../src/proxy/capture.js';
-import { needsShell, quoteForCmd } from '../../src/proxy/proxy.js';
+import { escapeCmd, needsShell, quoteForCmd } from '../../src/proxy/proxy.js';
 import { parseProxyArgs } from '../../src/proxy/cli.js';
 import { captureEvents } from '../../src/agents/capture.js';
 
@@ -110,7 +116,180 @@ describe('mcp-proxy command line', () => {
     expect(needsShell('skyforge.cmd')).toBe(true);
     expect(needsShell('C:\\Program Files\\nodejs\\node.exe')).toBe(false);
     expect(needsShell('/usr/bin/node')).toBe(false);
-    expect(quoteForCmd('C:\\Program Files\\x')).toBe('"C:\\Program Files\\x"');
-    expect(quoteForCmd('plain')).toBe('plain');
+    // Quoted for the program, then every cmd.exe special character (quotes, spaces, & | < > ^ %) escaped with ^.
+    expect(quoteForCmd('C:\\Program Files\\x')).toBe('^"C:\\Program^ Files\\x^"');
+    expect(quoteForCmd('a&b|c<d>e^f%g')).toBe('^"a^&b^|c^<d^>e^^f^%g^"');
+    expect(quoteForCmd('say "hi"')).toBe('^"say^ \\^"hi\\^"^"');
+    expect(escapeCmd('my tool&x')).toBe('my^ tool^&x');
+  });
+});
+
+describe('review fixes: gateway reads, redaction gaps', () => {
+  const viaServer = (name: string, args: unknown, result: unknown = text({ success: true })) =>
+    captureEvents(JSON.parse(JSON.stringify(buildCapture(call({ name, args, result }), new SessionContext()))) as Record<string, unknown>, 10_000);
+
+  it('tool_execute(sn_record_manage) with a read action is stored as a read on the server', () => {
+    for (const action of ['get', 'list', 'query']) {
+      const evs = viaServer('tool_execute', { tool: 'sn_record_manage', args: { action, table: 'sys_script', sys_id: SYS } });
+      expect(evs[0].tool, action).toMatchObject({ name: 'tool_execute', inner: 'sn_record_manage', access: 'read' });
+      expect(evs[0].tool?.targets).toBeUndefined();
+      expect(evs[0].tool?.input).toEqual({ tool: 'sn_record_manage', args: { action, table: 'sys_script', sys_id: SYS } });
+    }
+    expect(viaServer('tool_execute', { tool: 'sn_record_manage', args: { action: 'update', table: 'sys_script', sys_id: SYS } })[0].tool).toMatchObject({ access: 'write' });
+  });
+
+  it('inner args sent as a JSON string are redacted in parsed form; a string that does not parse is names only', () => {
+    const e = buildCapture(call({ name: 'tool_execute', args: { tool: 'sn_record_manage', args: JSON.stringify({ action: 'update', table: 't', password: 'p', data: { accessToken: 'a' } }) } }), new SessionContext());
+    expect(e.args).toEqual({ tool: 'sn_record_manage', args: { action: 'update', table: 't', password: REDACTED, data: { accessToken: REDACTED } } });
+    const bad = buildCapture(call({ name: 'tool_execute', args: { tool: 'sn_record_manage', args: '{"password":"p", oops' } }), new SessionContext());
+    expect(bad.args).toEqual({ tool: 'sn_record_manage', args: REDACTED });
+  });
+
+  it('script bodies are names only', () => {
+    const out = redact({ script: 'var pw = "hunter2";', condition: 'x', client_script: 'y', data: { server_script: 'z', template: '<div/>' } });
+    expect(out).toEqual({ script: REDACTED, condition: REDACTED, client_script: REDACTED, data: { server_script: REDACTED, template: '<div/>' } });
+  });
+
+  it('every string leaf is scrubbed, not only errors', () => {
+    expect(redact({ note: 'connect with password=abc and Bearer eyJhbGci.x.y', list: ['token: t1'] })).toEqual({
+      note: `connect with password=${REDACTED} and Bearer ${REDACTED}`, list: [`token: ${REDACTED}`],
+    });
+  });
+
+  it('matches camelCase and other secret spellings', () => {
+    const keys = ['accessToken', 'clientSecret', 'refreshToken', 'pwd', 'passphrase', 'cookie', 'Set-Cookie', 'private_key', 'credential', 'credentials', 'X-Api-Key', 'basic_auth', 'password2'];
+    const out = redact(Object.fromEntries(keys.map((k) => [k, 'v']))) as Record<string, unknown>;
+    for (const k of keys) expect(out[k], k).toBe(REDACTED);
+    expect(redact({ author: 'a', tokenizer_name: 'b', table: 'c' })).toEqual({ author: 'a', tokenizer_name: 'b', table: 'c' });
+  });
+
+  it('redacts the value of a secret name-value pair', () => {
+    expect(redact({ fields: [{ name: 'password', value: 'x' }, { name: 'title', value: 'keep' }, { key: 'clientSecret', default_value: 'y' }] })).toEqual({
+      fields: [{ name: 'password', value: REDACTED }, { name: 'title', value: 'keep' }, { key: 'clientSecret', default_value: REDACTED }],
+    });
+  });
+
+  it('past the depth limit the rest is replaced, not sent raw', () => {
+    let deep: Record<string, unknown> = { leaf: 'secret-ish' };
+    for (let i = 0; i < 40; i++) deep = { d: deep };
+    expect(JSON.stringify(redact(deep))).not.toContain('secret-ish');
+    expect(JSON.stringify(redact(deep))).toContain(REDACTED);
+  });
+});
+
+describe('update sets: shapes seen on the real SkyForge MCP', () => {
+  const US_A = '1'.repeat(32);
+  const US_B = '2'.repeat(32);
+  const learn = (ctx: SessionContext, name: string, args: unknown, result: unknown) => buildCapture(call({ name, args, result: text(result) }), ctx);
+
+  it('create makes the new set current, from the result sys_id; work starts with no switch', () => {
+    const ctx = new SessionContext();
+    const e = learn(ctx, 'sn_update_set_manage', { action: 'create', name: 'CC offers' }, { success: true, data: { sys_id: US_A, name: 'CC offers' } });
+    expect(ctx.updateSet).toEqual({ sysId: US_A, name: 'CC offers' });
+    expect(e.updateSet).toEqual({ sysId: US_A, name: 'CC offers' });
+  });
+
+  it('switch uses update_set_id', () => {
+    const ctx = new SessionContext();
+    learn(ctx, 'sn_update_set_manage', { action: 'switch', update_set_id: US_B }, { success: true, data: { sys_id: US_B } });
+    expect(ctx.updateSet).toEqual({ sysId: US_B });
+  });
+
+  it('current is a read that tells the session its current set', () => {
+    const ctx = new SessionContext();
+    const e = learn(ctx, 'sn_update_set_manage', { action: 'current' }, { success: true, data: { sys_id: US_A, name: 'CC offers', state: 'in progress' } });
+    expect(ctx.updateSet).toEqual({ sysId: US_A, name: 'CC offers' });
+    expect(captureEvents(JSON.parse(JSON.stringify(e)) as Record<string, unknown>, 10_000)[0].tool?.access).toBe('read');
+  });
+
+  it('reads (list, preview, export) and other writes (add_artifact, force_capture, ignore) leave the current set alone', () => {
+    const ctx = new SessionContext();
+    learn(ctx, 'sn_update_set_manage', { action: 'switch', update_set_id: US_A }, { success: true });
+    for (const action of ['list', 'preview', 'export', 'add_artifact', 'force_capture', 'ignore']) {
+      const e = learn(ctx, 'sn_update_set_manage', { action, update_set_id: US_B, table: 'sys_script', sys_id: SYS }, { success: true, data: { sys_id: US_B } });
+      expect(ctx.updateSet, action).toEqual({ sysId: US_A });
+      const access = captureEvents(JSON.parse(JSON.stringify(e)) as Record<string, unknown>, 10_000)[0].tool?.access;
+      expect(access, action).toBe(['list', 'preview', 'export'].includes(action) ? 'read' : 'write');
+    }
+  });
+
+  it('sn_ensure_active_update_set makes the named set current, with its sys_id from the result', () => {
+    const ctx = new SessionContext();
+    learn(ctx, 'sn_ensure_active_update_set', { name: 'CC offers', sync_with_user: true }, { success: true, data: { sys_id: US_A, name: 'CC offers', created: false } });
+    expect(ctx.updateSet).toEqual({ sysId: US_A, name: 'CC offers' });
+    const viaGateway = new SessionContext();
+    learn(viaGateway, 'tool_execute', { tool: 'sn_ensure_active_update_set', args: { name: 'CC offers', sync_with_user: true } }, { success: true, tool: 'sn_ensure_active_update_set', result: { success: true, data: { sys_id: US_A } } });
+    expect(viaGateway.updateSet).toEqual({ sysId: US_A, name: 'CC offers' });
+  });
+
+  it('sn_switch_application_scope leaves the current set unknown until a result or a current read names it', () => {
+    for (const create of [true, false]) {
+      const ctx = new SessionContext();
+      learn(ctx, 'sn_update_set_manage', { action: 'switch', update_set_id: US_A }, { success: true });
+      learn(ctx, 'sn_switch_application_scope', { scope: 'x_app', create_update_set: create }, { success: true, data: { scope: 'x_app' } });
+      expect(ctx.updateSet, String(create)).toEqual({ unknown: true });
+      learn(ctx, 'sn_update_set_manage', { action: 'current' }, { success: true, data: { sys_id: US_B, name: 'x_app work' } });
+      expect(ctx.updateSet).toEqual({ sysId: US_B, name: 'x_app work' });
+    }
+    const named = new SessionContext();
+    learn(named, 'sn_switch_application_scope', { scope: 'x_app', create_update_set: true }, { success: true, data: { update_set: { sys_id: US_B, name: 'x_app 1' } } });
+    expect(named.updateSet).toEqual({ sysId: US_B, name: 'x_app 1' });
+  });
+
+  it('a failed change does not move the current set', () => {
+    const ctx = new SessionContext();
+    learn(ctx, 'sn_update_set_manage', { action: 'switch', update_set_id: US_A }, { success: true });
+    learn(ctx, 'sn_ensure_active_update_set', { name: 'Other' }, { success: false, error: 'no' });
+    expect(ctx.updateSet).toEqual({ sysId: US_A });
+  });
+});
+
+describe('poster safety and instance matching', () => {
+  it('a bad port or token never throws, and the event is dropped', async () => {
+    const poster = new HookPoster({ runtimes: () => [{ root: '/p/.livemap/sn', port: 70_000, token: 't', pid: 1 }, { root: '/q/.livemap/sn', port: 1234, token: 'bad\ntoken', pid: 1 }] });
+    poster.send({ x: 1 });
+    await poster.flushed();
+    expect(poster.delivered).toBe(0);
+  });
+
+  it('liveRuntimes skips run files with a bad port or token', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-runs-'));
+    try {
+      const w = (n: string, o: unknown) => fs.writeFileSync(path.join(dir, n), JSON.stringify(o));
+      w('ok.json', { root: '/a/.livemap/sn', port: 4317, token: 'abc', pid: process.pid });
+      w('port.json', { root: '/b/.livemap/sn', port: 0, token: 'abc', pid: process.pid });
+      w('token.json', { root: '/c/.livemap/sn', port: 4318, token: 'a b\r\n', pid: process.pid });
+      fs.writeFileSync(path.join(dir, 'junk.json'), '{');
+      expect(liveRuntimes(dir).map((e) => e.root)).toEqual(['/a/.livemap/sn']);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('only runs that mirror the proxy instance get events; a run that cannot tell gets them too', async () => {
+    const got: number[] = [];
+    const servers = await Promise.all([0, 1, 2].map(async (i) => {
+      const s = http.createServer((_req, res) => { got.push(i); res.writeHead(200).end('{}'); });
+      await new Promise<void>((r) => s.listen(0, '127.0.0.1', () => r()));
+      return s;
+    }));
+    try {
+      const runs = servers.map((s, i) => ({ root: `/r${i}/.livemap/sn`, port: (s.address() as AddressInfo).port, token: 't', pid: process.pid }));
+      const inst: Record<string, string[]> = { '/r0/.livemap/sn': ['devtest'], '/r1/.livemap/sn': ['prod'], '/r2/.livemap/sn': [] };
+      const poster = new HookPoster({ runtimes: () => runs, instance: 'DevTest', instancesOf: (e) => inst[e.root] });
+      poster.send({ x: 1 });
+      await poster.flushed();
+      expect(got.sort()).toEqual([0, 2]);
+    } finally {
+      for (const s of servers) await new Promise<void>((r) => s.close(() => r()));
+    }
+  });
+});
+
+describe('mcp-proxy --timeout', () => {
+  const err = (m: string): never => { throw new Error(m); };
+  it('defaults to 600 s and takes seconds', () => {
+    expect(parseProxyArgs(['--upstream', 'http://x/mcp'], err).timeoutMs).toBe(600_000);
+    expect(parseProxyArgs(['--upstream', 'http://x/mcp', '--timeout', '1200'], err).timeoutMs).toBe(1_200_000);
+    expect(() => parseProxyArgs(['--upstream', 'http://x/mcp', '--timeout', '0'], err)).toThrow(/timeout/);
+    expect(() => parseProxyArgs(['--upstream-cmd', 'x', '--timeout', '5'], err)).toThrow(/only apply/);
   });
 });
