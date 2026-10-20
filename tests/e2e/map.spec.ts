@@ -460,8 +460,11 @@ test('map: a large project stays legible zoomed out; docs folders are Docs; note
   await settledCamera(page);
 
   // Zoomed far out, folders carry overview labels at a readable size on screen.
-  for (let k = 0; k < 8; k++) await page.getByRole('button', { name: 'Zoom out' }).click();
-  await settledCamera(page);
+  // Each click eases for 250 ms; a click mid-ease cuts that step short, so let each one finish.
+  for (let k = 0; k < 16 && (await viewport(page)).zoom >= 0.3; k++) {
+    await page.getByRole('button', { name: 'Zoom out' }).click();
+    await settledCamera(page);
+  }
   expect((await viewport(page)).zoom).toBeLessThan(0.3);
   const labels = page.locator('.ovl-t');
   await expect(labels.first()).toBeVisible();
