@@ -66,6 +66,14 @@ describe('LiveSession flags', () => {
     expect(host.querySelector('.gitlist')?.closest('.sec')?.querySelector('h4')?.textContent).toBe('Recent commits');
   });
 
+  it('orders recent commits by commit time, not arrival', () => {
+    const now = Date.now();
+    const c = (id: number, text: string, at: number) => ({ id, agent: 'git' as const, sessionId: 'Ada', at, type: 'commit' as const, text, merge: false });
+    useStore.getState().apply({ type: 'agentEvents', events: [c(1, 'Newer', now - 1000), c(2, 'Older', now - 90_000)] });
+    act(() => root.render(<LiveSession />));
+    expect([...host.querySelectorAll('.gitrow b')].map(b => b.textContent)).toEqual(['Newer', 'Older']);
+  });
+
   it('shows no commits section without commits', () => {
     act(() => root.render(<LiveSession />));
     expect(host.querySelector('.gitlist')).toBeNull();

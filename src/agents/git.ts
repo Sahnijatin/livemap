@@ -180,7 +180,7 @@ export class GitWatcher extends EventEmitter {
         const [sha, at, author, parents, subject, body = ''] = rec.replace(/^\n/, '').split(FIELD);
         const text = `${subject}\n\n${body}`.trim().slice(0, MAX_TEXT);
         const paths = pathsOf?.get(sha);
-        events.push({ agent: 'git', sessionId: author, at: Number(at) * 1000, seenAt, type: 'commit', text, ...(paths ? { paths } : {}), ...(parents.includes(' ') ? { merge: true } : {}) });
+        events.push({ agent: 'git', sessionId: author, at: Number(at) * 1000, seenAt, type: 'commit', text, ...(paths ? { paths } : {}), merge: parents.includes(' ') });
       }
       this.head = next;
       if (events.length && !this.stopped) this.emit('events', events);

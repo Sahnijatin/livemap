@@ -70,7 +70,7 @@ export interface AgentTool {
 }
 /**
  * `paths` and `seenAt` are set on git commit events: the root-relative files the commit changed and when LiveMap saw it.
- * `merge` marks a commit with more than one parent.
+ * `merge` says whether a commit has more than one parent (absent on events recorded before LiveMap set it).
  */
 export interface AgentEvent { id: number; agent: AgentKind; sessionId: string; at: number; type: AgentEventType; text?: string; tool?: AgentTool; status?: 'working' | 'idle'; subagent?: boolean; paths?: string[]; seenAt?: number; merge?: boolean }
 /** An event as emitted by a normalizer; the hub assigns `id`. */

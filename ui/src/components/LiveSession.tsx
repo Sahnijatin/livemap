@@ -1,7 +1,8 @@
+import { useMemo } from 'react';
 import clsx from 'clsx';
 import type { AgentEvent } from '@shared/types.js';
 import { useStore } from '../store';
-import { activeSession, agentName, ago, isMerge, latestMessage } from '../agents';
+import { activeSession, agentName, ago, commitSubject, isMerge, latestMessage } from '../agents';
 import { layerOf } from '../layers';
 import { baseName, isRecent, useNow } from '../recent';
 import { removeFlag } from '../api';
@@ -45,10 +46,8 @@ function YourFlags() {
 
 /** The latest commits LiveMap saw (merges left out), so work done through git shows even without an agent. */
 function RecentCommits({ events, now }: { events: AgentEvent[]; now: number }) {
-  const commits: AgentEvent[] = [];
-  for (let i = events.length - 1; i >= 0 && commits.length < 5; i--) {
-    if (events[i].type === 'commit' && !isMerge(events[i])) commits.push(events[i]);
-  }
+  // By commit time: a pull brings in older commits after newer local ones.
+  const commits = useMemo(() => events.filter(e => e.type === 'commit' && !isMerge(e)).sort((a, b) => b.at - a.at).slice(0, 5), [events]);
   if (!commits.length) return null;
   return (
     <div className="sec">
@@ -59,7 +58,7 @@ function RecentCommits({ events, now }: { events: AgentEvent[]; now: number }) {
           return (
             <div className="gitrow fi" key={c.id} title={c.text}>
               <span className="gic"><GitIcon /></span>
-              <b>{(c.text ?? '').split('\n')[0] || 'Commit'}</b>
+              <b>{commitSubject(c) || 'Commit'}</b>
               <small>{[c.sessionId, n !== undefined && `${n} file${n === 1 ? '' : 's'}`, ago(c.at, now)].filter(Boolean).join(' · ')}</small>
             </div>
           );

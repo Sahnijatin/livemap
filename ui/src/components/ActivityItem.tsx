@@ -3,7 +3,7 @@ import clsx from 'clsx';
 import type { ApiRoute } from '@shared/domain.js';
 import type { AgentEvent, ChangeSummary, FileModel } from '@shared/types.js';
 import { useStore } from '../store';
-import { agentName, isMerge } from '../agents';
+import { agentName, commitSubject, isMerge } from '../agents';
 import { changeFacts } from '../changes';
 import { layerOf } from '../layers';
 import { isNarrow } from '../media';
@@ -205,13 +205,12 @@ function Change({ change: c }: { change: ChangeSummary }) {
   );
 }
 
-function Commit({ ev }: { ev: AgentEvent }) {
+function Commit({ ev, by }: { ev: AgentEvent; by?: string }) {
   const text = ev.text ?? '';
-  const nl = text.indexOf('\n');
-  const subject = nl < 0 ? text : text.slice(0, nl);
-  const body = nl < 0 ? '' : text.slice(nl).trim();
-  // A merge only brings in work already shown: one quiet line.
-  if (isMerge(ev)) return <div className="fi f-git merge" title={text}><GitIcon /><span>{subject}</span></div>;
+  const subject = commitSubject(ev);
+  const body = text.slice(subject.length).trim();
+  // A merge brings in work shown as commits of its own: one quiet line.
+  if (isMerge(ev)) return <div className="fi f-git merge" title={text}><GitIcon /><span>{subject || 'Merge'}</span>{by && <small>Merged by {by}</small>}</div>;
   return (
     <div className="fi f-git">
       <span className="gic"><GitIcon /></span>
@@ -235,7 +234,7 @@ function Row({ item, live, working }: RowProps) {
     case 'thinking': return <Thinking ev={ev} />;
     case 'tool_start':
     case 'tool_end': return <Tool ev={ev} end={item.end} working={working} />;
-    case 'commit': return <Commit ev={ev} />;
+    case 'commit': return <Commit ev={ev} by={item.by} />;
     default: return null;
   }
 }
@@ -245,4 +244,4 @@ export const ActivityItem = memo(Row, (a, b) =>
   a.live === b.live && a.working === b.working && a.item.t === b.item.t &&
   (a.item.t === 'change'
     ? a.item.change === (b.item as typeof a.item).change
-    : a.item.ev === (b.item as typeof a.item).ev && a.item.end === (b.item as typeof a.item).end));
+    : a.item.ev === (b.item as typeof a.item).ev && a.item.end === (b.item as typeof a.item).end && a.item.by === (b.item as typeof a.item).by));

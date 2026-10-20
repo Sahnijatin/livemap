@@ -3,7 +3,7 @@ import { isMerge } from './agents';
 
 /** One row of the Activity feed: an agent event (a tool start carries its end) or a file change. */
 export type FeedItem =
-  | { t: 'event'; key: string; at: number; sid: string | null; agent: AgentKind | null; ev: AgentEvent; end?: AgentEvent }
+  | { t: 'event'; key: string; at: number; sid: string | null; agent: AgentKind | null; ev: AgentEvent; end?: AgentEvent; by?: string }
   | { t: 'change'; key: string; at: number; sid: string | null; agent: AgentKind | null; change: ChangeSummary };
 
 /** Consecutive items from one session, shown under a single turn header. */
@@ -42,8 +42,9 @@ export function groupFeed(items: FeedItem[]): FeedGroup[] {
   const groups: FeedGroup[] = [];
   let cur: FeedGroup | null = null;
   for (const it of items) {
-    // A merge closes the run of commits it brought in, whoever merged it.
+    // A merge right after commits joins their group, naming its merger when someone else merged.
     const merge = cur?.agent === 'git' && it.t === 'event' && it.agent === 'git' && isMerge(it.ev);
+    if (merge && cur!.sid !== it.sid) (it as Extract<FeedItem, { t: 'event' }>).by = it.sid ?? undefined;
     if (!cur || (cur.sid !== it.sid && !merge)) {
       cur = { key: `${it.sid ?? '-'}:${it.key}`, sid: it.sid, agent: it.agent, items: [] };
       groups.push(cur);

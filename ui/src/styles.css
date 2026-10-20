@@ -546,6 +546,7 @@
   .f-git.merge { padding:2px 14px; gap:8px; align-items:center; background:none; border:0; font-size:12.5px; color:var(--ink3); }
   .f-git.merge svg { width:13px; height:13px; flex-shrink:0; color:var(--pink); opacity:.75; }
   .f-git.merge span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .f-git.merge small { flex-shrink:0; }
   .feed-empty { display:flex; flex-direction:column; align-items:center; text-align:center; gap:6px; padding:34px 20px; border-radius:22px; border:1px dashed var(--hair2); color:var(--ink2); }
   .feed-empty b { font:600 15px var(--display); color:var(--ink); }
   .feed-empty p { margin:0; max-width:44ch; font-size:13.5px; text-wrap:pretty; }

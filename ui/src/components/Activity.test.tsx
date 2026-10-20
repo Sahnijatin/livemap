@@ -268,13 +268,29 @@ describe('Activity', () => {
     expect(rows[1].textContent).toContain('Merge pull request #12 from acme/login');
   });
 
-  it('keeps a merge by another author under the commits it brought in, without a header of its own', () => {
+  it('folds a merge by another author into the commit group before it, naming the merger', () => {
     mountWith([
       event({ id: 3031, at: T, type: 'commit', agent: 'git', sessionId: 'Ben', text: 'Add login form' }),
       event({ id: 3032, at: T + 10, type: 'commit', agent: 'git', sessionId: 'Ada', text: 'Merge pull request #12 from acme/login', merge: true }),
     ]);
     expect(host.querySelectorAll('.turn')).toHaveLength(1);
     expect(host.querySelector('.turn-h')?.textContent).toContain('Ben');
+    expect(host.querySelector('.f-git.merge')?.textContent).toContain('Merged by Ada');
+  });
+
+  it('names no merger when the group author merged; an empty merge subject reads "Merge"', () => {
+    mountWith([
+      event({ id: 3041, at: T, type: 'commit', agent: 'git', sessionId: 'Ben', text: 'Add login form', merge: false }),
+      event({ id: 3042, at: T + 10, type: 'commit', agent: 'git', sessionId: 'Ben', text: '', merge: true }),
+    ]);
+    const m = host.querySelector('.f-git.merge')!;
+    expect(m.textContent).toBe('Merge');
+  });
+
+  it('a single-parent commit titled like a merge stays a full commit card', () => {
+    mountWith([event({ id: 3051, at: T, type: 'commit', agent: 'git', sessionId: 'Ben', text: "Merge branch 'x' changes\n\nBody", merge: false })]);
+    expect(host.querySelector('.f-git')?.classList.contains('merge')).toBe(false);
+    expect(host.querySelector('.f-git p')?.textContent).toBe('Body');
   });
 
   it('I3: an unhooked session is never shown paused', () => {

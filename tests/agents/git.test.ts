@@ -184,7 +184,17 @@ describe('GitWatcher', () => {
     git(d, 'merge', '-q', '--no-ff', '-m', 'Bring in the feature', 'feat');
     await until(() => got.some((e) => e.text === 'Bring in the feature'));
     expect(got.find((e) => e.text === 'Bring in the feature')!.merge).toBe(true);
-    expect(got.find((e) => e.text === 'feature file')!.merge).toBeUndefined();
+    expect(got.find((e) => e.text === 'feature file')!.merge).toBe(false);
+  });
+
+  it('a single-parent commit titled like a merge is not a merge', async () => {
+    const d = initRepo();
+    commit(d, 'seed');
+    const { w, got } = watch(d);
+    await w.start();
+    commit(d, "Merge branch 'x' changes");
+    await until(() => got.length >= 1);
+    expect(got[0].merge).toBe(false);
   });
 
   it('caps text at 2000 chars', async () => {
