@@ -26,7 +26,7 @@ export const BLOCKED_OUTPUT = 'Blocked by LiveMap';
 /** A started tool with no end and no other session activity for this long no longer keeps the session working. */
 export const STALE_TOOL_MS = 10 * 60_000;
 
-const DISPLAY: Record<AgentKind, string> = { 'claude-code': 'Claude Code', codex: 'Codex', cursor: 'Cursor', git: 'Git', other: 'Agent' };
+const DISPLAY: Record<AgentKind, string> = { 'claude-code': 'Claude Code', codex: 'Codex', cursor: 'Cursor', git: 'Git', 'mcp-client': 'MCP client', other: 'Agent' };
 
 export interface AgentHubOptions {
   idleMs?: number;
