@@ -123,12 +123,26 @@ export interface PollState {
 }
 export const statePath = (root: string, scope: string): string => path.join(root, `${scope}.state.json`);
 
-/** The poller's state for `scope`, or null when there is none (or it is another scope's). */
+/**
+ * The poller's state for `scope`, or null when there is none (or it is another scope's). A `state.json` from an
+ * earlier build is taken over once (its cursors and skew) and then removed.
+ */
 export function readPollState(root: string, scope: string): PollState | null {
-  try {
-    const s = JSON.parse(fs.readFileSync(statePath(root, scope), 'utf8')) as PollState;
-    return s.version === 1 && s.scope === scope ? s : null;
-  } catch { return null; }
+  const read = (file: string): PollState | null => {
+    try {
+      const s = JSON.parse(fs.readFileSync(file, 'utf8')) as PollState;
+      return s.version === 1 && s.scope === scope ? s : null;
+    } catch { return null; }
+  };
+  const current = read(statePath(root, scope));
+  if (current) return current;
+  const legacy = path.join(root, 'state.json');
+  const old = read(legacy);
+  if (!old) return null;
+  const moved: PollState = { version: 1, scope, cursors: old.cursors ?? {}, ...(old.seen ? { seen: old.seen } : {}), ...(old.skewMs !== undefined ? { skewMs: old.skewMs } : {}) };
+  writePollState(root, moved);
+  try { fs.unlinkSync(legacy); } catch { /* already gone */ }
+  return moved;
 }
 
 export function writePollState(root: string, state: PollState): void {

@@ -193,7 +193,7 @@ export async function runServiceNow(argv: string[], core: CoreHooks): Promise<vo
     const live = new NexusClient({ url: args.nexus, instance: args.instance, attempts: 1, timeoutMs: 30_000 });
     const poller = new ScopePoller(live, {
       instance: manifest.instance || instance, scope, inventory: pulled.inventory, full: pulled.full, facts, setNames, pulledAt: manifest.pulledAt,
-    }, readPollState(root, scope.scope) ?? initialState(scope.scope, changeRows, pulled.inventory), {
+    }, readPollState(root, scope.scope) ?? initialState(scope.scope, changeRows, pulled.inventory, undefined, pulled.full), {
       root,
       intervalMs: args.pollSec * 1000,
       onStatus: st => {

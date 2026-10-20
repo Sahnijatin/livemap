@@ -55,8 +55,10 @@ async function setup(extraUpdateXml: Record<string, string>[] = [], mockOpts: Pa
   const skews: number[] = [];
   const warnings: string[] = [];
   const firstPoll: string[] = [];
-  const poller = new ScopePoller(live, { instance: 'inmorphisdemo3', scope, inventory: pulled.inventory, full: pulled.full, facts, setNames: names }, initialState(scope.scope, rows, pulled.inventory), {
-    root, intervalMs: 30, onStatus: s => statuses.push(s), onSkew: ms => skews.push(ms), warn: w => warnings.push(w), onFirstPoll: l => firstPoll.push(...l),
+  // Instance time, as the poller sees it: just after the saves these tests make.
+  const clock = { t: Date.parse('2026-10-20T12:00:30Z') };
+  const poller = new ScopePoller(live, { instance: 'inmorphisdemo3', scope, inventory: pulled.inventory, full: pulled.full, facts, setNames: names }, initialState(scope.scope, rows, pulled.inventory, undefined, pulled.full), {
+    root, intervalMs: 30, onStatus: s => statuses.push(s), onSkew: ms => skews.push(ms), warn: w => warnings.push(w), onFirstPoll: l => firstPoll.push(...l), now: () => clock.t,
   });
   open.push({ close: async () => poller.stop() });
   const fileOf = (sysId: string) => readManifest(root, scope.scope)!.records[sysId]?.path;
@@ -68,7 +70,7 @@ async function setup(extraUpdateXml: Record<string, string>[] = [], mockOpts: Pa
     m.live.rows.sys_metadata = [...(m.live.rows.sys_metadata ?? []).filter(r => r.sys_id !== rec.sys_id),
       { sys_id: rec.sys_id, sys_class_name: table, sys_name: rec.sys_name, sys_updated_on: on, sys_updated_by: 'dev.one', sys_scope: scope.sys_id, sys_mod_count: mod }];
   };
-  return { m, scope, pulled, root, poller, statuses, skews, fileOf, read, facts, warnings, firstPoll, save };
+  return { m, scope, pulled, root, poller, statuses, skews, fileOf, read, facts, warnings, firstPoll, save, clock };
 }
 
 describe('change facts in the mirror', () => {
@@ -109,9 +111,12 @@ describe('live polling', () => {
     m.calls.length = 0;
     const first = await poller.tick(); // the first poll also reads deletes
     expect(first).toMatchObject({ changed: [], deleted: [], queries: 3, written: null });
-    // It says what it asked: from a minute before each cursor, ordered by time then sys_id.
+    // It says what it asked, sys_metadata first, ordered by time then sys_id (verified live, as is the UTC
+    // reading of the literal). The pull's last change is long past, so no late row can still come: the floor
+    // is the cursor itself.
     expect(firstPoll).toHaveLength(3);
-    expect(firstPoll[0]).toMatch(/^sys_update_xml: application=\w+\^sys_updated_on>=2026-07-16 16:57:14\^ORDERBYsys_updated_on\^ORDERBYsys_id -> \d+ rows$/);
+    expect(firstPoll[0]).toMatch(/^sys_metadata: sys_scope=\w+\^sys_updated_on>=\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\^ORDERBYsys_updated_on\^ORDERBYsys_id -> \d+ rows$/);
+    expect(firstPoll[1]).toMatch(/^sys_update_xml: application=\w+\^sys_updated_on>=2026-07-16 16:58:14\^ORDERBYsys_updated_on\^ORDERBYsys_id -> 5 rows$/); // the cursor second, already applied
     const idle = await poller.tick();
     expect(idle).toMatchObject({ changed: [], deleted: [], queries: 2, written: null });
     expect(new Set(m.calls.map(c => c.inner ?? c.tool))).toEqual(new Set(['sn_query_table']));
@@ -136,6 +141,38 @@ describe('live polling', () => {
     m.live.rows.sys_update_xml.push(xmlRow(11, 'sp_widget', widget.sys_id, '2026-10-20 12:00:05', { update_set: SET2 }));
     expect((await poller.tick()).changed).toEqual([widget.sys_id]);
     expect(JSON.parse(read(fileOf(widget.sys_id)!)).sys_update_set).toEqual({ value: SET2, display_value: 'Fixes' });
+  });
+
+  it('reads from a minute before the cursor until the instance clock is past that minute', async () => {
+    const { m, poller, save, clock } = await setup();
+    save(90, 'sys_script', rule, '2026-10-20 12:00:05');
+    await poller.tick();
+    const xmlQueries = () => m.calls.map(c => (c.args.args ?? c.args) as { table?: string; query?: string }).filter(a => a.table === 'sys_update_xml').map(a => a.query);
+    m.calls.length = 0;
+    await poller.tick();
+    expect(xmlQueries().at(-1)).toContain('sys_updated_on>=2026-10-20 11:59:05^');
+    clock.t = Date.parse('2026-10-20T12:01:30Z'); // a minute past the cursor, plus the 5 s skew margin
+    await poller.tick();
+    expect(xmlQueries().at(-1)).toContain('sys_updated_on>=2026-10-20 12:00:05^');
+    expect((await poller.tick()).changed).toEqual([]);
+  });
+
+  it('reads sys_metadata before sys_update_xml, so a save committing between the two keeps its update set', async () => {
+    const { m, poller, fileOf, read, save } = await setup();
+    // The save commits just after sys_metadata is read and before sys_update_xml is.
+    let once = false;
+    m.live.onQuery = table => {
+      if (table !== 'sys_update_xml' || once) return;
+      once = true;
+      save(95, 'sys_script', rule, '2026-10-20 12:00:20', { script: '// between the reads' });
+    };
+    await poller.tick();
+    // The row is seen; the record (already mirrored) is read in full with its update set.
+    expect(readHeader(read(fileOf(rule.sys_id)!))).toMatchObject({ updateSet: SET, updateSetName: 'Card refresh' });
+    m.live.onQuery = undefined;
+    // The next poll sees the sys_metadata row too, and the update set stays.
+    await poller.tick();
+    expect(readHeader(read(fileOf(rule.sys_id)!))).toMatchObject({ updateSet: SET, updatedOn: '2026-10-20 12:00:20' });
   });
 
   it('applies a record saved twice in one second, though its update_xml row is rewritten in place', async () => {
@@ -353,7 +390,29 @@ describe('reading the SkyForge log as it grows', () => {
     // Rotated: read again from the top.
     fs.writeFileSync(f, `${write('13:00:00')}\n`);
     expect((await tail.update())?.calls.map(c => [c.line, c.host])).toEqual([[1, undefined]]);
+    // Rotated to a new file that is already longer than the offset: the new identity resets it all the same.
+    const moved = `${f}.1`;
+    fs.renameSync(f, moved);
+    fs.writeFileSync(f, `${write('14:00:00')}\n${write('14:00:01')}\n${write('14:00:02')}\n`);
+    expect((await tail.update())?.calls.map(c => c.line)).toEqual([1, 2, 3]);
+    // Bytes, not characters: a multi-byte character before the line end keeps the offset right.
+    fs.appendFileSync(f, `${write('14:00:03')}, name=Café\n`);
+    fs.appendFileSync(f, `${write('14:00:04')}\n`);
+    expect((await tail.update())?.calls.map(c => c.line)).toEqual([1, 2, 3, 4, 5]);
     expect(await new LogTail(path.join(dir, 'missing.log')).update()).toBeNull();
+  });
+});
+
+describe('the poll state file', () => {
+  it('takes over a state.json from an earlier build once, then removes it', () => {
+    const root = snRoot(dir);
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, 'state.json'), JSON.stringify({ version: 1, scope: 'x_app', cursors: { updateXml: '2026-10-20 12:00:00' }, skewMs: 7000 }));
+    expect(readPollState(root, 'x_other')).toBeNull();
+    expect(readPollState(root, 'x_app')).toMatchObject({ scope: 'x_app', cursors: { updateXml: '2026-10-20 12:00:00' }, skewMs: 7000 });
+    expect(fs.existsSync(path.join(root, 'state.json'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'x_app.state.json'))).toBe(true);
+    expect(readPollState(root, 'x_app')?.skewMs).toBe(7000);
   });
 });
 
