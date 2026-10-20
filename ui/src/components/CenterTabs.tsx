@@ -7,7 +7,7 @@ import { NARROW_QUERY, useMedia } from '../media';
 import { INERT } from '../panels';
 import { Activity } from './Activity';
 import { RewoundBanner } from './Rewound';
-import { ApiIcon, MapIcon, PulseIcon, SchemaIcon, StackIcon } from './icons';
+import { ApiIcon, AskIcon, MapIcon, PulseIcon, SchemaIcon, StackIcon } from './icons';
 
 // Map and Schema (React Flow, ELK, framer-motion), API and Stack load on first open, so Activity's first paint does not pay for them.
 const MapView = lazy(() => import('../map/MapView'));
@@ -16,6 +16,7 @@ const Timeline = lazy(() => import('./Timeline').then(m => ({ default: m.Timelin
 const SchemaView = lazy(() => import('./SchemaView'));
 const ApiView = lazy(() => import('./ApiView').then(m => ({ default: m.ApiView })));
 const StackView = lazy(() => import('./StackView').then(m => ({ default: m.StackView })));
+const AskView = lazy(() => import('./Ask'));
 
 /** Placeholder cards while a lazy view loads. */
 function ViewSkeleton() {
@@ -32,6 +33,7 @@ const META: Record<CenterTab, { label: string; icon: ReactNode }> = {
   schema: { label: 'Schema', icon: <SchemaIcon /> },
   api: { label: 'API', icon: <ApiIcon /> },
   stack: { label: 'Stack', icon: <StackIcon /> },
+  ask: { label: 'Ask', icon: <AskIcon /> },
 };
 
 /** Tab switch: cross-fade plus an 8 px slide in the direction of travel. Matches `.c-view.in/.leave` in styles.css. */
@@ -55,18 +57,19 @@ function Count({ value }: { value: number }) {
   return <b className={clsx('cnt', bump && 'bump')}>{value.toLocaleString()}</b>;
 }
 
-const SWAPPED: CenterTab[] = ['map', 'schema', 'api', 'stack'];
+const SWAPPED: CenterTab[] = ['map', 'schema', 'api', 'stack', 'ask'];
 
 function view(t: CenterTab, tools: HTMLDivElement | null): ReactNode {
   switch (t) {
     case 'map': return <Suspense fallback={<ViewSkeleton />}><MapView tools={tools} /></Suspense>;
     case 'schema': return <Suspense fallback={<ViewSkeleton />}><SchemaView /></Suspense>;
     case 'api': return <Suspense fallback={<ViewSkeleton />}><ApiView /></Suspense>;
+    case 'ask': return <Suspense fallback={<ViewSkeleton />}><AskView /></Suspense>;
     default: return <Suspense fallback={<ViewSkeleton />}><StackView /></Suspense>;
   }
 }
 
-/** Center pane: a segmented control (Activity, Map, Schema, API, Stack) over the active view; the Map adds its tools to the head. */
+/** Center pane: a segmented control (Activity, Map, Schema, API, Stack, Ask) over the active view; the Map adds its tools to the head. */
 export function CenterTabs() {
   const tab = useStore(s => s.tab);
   const rewound = useStore(s => s.rewound !== null);

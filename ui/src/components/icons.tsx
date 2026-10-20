@@ -142,6 +142,11 @@ export const ApiIcon = () => (
   <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
 );
 
+/** A speech bubble with a spark: asking the AI about the project. */
+export const AskIcon = () => (
+  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><path d="M20 12.5a7.5 7.5 0 0 1-11 6.6L4 20l1.1-4.2A7.5 7.5 0 1 1 20 12.5z" /><path d="M12.5 8.5l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z" /></svg>
+);
+
 export const StackIcon = () => (
   <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z" /><path d="M3 13l9 5 9-5" /></svg>
 );

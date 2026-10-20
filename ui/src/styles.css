@@ -235,6 +235,46 @@
   .ai-wait { display:flex; flex-direction:column; gap:7px; padding:4px 0 2px; }
   .ai-wait i { height:10px; border-radius:6px; background:linear-gradient(90deg,var(--hair2) 0%,var(--card) 50%,var(--hair2) 100%); background-size:250% 100%; animation:shimmer 1.6s linear infinite; }
   .ai-wait i:last-child { width:62%; }
+  .ai-why { margin:0; color:var(--ink2); font-size:13px; }
+  .ai-acts { display:flex; flex-wrap:wrap; gap:14px; margin-top:8px; }
+  /* The Ask view: a question thread over a composer. */
+  .askv { flex:1; min-height:0; display:flex; flex-direction:column; container-type:inline-size; }
+  .ask-thread { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; padding:18px 18px 8px; display:flex; flex-direction:column; gap:18px; }
+  .ask-thread > * { width:100%; max-width:760px; margin:0 auto; }
+  .ask-empty { padding:28px 0 8px; }
+  .ask-empty b { display:block; font-size:17px; font-weight:600; margin-bottom:6px; }
+  .ask-empty b span { color:var(--purple); }
+  .ask-empty p { margin:0 0 14px; max-width:560px; }
+  .ask-ex { display:flex; flex-direction:column; align-items:flex-start; gap:8px; }
+  .ask-ex .chip { font:13px var(--sans); padding:7px 12px; text-align:left; }
+  .ask-ex .chip span { white-space:normal; }
+  .ask-turn { display:flex; flex-direction:column; gap:8px; }
+  .ask-q { align-self:flex-end; max-width:85%; background:var(--ink); color:var(--bg); border-radius:16px 16px 4px 16px; padding:8px 13px; font-size:13.5px; overflow-wrap:anywhere; white-space:pre-wrap; }
+  .ask-q small { opacity:.7; font-size:11.5px; }
+  .ask-a { border-radius:16px; padding:12px 14px; font-size:13.5px; line-height:1.55; background:linear-gradient(135deg,var(--blue-t),var(--purple-t)); overflow-wrap:anywhere; }
+  .ask-a p { margin:0 0 8px; } .ask-a p:last-child { margin-bottom:0; }
+  .ask-a .ask-h { font-weight:600; }
+  .ask-a ul { margin:0 0 8px; padding-left:20px; } .ask-a li { margin:2px 0; }
+  .ask-a code, .ask-ref { font:12px var(--mono); background:var(--card); border-radius:6px; padding:1px 5px; }
+  .ask-ref { border:1px solid var(--hair2); color:var(--blue); cursor:pointer; }
+  .ask-ref:hover { border-color:var(--blue); }
+  .ask-a pre { margin:0 0 8px; background:var(--card); border:1px solid var(--hair); border-radius:10px; padding:8px 10px; font:11.8px/1.55 var(--mono); overflow:auto; }
+  .ask-a.err { background:var(--red-t); }
+  .ask-a.err b { color:var(--red); }
+  .ask-a.err p { margin:6px 0 0; }
+  .ask-in { padding:8px 18px 14px; border-top:1px solid var(--hair); }
+  .ask-in > * { max-width:760px; margin:0 auto; }
+  .ask-scope { display:flex; align-items:center; gap:12px; min-height:26px; margin-bottom:6px; font-size:12.5px; }
+  .ask-scope .chip { font:12px var(--sans); padding:3px 10px; }
+  .ask-clear { margin-left:auto; }
+  .ask-box { display:flex; gap:8px; align-items:flex-end; background:var(--card); border:1px solid var(--hair2); border-radius:16px; padding:6px 6px 6px 12px; }
+  .ask-box:focus-within { border-color:var(--blue); }
+  .ask-box textarea { flex:1; min-width:0; border:0; outline:0; resize:none; background:transparent; color:var(--ink); font:14px/1.45 var(--sans); padding:6px 0; max-height:160px; }
+  .ask-send { border:0; border-radius:12px; padding:8px 14px; background:var(--ink); color:var(--bg); font:600 13px var(--sans); cursor:pointer; flex-shrink:0; }
+  .ask-send:disabled { opacity:.45; cursor:default; }
+  .ask-off { max-width:560px; margin:40px auto; padding:0 18px; color:var(--ink2); font-size:13.5px; line-height:1.55; }
+  .ask-off b { display:block; color:var(--ink); font-size:16px; margin-bottom:6px; }
+  .ask-off pre { background:var(--card); border:1px solid var(--hair); border-radius:10px; padding:10px 12px; font:12px var(--mono); margin:10px 0 6px; overflow:auto; }
   .sec h4 { margin:0 0 8px; font:600 11px var(--sans); letter-spacing:.07em; text-transform:uppercase; color:var(--ink3); }
   .symlist { background:var(--card); border-radius:14px; border:1px solid var(--hair); overflow:hidden; }
   .sym { display:flex; width:100%; border:0; border-bottom:1px solid var(--hair); background:transparent; text-align:left; gap:9px; align-items:center; padding:8px 12px; font:12px var(--mono); cursor:pointer; transition:background .2s; }
@@ -375,6 +415,8 @@
   /* Full labels need about 500 px of head; tighter tabs fit them in 414 (the default widths at 1080 px leave 418).
      Below that (a center near its 420 px minimum) only the selected tab keeps its label; below 380 none does. */
   @container c-head (max-width:539.98px) { .tabs [role=tab] { padding:6px; gap:4px; } }
+  /* Ask is the sixth tab: in a tight head it shows its icon only (its label stays the tooltip), so the other five keep theirs. */
+  @container c-head (max-width:579.98px) { .tabs [data-tab="ask"]:not([aria-selected="true"]) .tl { display:none; } }
   @container c-head (max-width:413.98px) {
     .tabs [role=tab] { padding:6px 10px; gap:6px; }
     .tabs [role=tab]:not([aria-selected="true"]) .tl { display:none; }

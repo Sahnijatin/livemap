@@ -133,11 +133,11 @@ describe('Inspector: In plain English', () => {
     expect(summaryCalls.filter(u => u.includes('src%2Fa.ts'))).toHaveLength(1);
   });
 
-  it('stops shimmering after 15 s and shows the fallback', async () => {
+  it('stops shimmering after 60 s and shows the fallback', async () => {
     open('src/a.ts', { status: READY, intent: 'Add a helper' });
     await act(async () => {});
     expect(block()!.querySelector('[aria-busy="true"]')).not.toBeNull();
-    act(() => { vi.advanceTimersByTime(14_000); });
+    act(() => { vi.advanceTimersByTime(59_000); });
     expect(block()!.querySelector('[aria-busy="true"]')).not.toBeNull();
     act(() => { vi.advanceTimersByTime(1_100); });
     expect(block()!.querySelector('[aria-busy="true"]')).toBeNull();
@@ -185,6 +185,22 @@ describe('Inspector: In plain English', () => {
     }));
     expect(block()!.querySelector('[aria-busy="true"]')).toBeNull();
     expect(block()!.querySelector('.ai-src')!.textContent).toBe("In the agent's words");
+  });
+
+  it('a failed summary stays visible with the reason and a retry, instead of vanishing', async () => {
+    open('src/a.ts', { status: READY });
+    await act(async () => {});
+    expect(block()!.querySelector('[aria-busy="true"]')).not.toBeNull();
+    act(() => useStore.getState().apply({ type: 'summaryStatus', status: { ...READY, state: 'error', error: '404 not found' } }));
+    expect(block()!.querySelector('[aria-busy="true"]')).toBeNull();
+    expect(block()!.textContent).toContain('Could not write a summary: 404 not found.');
+    expect(block()!.textContent).toContain('Ask about this file');
+    const retry = [...block()!.querySelectorAll('button')].find(b => b.textContent === 'Try again')!;
+    await act(async () => { retry.click(); });
+    expect(summaryCalls).toHaveLength(2);
+    // The server queues it and says it is working: the shimmer is back.
+    act(() => useStore.getState().apply({ type: 'summaryStatus', status: { ...READY, state: 'working' } }));
+    expect(block()!.querySelector('[aria-busy="true"]')).not.toBeNull();
   });
 
   it('uses a cached summary from a 200 answer', async () => {

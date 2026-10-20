@@ -32,6 +32,11 @@ class FakeSummarizer extends EventEmitter {
     this.changes.push(change);
     return `Changed ${change.path}`;
   }
+  asked: { question: string; context: string }[] = [];
+  async ask(question: string, context: string): Promise<{ answer: string } | { error: string }> {
+    this.asked.push({ question, context });
+    return question === 'fail' ? { error: '401 unauthorized' } : { answer: `Answer to ${question}` };
+  }
   setStatus(s: Partial<SummaryStatus>): void {
     this.st = { ...this.st, ...s };
     this.emit('status', this.st);
@@ -330,5 +335,45 @@ describe('server: summaries in history', () => {
     await waitFor(async () => (await get('/api/history/messages?from=1&to=1000')).body.some((r: any) => r.seq === clearSeq));
     const after = (await get(`/api/history/state?seq=${clearSeq}`)).body;
     expect(after.summaries.files).toEqual({});
+  });
+});
+
+function post(pathname: string, body: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: any }> {
+  const data = JSON.stringify(body);
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: srv!.port, path: `${pathname}?t=${srv!.token}`, method: 'POST', headers: { 'content-type': 'application/json', ...headers } }, res => {
+      const chunks: Buffer[] = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode!, body: JSON.parse(Buffer.concat(chunks).toString('utf8') || 'null') }));
+    });
+    req.on('error', reject);
+    req.end(data);
+  });
+}
+
+describe('POST /api/ask', () => {
+  it('answers from a context with the focused file and its connections, never a secret file', async () => {
+    put('src/c.ts', "import { alpha } from './a';\nexport const gamma = alpha();\n");
+    await boot();
+    const r = await post('/api/ask', { question: 'what does alpha do?', path: 'src/a.ts' });
+    expect(r).toEqual({ status: 200, body: { answer: 'Answer to what does alpha do?' } });
+    const { context } = fake.asked[0];
+    expect(context).toContain('## Focus: src/a.ts');
+    expect(context).toContain('export function alpha()');
+    expect(context).toContain('imported by: src/c.ts');
+    expect(context).not.toContain('abc123');
+  });
+
+  it('reports provider errors, bad input, cross-site posts and AI being off', async () => {
+    await boot();
+    expect(await post('/api/ask', { question: 'fail' })).toEqual({ status: 502, body: { error: '401 unauthorized' } });
+    expect((await post('/api/ask', { question: '  ' })).status).toBe(400);
+    expect((await post('/api/ask', { question: 'x' }, { origin: 'http://evil.example' })).status).toBe(403);
+    expect((await get('/api/ask')).status).toBe(405);
+    await srv!.close();
+    srv = null;
+    await watcher.stop();
+    await boot({ summarizer: undefined });
+    expect((await post('/api/ask', { question: 'x' })).status).toBe(503);
   });
 });

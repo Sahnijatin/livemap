@@ -50,7 +50,8 @@ LiveMap treats `.env` files (and variants such as `.env.local`) and credential f
 Summaries are off until you turn them on (see [the guide](guide.md#ai-summaries)). When on, LiveMap sends to your configured provider only:
 
 - for a file: its path, language, symbol names and signatures, and at most its first 300 lines;
-- for a change: its path, the names of added, removed and changed symbols, routes, tables and dependencies, and the diff of the change: the changed lines plus up to 3 unchanged lines around each change.
+- for a change: its path, the names of added, removed and changed symbols, routes, tables and dependencies, and the diff of the change: the changed lines plus up to 3 unchanged lines around each change;
+- for a question in the Ask tab: the question, the project name, detected stack, routes, tables, the paths and top-level symbol names of up to 400 files, the imports and used-by links of the file asked about and of the most relevant files, the last 10 changes with their summaries or intents, and the text of the file asked about (up to 12,000 characters) plus up to 4 relevant files (up to 5,000 characters each), about 36,000 characters in all.
 
 Secret files, binary files and files over 1 MB are never sent.
 

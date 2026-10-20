@@ -31,7 +31,8 @@ function request(cfg: SummaryConfig, p: ProviderPrompt): { url: string; headers:
     return {
       url: `${base ?? 'https://api.openai.com'}/v1/chat/completions`,
       headers: { ...json, authorization: `Bearer ${cfg.apiKey ?? ''}` },
-      body: { model: cfg.model, max_tokens: p.maxTokens, messages },
+      // Current OpenAI models refuse `max_tokens`; `max_completion_tokens` works for every chat model.
+      body: { model: cfg.model, max_completion_tokens: p.maxTokens, messages },
     };
   }
   return {
@@ -43,7 +44,10 @@ function request(cfg: SummaryConfig, p: ProviderPrompt): { url: string; headers:
 
 function parse(cfg: SummaryConfig, j: Json): ProviderResult {
   if (cfg.provider === 'anthropic') {
-    return { text: j?.content?.[0]?.text, inputTokens: num(j?.usage?.input_tokens), outputTokens: num(j?.usage?.output_tokens) } as ProviderResult;
+    // The reply can open with a non-text block (thinking): join the text blocks.
+    const blocks: Json[] = Array.isArray(j?.content) ? j.content : [];
+    const texts = blocks.filter(b => typeof b?.text === 'string' && (b.type === undefined || b.type === 'text')).map(b => b.text as string);
+    return { text: texts.length ? texts.join('') : undefined, inputTokens: num(j?.usage?.input_tokens), outputTokens: num(j?.usage?.output_tokens) } as ProviderResult;
   }
   if (cfg.provider === 'openai') {
     return { text: j?.choices?.[0]?.message?.content, inputTokens: num(j?.usage?.prompt_tokens), outputTokens: num(j?.usage?.completion_tokens) } as ProviderResult;
@@ -73,5 +77,7 @@ export async function callProvider(
     throw new ProviderError(res.status, false, 'invalid response');
   }
   if (typeof parsed.text !== 'string') throw new ProviderError(res.status, false, 'invalid response');
+  // A reasoning model can spend the whole budget before it writes anything: say so rather than fail silently.
+  if (!parsed.text.trim()) throw new ProviderError(0, false, 'empty response from the model');
   return parsed;
 }
