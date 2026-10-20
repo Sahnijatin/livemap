@@ -437,7 +437,10 @@ test('history: timeline, rewind, read-only past, play, restarts, summaries and e
     await expect(card(page, '.env').locator('.lead')).toHaveCount(0);
 
     await card(page, SERVICE).locator('.ch').click();
-    const ai = inspector(page).locator('.ai');
+    // The live pane only. For 180 ms after a selection the previous pane (.env here) stays on screen, inert and
+    // aria-hidden, and it can hold its own "In plain English" block with the agent's words. A strict locator that
+    // matches both fails at once instead of retrying.
+    const ai = inspector(page).locator('.ins-scroll:not([aria-hidden]) .ai');
     await expect(ai).toContainText('In plain English');
     await expect(ai.locator('p')).toHaveText(FILE_TEXT, { timeout: 10_000 });
     await shots(page, 'summaries-inspector', { phone: openInspector(page) });

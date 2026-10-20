@@ -5,8 +5,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { DomainIndex, Table } from '@shared/domain.js';
 import { useStore } from '../store';
 import { emptyDomain } from '../fixtures';
-import { LAYOUT_TIMEOUT, NODE_W, relationLinks, type ElkRun } from '../layout/schemaLayout';
-import { CAP, SchemaView, TURN_DEBOUNCE, pickTables } from './SchemaView';
+import { LARGE, LAYOUT_TIMEOUT, NODE_W, relationLinks, type ElkRun } from '../layout/schemaLayout';
+import { CAP, SchemaView, TURN_DEBOUNCE, forgetListChoice, pickTables } from './SchemaView';
+import { useSlideOvers } from '../panels';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -301,6 +302,229 @@ describe('SchemaView palette focus (tableFocus)', () => {
     expect(wrap(`cap${CAP + 4}`)).not.toBeNull();
     expect(wrap(`cap${CAP + 4}`)!.classList.contains('pulse')).toBe(true);
     expect(Math.abs(centerX(`cap${CAP + 4}`))).toBeLessThan(1);
+  });
+});
+
+describe('SchemaView table list', () => {
+  /** `n` tables: Hub, Kid0 to Kid{n-3} linking to Hub (the first via `hubId`, a column search finds), and Lone. */
+  function family(n: number, tag: string): Table[] {
+    const hub: Table = { ...bare(`${tag}Hub`), fields: [user.fields[0], { name: 'email', type: 'String', file: F }] };
+    const kids = Array.from({ length: n - 2 }, (_, i): Table => ({
+      ...bare(`${tag}Kid${i}`),
+      fields: [user.fields[0], { name: i === 0 ? 'hubId' : 'parentId', type: 'String', fk: { table: hub.table, field: 'id' }, file: F }],
+      relations: [{ field: i === 0 ? 'hubId' : 'parentId', to: hub.table, many: false, via: 'fk' }],
+    }));
+    return [hub, ...kids, bare(`${tag}Lone`)];
+  }
+  const list = () => host.querySelector<HTMLElement>('.sv-list');
+  const rows = () => [...host.querySelectorAll<HTMLButtonElement>('.sv-row')];
+  const names = () => rows().map(r => r.querySelector('.sv-rn')!.textContent);
+  const search = () => host.querySelector<HTMLInputElement>('.sv-list input[type=search]')!;
+  const wrap = (k: string) => host.querySelector<HTMLElement>(`.react-flow__node[data-id="${k}"]`)!;
+  async function type(v: string) {
+    const input = search();
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    await act(async () => { set.call(input, v); input.dispatchEvent(new Event('input', { bubbles: true })); });
+  }
+  const esc = (el: Element) => act(() => { el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  /** Presses Esc; returns whether the view left the event alone (not default-prevented). */
+  const escFree = (el: Element): boolean => {
+    let free = true;
+    act(() => { free = el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
+    return free;
+  };
+  const rowOf = (k: string) => rows().find(r => r.dataset.table === k)!;
+  beforeEach(() => forgetListChoice());
+  afterEach(() => vi.unstubAllGlobals());
+
+  it(`is open for over ${LARGE} tables, listing each by name with column and relation counts`, async () => {
+    await mount(family(LARGE + 4, 'Lst'));
+    expect(list()).not.toBeNull();
+    expect(rows()).toHaveLength(LARGE + 4);
+    expect(names()).toEqual([...names()].sort((a, b) => a!.localeCompare(b!)));
+    const hub = rows().find(r => r.dataset.table === 'lsthub')!;
+    expect(hub.querySelector('.sv-cols')?.textContent).toBe('2');
+    expect(hub.querySelector('.sv-rels')?.textContent).toBe(String(LARGE + 2));
+    expect(hub.getAttribute('aria-label')).toBe(`LstHub, 2 columns, ${LARGE + 2} relations`);
+    expect(host.querySelector('.sv-count')?.textContent).toBe(`${LARGE + 4} tables`);
+  });
+
+  it('is closed for a small schema until the Tables button opens it', async () => {
+    await mount(family(6, 'Sml'));
+    expect(list()).toBeNull();
+    const open = [...host.querySelectorAll('button')].find(b => b.textContent === 'Tables')!;
+    await act(async () => open.click());
+    expect(rows()).toHaveLength(6);
+  });
+
+  it('filters by table or column name, shows the matching columns, and Esc clears the search', async () => {
+    await mount(family(LARGE + 4, 'Flt'));
+    await type('lone');
+    expect(names()).toEqual(['FltLone']);
+    expect(host.querySelector('.sv-count')?.textContent).toBe(`1 of ${LARGE + 4} tables`);
+    await type('hubid');
+    expect(names()).toEqual(['FltKid0']);
+    expect(rows()[0].querySelector('.sv-hit')?.textContent).toBe('hubId');
+    await type('nothing here');
+    expect(rows()).toHaveLength(0);
+    expect(list()!.textContent).toContain('No tables match “nothing here”.');
+    await esc(search());
+    expect(search().value).toBe('');
+    expect(rows()).toHaveLength(LARGE + 4);
+  });
+
+  it('clicking a table focuses it: marked and centered, its relations lit, the rest dimmed, until Esc', async () => {
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: q.includes('prefers-reduced-motion'), media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }));
+    await mount(family(LARGE + 4, 'Pick'));
+    const row = rows().find(r => r.dataset.table === 'pickkid3')!;
+    await act(async () => row.click());
+    await settleLayout();
+    expect(row.getAttribute('aria-current')).toBe('true');
+    expect(wrap('pickkid3').classList.contains('focus')).toBe(true);
+    expect(wrap('pickkid3').classList.contains('hl')).toBe(true);
+    expect(wrap('pickhub').classList.contains('hl')).toBe(true);
+    expect(wrap('picklone').classList.contains('dim')).toBe(true);
+    const m = /translate\(([-\d.e]+)px,\s*([-\d.e]+)px\)\s*scale\(([-\d.e]+)\)/.exec(host.querySelector<HTMLElement>('.react-flow__viewport')!.style.transform)!;
+    expect(Math.abs((posOf('pickkid3')!.x + NODE_W / 2) * Number(m[3]) + Number(m[1]) - 250)).toBeLessThan(1);
+    // Hovering another table (a tap on a phone) lights it too, without dimming the focused one.
+    await act(async () => { wrap('picklone').dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body })); });
+    expect(wrap('picklone').classList.contains('hl')).toBe(true);
+    expect(wrap('pickkid3').classList.contains('dim')).toBe(false);
+    await act(async () => { wrap('picklone').dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body })); });
+    await esc(search());
+    expect(wrap('pickkid3').classList.contains('focus')).toBe(false);
+    expect(wrap('picklone').classList.contains('dim')).toBe(false);
+  });
+
+  it('Esc clears the search, then the focus, and only then reaches an open side panel', async () => {
+    const Slides = () => { useSlideOvers(); return null; };
+    await mount(family(LARGE + 4, 'Esc'));
+    await act(async () => root.render(<><Slides /><SchemaView run={rowRun} /></>));
+    await settleLayout();
+    await act(async () => rowOf('esckid1').click());
+    await settleLayout();
+    act(() => useStore.getState().setPanel('inspector'));
+    await type('kid');
+    act(() => search().focus());
+    expect(escFree(search())).toBe(false);
+    expect(search().value).toBe('');
+    expect(useStore.getState().panel).toBe('inspector');
+    expect(escFree(search())).toBe(false);
+    expect(wrap('esckid1').classList.contains('focus')).toBe(false);
+    expect(useStore.getState().panel).toBe('inspector');
+    expect(escFree(search())).toBe(true);
+    expect(useStore.getState().panel).toBeNull();
+  });
+
+  it('Esc with focus on the page body clears the focus, and yields to an open slide-over panel', async () => {
+    const Slides = () => { useSlideOvers(); return null; };
+    await mount(family(LARGE + 4, 'Body'));
+    await act(async () => root.render(<><Slides /><SchemaView run={rowRun} /></>));
+    await settleLayout();
+    await act(async () => rowOf('bodykid1').click());
+    await settleLayout();
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    expect(escFree(document.body)).toBe(false);
+    expect(wrap('bodykid1').classList.contains('focus')).toBe(false);
+    expect(escFree(document.body)).toBe(true);
+    await act(async () => rowOf('bodykid1').click());
+    await settleLayout();
+    act(() => useStore.getState().setPanel('inspector'));
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    escFree(document.body);
+    expect(useStore.getState().panel).toBeNull();
+    expect(wrap('bodykid1').classList.contains('focus')).toBe(true);
+  });
+
+  it('lists at most 300 rows, with a line asking to refine the search', async () => {
+    await mount(Array.from({ length: 400 }, (_, i) => bare(`Many${String(i).padStart(3, '0')}`)));
+    expect(rows()).toHaveLength(300);
+    expect(host.querySelector('.sv-more')?.textContent).toBe('100 more, refine the search');
+    await type('many01');
+    expect(rows()).toHaveLength(10);
+    expect(host.querySelector('.sv-more')).toBeNull();
+  });
+
+  it(`a focused table that "Show top ${CAP}" hides is no longer focused`, async () => {
+    const many = Array.from({ length: CAP + 5 }, (_, i) => bare(`Top${i}`));
+    await mount(many);
+    const k = `top${CAP + 4}`;
+    await act(async () => rowOf(k).click());
+    await settleLayout();
+    await settleLayout();
+    expect(wrap(k).classList.contains('focus')).toBe(true);
+    const top = [...host.querySelectorAll('button')].find(b => b.textContent === `Show top ${CAP}`)!;
+    await act(async () => top.click());
+    await settleLayout();
+    expect(rowOf(k).getAttribute('aria-current')).toBeNull();
+  });
+
+  it(`opens once, when the schema grows past ${LARGE} tables, and then leaves it to the user`, async () => {
+    const t = family(LARGE + 4, 'Grow');
+    await mount(t.slice(0, 6));
+    expect(list()).toBeNull();
+    await update(t);
+    expect(list()).not.toBeNull();
+    await act(async () => host.querySelector<HTMLButtonElement>('.sv-close')!.click());
+    await update(t.slice(0, 6));
+    await update(t);
+    expect(list()).toBeNull();
+  });
+
+  it(`stays closed past ${LARGE} tables when the user already closed it`, async () => {
+    const t = family(LARGE + 4, 'Chose');
+    await mount(t.slice(0, 6));
+    await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent === 'Tables')!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('.sv-close')!.click());
+    await update(t);
+    expect(list()).toBeNull();
+  });
+
+  it(`on a narrow pane, growing past ${LARGE} tables does not cover the diagram`, async () => {
+    const realRect = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      return this.classList.contains('sv-canvas') ? ({ x: 0, y: 0, top: 0, left: 0, right: 390, bottom: 700, width: 390, height: 700 } as DOMRect) : realRect.call(this);
+    };
+    try {
+      const t = family(LARGE + 4, 'NGrow');
+      await mount(t.slice(0, 6));
+      await update(t);
+      expect(list()).toBeNull();
+    } finally {
+      Element.prototype.getBoundingClientRect = realRect;
+    }
+  });
+
+  it('on a narrow pane any focus shows the canvas, and the list is the main view again next time', async () => {
+    const realRect = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      return this.classList.contains('sv-canvas') ? ({ x: 0, y: 0, top: 0, left: 0, right: 390, bottom: 700, width: 390, height: 700 } as DOMRect) : realRect.call(this);
+    };
+    try {
+      const again = async () => {
+        act(() => root.unmount());
+        root = createRoot(host);
+        await act(async () => root.render(<SchemaView run={rowRun} />));
+        await settleLayout();
+      };
+      await mount(family(LARGE + 4, 'Nar'));
+      expect(list()!.classList.contains('over')).toBe(true);
+      // The palette.
+      await act(async () => useStore.getState().focusTable('narkid2'));
+      await settleLayout();
+      expect(list()).toBeNull();
+      expect(wrap('narkid2').classList.contains('focus')).toBe(true);
+      await again();
+      expect(list()).not.toBeNull();
+      // The list itself.
+      await act(async () => rowOf('narkid3').click());
+      await settleLayout();
+      expect(list()).toBeNull();
+      await again();
+      expect(list()).not.toBeNull();
+    } finally {
+      Element.prototype.getBoundingClientRect = realRect;
+    }
   });
 });
 

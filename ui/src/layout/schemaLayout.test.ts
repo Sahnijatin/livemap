@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import ELK from 'elkjs/lib/elk.bundled.js';
 import type { Table } from '@shared/domain.js';
-import { elkGraph, fitZoom, pickLayout, layoutDirection, layoutTables, nodeHeight, settle, tableKey, workerRun, LAYOUT_TIMEOUT, NARROW_PANE, NODE_W, type ElkRun, type Pos } from './schemaLayout';
+import { elkGraph, fitZoom, pickLayout, layoutDirection, layoutTables, mainGroup, nodeHeight, relationLinks, schemaGroups, settle, shownLinks, tableKey, workerRun, LARGE, LAYOUT_TIMEOUT, NARROW_PANE, NODE_W, type ElkRun, type Pos } from './schemaLayout';
 
 /** Slower CI runners scale wall-clock budgets (LIVEMAP_TIME_SCALE, set by CI on macOS and Windows). */
 const TIME_SCALE = Number(process.env.LIVEMAP_TIME_SCALE) || 1;
@@ -178,6 +178,166 @@ describe('layoutTables', () => {
     expect(performance.now() - t0).toBeLessThan(3000 * TIME_SCALE);
     expect(pos.size).toBe(150);
     expectNoOverlap(tables, pos);
+  });
+});
+
+describe('large schemas (grouped layout)', () => {
+  /** An `org` hub with `sats` satellites that link only to it. */
+  const hubbed = (sats: number) => [
+    table('Org', 3),
+    ...Array.from({ length: sats }, (_, i) => table(`Sat${i}`, 3, [{ field: 'orgId', to: 'org' }])),
+  ];
+
+  it('splits tables into components without hub links, hub groups with their satellites, and loose tables', () => {
+    const tables = [
+      ...hubbed(8),
+      table('A', 3),
+      table('B', 3, [{ field: 'aId', to: 'a' }]),
+      table('C', 3, [{ field: 'bId', to: 'b' }, { field: 'orgId', to: 'org' }]),
+      table('D', 3),
+      table('E', 3),
+    ];
+    const g = schemaGroups(tables);
+    expect(g.comps).toEqual([['a', 'b', 'c']]);
+    expect(g.hubs).toEqual([['org', ...Array.from({ length: 8 }, (_, i) => `sat${i}`)]]);
+    expect(g.loose).toEqual(['d', 'e']);
+  });
+
+  /** Two hubs, `families` linked families of six, eighteen satellites and forty loose tables (120 by default). */
+  function big(families = 10, tag = ''): Table[] {
+    const out: Table[] = [table('User', 6), table('Org', 5)];
+    for (let f = 0; f < families; f++) {
+      for (let i = 0; i < 6; i++) {
+        const rel = [];
+        if (i > 0) rel.push({ field: 'parentId', to: `f${f}t${Math.floor((i - 1) / 2)}` });
+        rel.push({ field: 'userId', to: i % 2 ? 'user' : 'org' });
+        out.push(table(`F${f}T${i}`, 3 + ((f + i) % 9), rel));
+      }
+    }
+    for (let i = 0; i < 18; i++) out.push(table(`Sat${i}`, 4, [{ field: 'userId', to: i % 3 ? 'user' : 'org' }]));
+    for (let i = 0; i < 40; i++) out.push(table(`Loose${tag}${i}`, 2 + (i % 7)));
+    return out;
+  }
+  const bounds = (tables: Table[], pos: Map<string, Pos>) => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const t of tables) {
+      const p = pos.get(tableKey(t))!;
+      x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x + NODE_W); y1 = Math.max(y1, p.y + nodeHeight(t));
+    }
+    return { x0, y0, x1, y1 };
+  };
+
+  it(`packs over ${LARGE} tables densely, groups apart, without overlap`, async () => {
+    const tables = big();
+    expect(tables.length).toBeGreaterThan(LARGE);
+    const pos = await layoutTables(tables, new Map(), run, 'RIGHT');
+    expectNoOverlap(tables, pos);
+    const b = bounds(tables, pos);
+    const cards = tables.reduce((s, t) => s + NODE_W * nodeHeight(t), 0);
+    // Cards cover at least a quarter of the drawing (one ELK run over everything covers under a tenth).
+    expect(cards / ((b.x1 - b.x0) * (b.y1 - b.y0))).toBeGreaterThan(0.25);
+    // Each group keeps to its own box: no other table's card starts inside it.
+    const g = schemaGroups(tables);
+    const byKey = new Map(tables.map(t => [tableKey(t), t]));
+    for (const group of [...g.comps, ...g.hubs, g.loose]) {
+      const box = bounds(group.map(k => byKey.get(k)!), pos);
+      for (const t of tables) {
+        if (group.includes(tableKey(t))) continue;
+        const p = pos.get(tableKey(t))!;
+        const inside = p.x >= box.x0 && p.x < box.x1 && p.y >= box.y0 && p.y < box.y1;
+        expect(inside, `${t.name} inside the group of ${group[0]}`).toBe(false);
+      }
+    }
+  });
+
+  it(`over ${LARGE} tables shows links inside a group (a component, or a hub and its tables), and the active table's others`, () => {
+    // C belongs to the A-B-C component; its link to the hub leaves that group.
+    const tables = [...hubbed(LARGE), table('A', 3), table('B', 3, [{ field: 'aId', to: 'a' }]), table('C', 3, [{ field: 'bId', to: 'b' }, { field: 'orgId', to: 'org' }])];
+    const links = relationLinks(tables);
+    const ids = (ls: typeof links) => ls.map(l => `${l.from}>${l.to}`);
+    const inside = [...Array.from({ length: LARGE }, (_, i) => `sat${i}>org`), 'b>a', 'c>b'];
+    expect(ids(shownLinks(tables, links, null))).toEqual(inside);
+    expect(ids(shownLinks(tables, links, 'org'))).toEqual([...inside, 'c>org']);
+    expect(ids(shownLinks(tables, links, 'c'))).toEqual([...inside, 'c>org']);
+    // The caller's groups are used as given.
+    expect(ids(shownLinks(tables, links, null, schemaGroups(tables, links)))).toEqual(inside);
+    const small = hubbed(4);
+    expect(shownLinks(small, relationLinks(small), null)).toHaveLength(4);
+  });
+
+  it('the first view goes to the biggest linked group, and to loose tables only when nothing is linked', () => {
+    expect(mainGroup({ comps: [['a', 'b']], hubs: [['h', 's1', 's2']], loose: ['l1', 'l2', 'l3', 'l4'] })).toEqual(['h', 's1', 's2']);
+    expect(mainGroup({ comps: [['a', 'b', 'c', 'd']], hubs: [['h', 's1']], loose: [] })).toEqual(['a', 'b', 'c', 'd']);
+    expect(mainGroup({ comps: [], hubs: [], loose: ['l1', 'l2'] })).toEqual(['l1', 'l2']);
+  });
+
+  /** The group of the placed card nearest to `k` (by card centers), as a group's first key. */
+  function nearestGroup(tables: Table[], pos: Map<string, Pos>, k: string): string {
+    const g = schemaGroups(tables);
+    const c = (key: string) => ({ x: pos.get(key)!.x + NODE_W / 2, y: pos.get(key)!.y + 60 });
+    const me = c(k);
+    let best = '';
+    let d = Infinity;
+    for (const t of tables) {
+      const o = tableKey(t);
+      if (o === k) continue;
+      const q = c(o);
+      const dd = Math.hypot(q.x - me.x, q.y - me.y);
+      if (dd < d) { d = dd; best = o; }
+    }
+    return [...g.comps, ...g.hubs, g.loose].find(x => x.includes(best))![0];
+  }
+
+  it('"Show all" from 150 to about 1,000 tables lays out within the time budget, without overlap', async () => {
+    const all = big(157);
+    expect(all.length).toBe(1002);
+    const first = await layoutTables(all.slice(0, 150), new Map(), run, 'RIGHT');
+    const t0 = performance.now();
+    const pos = await layoutTables(all, first, run, 'RIGHT');
+    expect(performance.now() - t0).toBeLessThan(3000 * TIME_SCALE);
+    expect(pos.size).toBe(1002);
+    expectNoOverlap(all, pos);
+  });
+
+  it('a new group with nothing placed yet goes below the drawing, at its left edge', async () => {
+    const tables = big();
+    const first = await layoutTables(tables, new Map(), run, 'RIGHT');
+    const b = bounds(tables, first);
+    const pair = [table('NewA', 3), table('NewB', 3, [{ field: 'aId', to: 'newa' }])];
+    const next = await layoutTables([...tables, ...pair], first, run, 'RIGHT');
+    expectNoOverlap([...tables, ...pair], next);
+    const ys = pair.map(t => next.get(tableKey(t))!.y);
+    for (const y of ys) expect(y).toBeGreaterThan(b.y1);
+    expect(Math.min(...pair.map(t => next.get(tableKey(t))!.x))).toBe(b.x0);
+  });
+
+  it('a new table joins its own group: a hub\'s table lands in the hub\'s block, a linked one in its component', async () => {
+    const tables = big();
+    const first = await layoutTables(tables, new Map(), run, 'RIGHT');
+    const invoices = table('Invoices', 4, [{ field: 'userId', to: 'user' }]);
+    const withInvoices = [...tables, invoices];
+    const second = await layoutTables(withInvoices, first, run, 'RIGHT');
+    expectNoOverlap(withInvoices, second);
+    expect(nearestGroup(withInvoices, second, 'invoices')).toBe('user');
+    // Linked to the hub first, but it belongs with F2's family.
+    const extra = table('F2Extra', 3, [{ field: 'userId', to: 'user' }, { field: 'parentId', to: 'f2t1' }]);
+    const withExtra = [...withInvoices, extra];
+    const third = await layoutTables(withExtra, second, run, 'RIGHT');
+    expectNoOverlap(withExtra, third);
+    expect(nearestGroup(withExtra, third, 'f2extra')).toBe('f2t0');
+  });
+
+  it('runs ELK only over linked components when large, and over every table when small', async () => {
+    const seen: number[] = [];
+    const counting: ElkRun = async g => { seen.push(g.children!.length); return run(g); };
+    const tables = big();
+    await layoutTables(tables, new Map(), counting);
+    expect(seen).toEqual([60]);
+    seen.length = 0;
+    const small = [...hubbed(8), table('Loose', 2)];
+    expect(small.length).toBeLessThanOrEqual(LARGE);
+    await layoutTables(small, new Map(), counting);
+    expect(seen).toEqual([small.length]);
   });
 });
 
