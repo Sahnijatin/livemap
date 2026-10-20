@@ -928,7 +928,7 @@
   .ap-route .ap-t { flex-shrink:1; }
   .ap.ap-route { flex-direction:column; align-items:stretch; justify-content:center; gap:2px; }
   .ap-pick { display:flex; align-items:center; gap:8px; min-width:0; padding:0; border:0; outline:0; background:none; color:inherit; font:inherit; text-align:left; cursor:pointer; }
-  .ap-file { align-self:flex-start; max-width:100%; padding:0 1px; border:0; border-radius:4px; background:none; color:var(--ink3); font:var(--ap-file,10.5px)/13px var(--mono); overflow:hidden; text-overflow:ellipsis; cursor:pointer; transition:color .2s; }
+  .ap-file { align-self:flex-start; max-width:100%; padding:0 1px; border:0; border-radius:4px; background:none; color:var(--ink3); font:var(--ap-file)/13px var(--mono); overflow:hidden; text-overflow:ellipsis; cursor:pointer; transition:color .2s; }
   .ap-file:hover { color:var(--blue); text-decoration:underline; text-underline-offset:2px; }
   .ap-file:focus-visible { outline:2px solid var(--blue); outline-offset:1px; }
   .ap-route:has(.ap-pick:focus-visible) { box-shadow:0 0 0 2px var(--blue),0 0 0 6px var(--blue-t),var(--shadow-lg); }

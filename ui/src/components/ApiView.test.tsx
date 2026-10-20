@@ -6,6 +6,7 @@ import type { ApiRoute, DomainIndex, Table } from '@shared/domain.js';
 import type { UsedByEntry } from '@shared/protocol.js';
 import type { FileModel } from '@shared/types.js';
 import { useStore } from '../store';
+import { useSlideOvers } from '../panels';
 import { emptyDomain, file, sym } from '../fixtures';
 
 vi.mock('../highlight', () => ({ MAX_HIGHLIGHT_LINES: 5000, highlight: async () => null }));
@@ -231,7 +232,7 @@ describe('ApiView', () => {
     expect(document.activeElement).toBe(btn);
   });
 
-  it('arrow keys walk from the search box through group headers and route rows, Enter picks', () => {
+  it('arrow keys walk from the search box through group headers, route rows and their files, Enter picks', () => {
     mount();
     // Groups: /api (the lone users route folds into it), then /api/orders.
     key(filter(), 'ArrowDown');
@@ -240,7 +241,10 @@ describe('ApiView', () => {
     const users = document.activeElement as HTMLElement;
     expect(users.closest('.ap-route')).toBe(routeCard('GET', '/api/users'));
     key(users, 'ArrowDown');
+    expect(document.activeElement).toBe(routeCard('GET', '/api/users').querySelector('.ap-file'));
+    key(document.activeElement!, 'ArrowDown');
     expect(document.activeElement).toBe(groups()[1]);
+    key(document.activeElement!, 'ArrowUp');
     key(document.activeElement!, 'ArrowUp');
     expect(document.activeElement).toBe(users);
     act(() => users.click());
@@ -252,10 +256,11 @@ describe('ApiView', () => {
     mount(d);
     const f = routeCard('GET', '/api/users').querySelector<HTMLButtonElement>('.ap-file')!;
     expect(f.textContent).toBe(USR);
-    expect(f.title).toContain(`${USR}:9`);
+    expect(f.title).toBe('');
+    expect(f.closest<HTMLElement>('.ap-route')!.title).toContain(`${USR}:9`);
     const long = routeCard('GET', '/api/reports/monthly').querySelector<HTMLButtonElement>('.ap-file')!;
     expect(long.textContent).toContain('…');
-    expect(long.title).toContain('server/modules/billing/reports/routes/monthly-reports.ts');
+    expect(long.closest<HTMLElement>('.ap-route')!.title).toContain('server/modules/billing/reports/routes/monthly-reports.ts');
     act(() => f.click());
     expect(useStore.getState().reveal).toMatchObject({ path: USR, line: 9 });
     expect(host.querySelectorAll('.ap.picked').length).toBe(0);
@@ -275,6 +280,27 @@ describe('ApiView', () => {
     expect(cards('handler').map(c => c.querySelector('.ap-t')?.textContent)).not.toContain('listUsers');
     act(() => users.click());
     expect(routeCard('GET', '/api/users')).toBeTruthy();
+  });
+
+  it('the search matches one field at a time: method, path or file', () => {
+    mount();
+    type('get /api/users');
+    expect(cards('route')).toHaveLength(0);
+    type('GET');
+    expect(cards('route')).toHaveLength(2);
+  });
+
+  it('pages and screens filter by method, path or file too', () => {
+    mount();
+    const sec = (h: string) => [...host.querySelectorAll<HTMLElement>('.ap-sec')].find(x => x.querySelector('h4')?.textContent?.startsWith(h));
+    type('app/about');
+    expect(sec('Pages')?.textContent).toContain('/about');
+    expect(sec('Screens')).toBeUndefined();
+    type('screen');
+    expect(sec('Screens')?.textContent).toContain('Settings');
+    // The framework is not one of the fields.
+    type('react-navigation');
+    expect(sec('Screens')).toBeUndefined();
   });
 
   it('the search matches the handler file, and Esc clears it', () => {
@@ -325,6 +351,19 @@ describe('ApiView', () => {
     expect(get.classList.contains('picked')).toBe(false);
     // Nothing left to clear: Esc goes on to the panels.
     expect(key(document.body, 'Escape')).toBe(true);
+  });
+
+  it('Esc from the body yields to an open slide-over panel: the panel closes, the pick stays', () => {
+    const Slides = () => { useSlideOvers(); return null; };
+    hello();
+    act(() => root.render(<><Slides /><ApiView /></>));
+    const get = routeCard('GET', '/api/orders');
+    pick(get);
+    act(() => useStore.getState().setPanel('inspector'));
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    key(document.body, 'Escape');
+    expect(useStore.getState().panel).toBeNull();
+    expect(get.classList.contains('picked')).toBe(true);
   });
 
   it('Esc in another input outside the view leaves the pick alone', () => {
@@ -455,6 +494,23 @@ describe('ApiView', () => {
     expect(cards('route').map(c => c.querySelector('.ap-t')?.textContent)).toEqual(['/api/b/r0', '/api/b/r1', '/api/b/r2']);
     expect(head('/api/b').querySelector('.ap-gn')?.textContent).toBe('3');
     expect(host.querySelector('.ap-cap')).toBeNull();
+  });
+
+  it(`shows the cap bar when exactly ${CAP} open routes leave a collapsed group past the cap`, () => {
+    const mk = (g: string, n: number) => Array.from({ length: n }, (_, i) => api('GET', `/api/${g}/r${String(i).padStart(4, '0')}`, 'getOrders', 18));
+    const d = domain();
+    d.routes = [...mk('a', CAP), ...mk('b', 3)];
+    mount(d);
+    const head = (k: string) => groups().find(x => x.querySelector('.ap-gk')?.textContent === k)!;
+    act(() => head('/api/a').click());
+    act(() => head('/api/b').click());
+    act(() => head('/api/a').click());
+    expect(cards('route')).toHaveLength(CAP);
+    expect(head('/api/b')).toBeUndefined();
+    const bar = host.querySelector('.ap-cap')!;
+    expect(bar).toBeTruthy();
+    act(() => bar.querySelector('button')!.click());
+    expect(head('/api/b').getAttribute('aria-expanded')).toBe('false');
   });
 
   it('900 routes: groups past the cap stay out even when collapsed', () => {

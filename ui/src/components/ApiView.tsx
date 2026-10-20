@@ -3,6 +3,7 @@ import clsx from 'clsx';
 import type { ApiRoute, DomainIndex } from '@shared/domain.js';
 import { routeBaseKey, useStore } from '../store';
 import { isNarrow } from '../media';
+import { peeking } from '../panels';
 import { baseName } from '../recent';
 import {
   LANE_KINDS, buildFlows, flowGraph, groupFlows, handlerKey, midTrunc, placeLanes, routeKey, serviceKey, tableKey,
@@ -51,15 +52,17 @@ const firstShown = new Map<string, number>();
 const byPath = (a: Flow, b: Flow): number =>
   a.route.fullPath < b.route.fullPath ? -1 : a.route.fullPath > b.route.fullPath ? 1 : a.route.method.localeCompare(b.route.method) || a.route.line - b.route.line;
 
-const matches = (q: string, ...parts: string[]): boolean => !q || parts.join(' ').toLowerCase().includes(q);
-const routeMatches = (q: string, r: ApiRoute): boolean => matches(q, r.method, r.fullPath, r.file);
+/** A search matches one field at a time: method, path or file. */
+const routeMatches = (q: string, r: ApiRoute): boolean => !q || [r.method, r.fullPath, r.file].some(p => p.toLowerCase().includes(q));
 
 /**
- * Groups in drawing order under a search, how many routes match, and how many of those are in open groups. Up to `cap` routes of open
- * groups are drawn; once it is reached no further group is drawn, collapsed headers included (the cap bar covers them).
+ * Groups in drawing order under a search, how many routes match, how many of those are in open groups, and whether the
+ * cap hid anything. Up to `cap` routes of open groups are drawn; once it is reached no further group is drawn, collapsed
+ * headers included (the cap bar covers them).
  */
-function drawGroups(all: FlowGroup[], q: string, collapsed: ReadonlySet<string>, cap: number): { rows: GroupRow[]; matched: number; drawable: number } {
+function drawGroups(all: FlowGroup[], q: string, collapsed: ReadonlySet<string>, cap: number): { rows: GroupRow[]; matched: number; drawable: number; hidden: boolean } {
   let room = cap;
+  let hidden = false;
   let matched = 0;
   let drawable = 0;
   const rows: GroupRow[] = [];
@@ -69,12 +72,13 @@ function drawGroups(all: FlowGroup[], q: string, collapsed: ReadonlySet<string>,
     matched += flows.length;
     const open = !collapsed.has(gr.key);
     if (open) drawable += flows.length;
-    if (room <= 0) continue;
+    if (room <= 0) { hidden = true; continue; }
     const drawn = open ? flows.slice(0, room) : [];
+    if (drawn.length < (open ? flows.length : 0)) hidden = true;
     room -= drawn.length;
     rows.push({ key: gr.key, flows: drawn, count: flows.length, open });
   }
-  return { rows, matched, drawable };
+  return { rows, matched, drawable, hidden };
 }
 
 /** A card's label, subtitle, icon and what clicking it opens; everything a lane card shows. */
@@ -178,7 +182,7 @@ const RouteCard = memo(function RouteCard({ d, focus, picked, chars, style, onHo
         <span className="ap-t">{d.label}</span>
         {d.isNew && <i className="newtag">NEW</i>}
       </button>
-      <button type="button" className="ap-file" title={d.title} onClick={e => { e.stopPropagation(); d.go(); }}>
+      <button type="button" className="ap-file" onClick={e => { e.stopPropagation(); d.go(); }}>
         {midTrunc(d.sub!, chars)}
       </button>
     </div>
@@ -244,7 +248,7 @@ function useTrace(g: FlowGraph, hot: string | null, picked: string | null): { ac
 interface ViewProps { g: FlowGraph; groups: GroupRow[]; cards: Map<string, CardData>; hot: string | null; picked: string | null; onHot: (k: string | null) => void; onPick: (k: string) => void; onToggle: (k: string) => void; width: number }
 
 function Lanes({ g, groups, cards, hot, picked, onHot, onPick, onToggle, width }: ViewProps) {
-  const geo = laneGeometry(width);
+  const geo = useMemo(() => laneGeometry(width), [width]);
   // Route rows under their group headers; the other lanes follow the routes.
   const { heads, routeY, end } = useMemo(() => {
     const heads = new Map<string, number>();
@@ -261,14 +265,13 @@ function Lanes({ g, groups, cards, hot, picked, onHot, onPick, onToggle, width }
   const { y, height } = useMemo(() => placeLanes(g, PITCH, routeY), [g, routeY]);
   // Card styles change only with layout, so hover re-renders only cards whose focus changed (memo).
   const styles = useMemo(() => {
-    const lg = laneGeometry(width);
     const m = new Map<string, CSSProperties>();
     LANE_KINDS.forEach((_, li) => {
-      for (const n of g.lanes[li]) m.set(n.key, { width: lg.w[li], transform: `translate(${lg.x[li]}px,${y.get(n.key)}px)` });
+      for (const n of g.lanes[li]) m.set(n.key, { width: geo.w[li], transform: `translate(${geo.x[li]}px,${y.get(n.key)}px)` });
     });
-    for (const [k, at] of heads) m.set(`g:${k}`, { width: lg.w[0], transform: `translate(${lg.x[0]}px,${at}px)` });
+    for (const [k, at] of heads) m.set(`g:${k}`, { width: geo.w[0], transform: `translate(${geo.x[0]}px,${at}px)` });
     return m;
-  }, [g, y, heads, width]);
+  }, [g, y, heads, geo]);
   const lane = (k: LaneKind) => LANE_KINDS.indexOf(k);
 
   // Tracing: a route follows its flow; any other card follows every flow through it.
@@ -402,7 +405,9 @@ function Flows({ domain }: { domain: DomainIndex }) {
     const keys = new Set(allGroups.map(gr => gr.key));
     if ([...collapsed].some(k => !keys.has(k))) setCollapsed(new Set([...collapsed].filter(k => keys.has(k))));
   }, [allGroups, collapsed]);
-  const { rows: groups, matched, drawable } = useMemo(() => drawGroups(allGroups, needle, collapsed, all ? Infinity : CAP), [allGroups, needle, collapsed, all]);
+  const { rows: groups, matched, drawable, hidden } = useMemo(() => drawGroups(allGroups, needle, collapsed, all ? Infinity : CAP), [allGroups, needle, collapsed, all]);
+  // The cap bar shows whenever the cap hides a route or group (or would, with "Show all" on).
+  const capHides = useMemo(() => (all ? drawGroups(allGroups, needle, collapsed, CAP).hidden : hidden), [all, allGroups, needle, collapsed, hidden]);
   const shown = useMemo(() => groups.flatMap(gr => gr.flows), [groups]);
   const g = useMemo(() => flowGraph(shown, domain.dataRefs), [shown, domain.dataRefs]);
   const cards = useMemo(() => cardData(shown, domain, base), [shown, domain, base]);
@@ -411,8 +416,8 @@ function Flows({ domain }: { domain: DomainIndex }) {
   useEffect(() => { if (hot && !liveHot) setHot(null); }, [hot, liveHot]);
   // Nor stay picked: a pick hidden by the search or a collapse is dropped, never brought back later.
   useEffect(() => { if (picked && !g.nodes.has(picked)) setPicked(null); }, [picked, g]);
-  const pages = useMemo(() => domain.routes.filter(r => r.kind === 'page' && matches(needle, r.fullPath, r.framework)).sort((a, b) => a.fullPath.localeCompare(b.fullPath)), [domain.routes, needle]);
-  const screens = useMemo(() => domain.routes.filter(r => r.kind === 'screen' && matches(needle, r.fullPath, r.framework)).sort((a, b) => a.fullPath.localeCompare(b.fullPath)), [domain.routes, needle]);
+  const pages = useMemo(() => domain.routes.filter(r => r.kind === 'page' && routeMatches(needle, r)).sort((a, b) => a.fullPath.localeCompare(b.fullPath)), [domain.routes, needle]);
+  const screens = useMemo(() => domain.routes.filter(r => r.kind === 'screen' && routeMatches(needle, r)).sort((a, b) => a.fullPath.localeCompare(b.fullPath)), [domain.routes, needle]);
   const total = sorted.length;
 
   // Palette trace: show the route (clearing a filter that hides it, opening its group, "Show all" beyond the cap),
@@ -426,7 +431,7 @@ function Flows({ domain }: { domain: DomainIndex }) {
       const r = domain.routes.find(x => x.id === routeTrace.id);
       if (r) {
         pendingTrace.current = { id: r.id, at: Date.now() };
-        const passes = r.kind === 'api' ? routeMatches(needle, r) : matches(needle, r.fullPath, r.framework);
+        const passes = routeMatches(needle, r);
         if (!passes) setQ('');
         if (r.kind === 'api') {
           // Its place in the drawing order once its group is open, under the search that stays.
@@ -452,7 +457,7 @@ function Flows({ domain }: { domain: DomainIndex }) {
   }, [routeTrace, domain.routes, needle, all, allGroups, collapsed, onToggle, g]);
 
   // Esc clears the search, then the pick, and is left to the panels when neither is there; the arrow keys walk
-  // the search box, group headers and route rows.
+  // the search box, group headers, route rows and their files.
   const escape = (): boolean => {
     if (q) setQ('');
     else if (picked) unpick();
@@ -466,7 +471,7 @@ function Flows({ domain }: { domain: DomainIndex }) {
       return;
     }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-    const items = [input.current!, ...(scroller.current?.querySelectorAll<HTMLElement>('.ap-gh, .ap-pick') ?? [])];
+    const items = [input.current!, ...(scroller.current?.querySelectorAll<HTMLElement>('.ap-gh, .ap-pick, .ap-file') ?? [])];
     const i = items.indexOf(t);
     if (i < 0) return;
     const next = items[i + (e.key === 'ArrowDown' ? 1 : -1)];
@@ -482,6 +487,9 @@ function Flows({ domain }: { domain: DomainIndex }) {
     const onWinKey = (e: globalThis.KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
       if (document.activeElement && document.activeElement !== document.body) return;
+      // An open slide-over panel or a peeking inspector takes Esc first.
+      const s = useStore.getState();
+      if (s.panel || peeking(s)) return;
       if (escapeRef.current()) e.preventDefault();
     };
     window.addEventListener('keydown', onWinKey, true);
@@ -504,10 +512,10 @@ function Flows({ domain }: { domain: DomainIndex }) {
         </div>
         {total > 0 && matched === 0 && <p className="ap-none">No routes match “{q.trim()}”.</p>}
         {groups.length > 0 && (stacked ? <Chains {...view} /> : <Lanes {...view} />)}
-        {drawable > CAP && (
+        {capHides && (
           <div className="ap-cap glass">
-            <span>{all ? `All ${drawable.toLocaleString()} routes` : `First ${CAP} of ${drawable.toLocaleString()} routes, by path`}</span>
-            <button type="button" onClick={() => setAll(a => !a)}>{all ? `Show first ${CAP}` : `Show all ${drawable.toLocaleString()}`}</button>
+            <span>{all ? `All ${drawable.toLocaleString()} routes` : drawable > CAP ? `First ${CAP} of ${drawable.toLocaleString()} routes, by path` : `First ${CAP} routes, by path`}</span>
+            <button type="button" onClick={() => setAll(a => !a)}>{all ? `Show first ${CAP}` : drawable > CAP ? `Show all ${drawable.toLocaleString()}` : 'Show all'}</button>
           </div>
         )}
         {pages.length > 0 && <PageList title="Pages" routes={pages} />}
