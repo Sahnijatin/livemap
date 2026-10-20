@@ -54,6 +54,9 @@ const inspector = (page: Page) => page.getByRole('complementary', { name: 'Inspe
 test.use({ colorScheme: 'dark', viewport: { width: 1440, height: 900 } });
 
 test('live update flow: browse, inspect, edit, break, delete', async ({ page }) => {
+  // A code project never asks for ServiceNow records or loads the ServiceNow chunk.
+  const snRequests: string[] = [];
+  page.on('request', r => { if (/\/api\/sn\b|\/SnHost-[\w-]+\.js|\/SnRecord-[\w-]+\.js/.test(r.url())) snRequests.push(r.url()); });
   await page.goto(url);
   // R11: the token is stripped from the address bar after load.
   await expect(page).not.toHaveURL(/[?&]t=/);
@@ -65,6 +68,8 @@ test('live update flow: browse, inspect, edit, break, delete', async ({ page }) 
   const row = fileRow(page, SERVICE);
   await expect(row).toBeVisible({ timeout: 15_000 });
   await expect(row.locator('.fn')).toHaveText('orderService.ts');
+  // Every project's Live session links the third-party notices.
+  await expect(page.getByRole('link', { name: 'Third-party notices' })).toHaveAttribute('href', '/THIRD_PARTY_NOTICES.md');
 
   // Expanding the file shows its symbols.
   if ((await row.getAttribute('aria-expanded')) !== 'true') await row.locator('.chev').click();
@@ -73,6 +78,7 @@ test('live update flow: browse, inspect, edit, break, delete', async ({ page }) 
 
   // Selecting it fills the inspector.
   await row.click();
+  await expect(page.getByRole('link', { name: 'Third-party notices' })).toHaveCount(0);
   const insp = inspector(page);
   await expect(insp.getByRole('heading', { name: 'orderService.ts' })).toBeVisible();
   const uses = insp.locator('.sec', { has: page.getByRole('heading', { name: 'Uses', exact: true }) });
@@ -119,4 +125,5 @@ test('live update flow: browse, inspect, edit, break, delete', async ({ page }) 
   await expect(fileRow(page, SERVICE)).toHaveCount(0, { timeout: 1500 });
   expect(Date.now() - t2).toBeLessThanOrEqual(1500);
   await page.screenshot({ path: 'test-results/dark-4-deleted.png' });
+  expect(snRequests).toEqual([]);
 });

@@ -87,6 +87,7 @@ beforeEach(() => {
   put(uiDir, 'index.html', '<!doctype html><title>LiveMap</title>');
   put(uiDir, 'assets/app.js', 'console.log(1);');
   put(uiDir, 'assets/app.css', 'body{}');
+  put(uiDir, 'THIRD_PARTY_NOTICES.md', '# Third-party notices\n');
   srv = null;
   sockets = [];
   blockers = [];
@@ -263,6 +264,18 @@ describe('startServer: HTTP auth', () => {
   });
 });
 
+describe('startServer: /api/sn', () => {
+  it('needs the token, and answers 404 for a project that is not a ServiceNow mirror', async () => {
+    const s = await boot();
+    expect((await get(s.port, '/api/sn')).status).toBe(401);
+    const r = await get(s.port, `/api/sn?t=${s.token}`);
+    expect(r.status).toBe(404);
+    expect(JSON.parse(r.body)).toEqual({ error: 'not a ServiceNow mirror' });
+    // The hello says nothing about ServiceNow, so the UI never asks.
+    expect(JSON.parse((await get(s.port, `/api/state?t=${s.token}`)).body).sn).toBeUndefined();
+  });
+});
+
 describe('startServer: /api/file', () => {
   it('rejects traversal and absolute paths with 400', async () => {
     const s = await boot();
@@ -303,6 +316,8 @@ describe('startServer: static files', () => {
     expect(js.status).toBe(200);
     expect(js.headers['content-type']).toMatch(/javascript/);
     expect((await get(s.port, `/assets/app.css?t=${s.token}`)).headers['content-type']).toMatch(/text\/css/);
+    // The notices file shows as text in the browser.
+    expect((await get(s.port, '/THIRD_PARTY_NOTICES.md')).headers['content-type']).toBe('text/markdown; charset=utf-8');
     const spa = await get(s.port, `/some/route?t=${s.token}`);
     expect(spa.status).toBe(200);
     expect(spa.body).toContain('<title>LiveMap</title>');

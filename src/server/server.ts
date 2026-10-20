@@ -22,6 +22,7 @@ import { authenticate, hostAllowed, newToken, originAllowed } from './auth.js';
 import { handleControlApi, handleHook, MAX_API_BODY, readJsonBody } from './agent-routes.js';
 import { handleHistoryApi, sendJsonMaybeGzip } from './history-routes.js';
 import { serveStatic } from './static.js';
+import { isSnMirror, readSnIndex } from './sn-index.js';
 
 export interface ServerOptions {
   /** The project name the UI shows; the root folder's name by default. */
@@ -378,10 +379,13 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     if ('content' in r) summarizeFile(r.file, r.content);
   };
 
+  // A `livemap sn` mirror writes its manifests before the server starts.
+  const sn = isSnMirror(model.root);
   const liveState = (): ProjectState => ({
     root: model.root, name, files: model.all(), changes: [...changes], usedBy, domain, indexing: false,
     events: hub ? hub.events(HELLO_EVENTS) : [], sessions: hub ? hub.sessions() : [], control: hub ? hub.control.state() : { paused: false, flags: [] },
     summaries: summariesState(),
+    ...(sn ? { sn: true } : {}),
   });
   const hello = (state: ProjectState = liveState()): ServerMessage => ({ type: 'hello', ...state, history: historyStatus(), seq });
   /**
@@ -590,6 +594,13 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
       const r = readText(url.searchParams.get('path'));
       if (!('content' in r)) return json(res, r.status, { error: r.error });
       return json(res, 200, { path: r.file.path, content: r.content });
+    }
+    if (url.pathname === '/api/sn') {
+      // A `livemap sn` mirror's records (scope, update set, last update); 404 for any other project.
+      const index = await readSnIndex(model.root, { warn: opts.warn });
+      if (!index) return json(res, 404, { error: 'not a ServiceNow mirror' });
+      const hosts = (process.env.LIVEMAP_SN_HOSTS ?? '').split(',').map(h => h.trim()).filter(Boolean);
+      return sendJsonMaybeGzip(req, res, reply, hosts.length ? { ...index, hosts } : index, BASE_HEADERS);
     }
     if (url.pathname === '/api/summary') {
       // The same checks as /api/file, so a secret, binary or too-large file is never sent.

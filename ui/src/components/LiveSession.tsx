@@ -127,6 +127,7 @@ export function LiveSession() {
         </div>
       )}
       <div className="muted" style={{ fontSize: 12 }}>Select any file to see what is inside it, what it connects to, and why it changed.</div>
+      {!replay && <a className="notices" href="/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer">Third-party notices</a>}
     </>
   );
 }

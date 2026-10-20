@@ -184,6 +184,7 @@ Start `livemap sn` first. It prints how many events it found and sent, and how m
 |---|---|
 | `LIVEMAP_HOME` | Where LiveMap keeps its data. Default `~/.livemap`. |
 | `LIVEMAP_HISTORY_MB` | History size cap per project, in MB. Default 200. |
+| `LIVEMAP_SN_HOSTS` | Domains besides `service-now.com` and `servicenowservices.com` that a ServiceNow record's Open in ServiceNow link may point to, separated by commas. See [ServiceNow](servicenow.md#reading-the-inspector). |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | Keys for AI summaries when the config has no `apiKey`. |
 | `CLAUDE_CONFIG_DIR` | Where LiveMap looks for Claude Code transcripts. Default `~/.claude`. |
 | `BROWSER` | The program that opens LiveMap's URL instead of the default browser, with any arguments (`chrome --incognito`). `%s` stands for the URL; without it the URL goes last. Quote a path with spaces, or give just the path. On Windows it can be a `.exe`, `.cmd` or `.bat` file. `none` opens nothing, like `--no-open`. |

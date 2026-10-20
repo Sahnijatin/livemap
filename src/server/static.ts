@@ -12,6 +12,8 @@ const MIME: Record<string, string> = {
   '.png': 'image/png',
   '.json': 'application/json; charset=utf-8',
   '.wasm': 'application/wasm',
+  // THIRD_PARTY_NOTICES.md, shown as text by the browser.
+  '.md': 'text/markdown; charset=utf-8',
 };
 
 export const UI_NOT_BUILT = 'LiveMap UI is not built';

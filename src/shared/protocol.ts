@@ -16,7 +16,9 @@ export type ServerMessage =
        */
       history?: HistoryStatus; seq?: number;
       /** Summary status and file summaries. Optional so that older recorded hellos still load; the server always sends it. */
-      summaries?: SummariesState }
+      summaries?: SummariesState;
+      /** True when the project is a `livemap sn` mirror: the UI then loads its ServiceNow parts and asks `/api/sn`. */
+      sn?: boolean }
   | { type: 'files'; files: FileModel[]; removed: string[] }
   /** A change and the file updates it caused, applied together. */
   | { type: 'change'; change: ChangeSummary; files: FileModel[]; removed: string[] }

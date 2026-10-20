@@ -1,0 +1,109 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { isSnMirror, readSnIndex } from '../../src/server/sn-index.js';
+
+let dir = '';
+afterEach(() => { if (dir) fs.rmSync(dir, { recursive: true, force: true }); dir = ''; });
+
+const id = (n: number) => `5f${String(n).padStart(30, '0')}`;
+function put(rel: string, text: string): void {
+  fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+  fs.writeFileSync(path.join(dir, rel), text);
+}
+
+describe('readSnIndex', () => {
+  it('is null for a folder with no scope manifest', async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-snidx-'));
+    put('src/a.ts', 'export {}\n');
+    expect(isSnMirror(dir)).toBe(false);
+    expect(await readSnIndex(dir)).toBeNull();
+    put('x_app.manifest.json', '{}');
+    expect(isSnMirror(dir)).toBe(true);
+    expect(isSnMirror(path.join(dir, 'missing'))).toBe(false);
+    expect(await readSnIndex(path.join(dir, 'missing'))).toBeNull();
+  });
+
+  it('reads folder, script and JSON records, and only the fields the UI shows', async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-snidx-'));
+    const widget = `x_app/widget/carousel__${id(1)}`;
+    const rule = `x_app/business_rule/task/Rule__${id(2)}.js`;
+    const prop = `x_app/other/sys_properties/x_app.key__${id(3)}.json`;
+    const table = 'x_app/schema/x_app_task.sntable.json';
+    put(`${widget}/meta.json`, JSON.stringify({ name: 'Carousel', sys_updated_by: 'admin', sys_updated_on: '2026-06-13 10:18:00', sys_update_set: { value: id(9), display_value: 'Card refresh' } }));
+    put(`${widget}/server.js`, '// server\n');
+    put(rule, `// @livemap-sn {"class":"sys_script","sys_id":"${id(2)}","updatedBy":"dev.user1","updateSetName":"Rules"}\n(function () {})();\n`);
+    put(prop, JSON.stringify({ name: 'x_app.key', value: 'do-not-send', sys_updated_by: 'admin' }));
+    put(table, JSON.stringify({ table: 'x_app_task', columns: [] }));
+    put('x_app.manifest.json', JSON.stringify({
+      version: 1, instance: 'acme', scope: { scope: 'x_app', name: 'App', sys_id: id(100) },
+      records: {
+        [id(1)]: { class: 'sp_widget', name: 'Carousel', path: `${widget}/meta.json` },
+        [id(2)]: { class: 'sys_script', name: 'Rule', path: rule },
+        [id(3)]: { class: 'sys_properties', name: 'x_app.key', path: prop },
+        [id(4)]: { class: 'sys_dictionary', name: 'Number', path: table },
+        [id(5)]: { class: 'sys_db_object', name: ' Task', path: table },
+        [id(6)]: { class: 'sp_widget', name: 'Escape', path: '../outside/meta.json' },
+      },
+    }));
+    const index = (await readSnIndex(dir))!;
+    expect(index.instance).toBe('acme');
+    expect(index.scopes).toEqual([{ scope: 'x_app', name: 'App', sysId: id(100) }]);
+    const by = new Map(index.records.map(r => [r.path, r]));
+    expect(by.get(widget)).toEqual({ path: widget, dir: true, sysId: id(1), table: 'sp_widget', name: 'Carousel', scope: 'x_app', updateSet: id(9), updateSetName: 'Card refresh', updatedBy: 'admin', updatedOn: '2026-06-13 10:18:00' });
+    expect(by.get(rule)).toMatchObject({ dir: false, table: 'sys_script', updatedBy: 'dev.user1', updateSetName: 'Rules' });
+    // A table and its dictionary entries share one file: it is the table's.
+    expect(by.get(table)).toMatchObject({ table: 'sys_db_object', name: 'Task', sysId: id(5) });
+    // A path that leaves the mirror is skipped; a property's value is never read out.
+    expect(index.records).toHaveLength(4);
+    expect(JSON.stringify(index)).not.toContain('do-not-send');
+  });
+
+  it('never reads a record file through a symlink that leaves the mirror, and reports it once', async () => {
+    if (process.platform === 'win32') return; // symlinks need extra rights on Windows
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-snidx-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-snidx-out-'));
+    fs.writeFileSync(path.join(outside, 'secret.json'), JSON.stringify({ sys_updated_by: 'outside-user' }));
+    const rule = `x_app/other/thing/Leak__${id(7)}.json`;
+    fs.mkdirSync(path.dirname(path.join(dir, rule)), { recursive: true });
+    fs.symlinkSync(path.join(outside, 'secret.json'), path.join(dir, rule));
+    put('x_app.manifest.json', JSON.stringify({ instance: 'acme', scope: { scope: 'x_app' }, records: { [id(7)]: { class: 'x_thing', name: 'Leak', path: rule } } }));
+    const warnings: string[] = [];
+    const index = (await readSnIndex(dir, { warn: m => warnings.push(m) }))!;
+    expect(index.records[0]).toEqual({ path: rule, dir: false, sysId: id(7), table: 'x_thing', name: 'Leak', scope: 'x_app' });
+    await readSnIndex(dir, { warn: m => warnings.push(m) });
+    expect(warnings).toEqual([`ServiceNow record ${rule}: leaves the mirror folder (symlink), not read`]);
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+
+  it('reads a record file again only when it changes, and reports one that does not parse', async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-snidx-'));
+    const a = `x_app/widget/a__${id(1)}/meta.json`;
+    const b = `x_app/other/b/B__${id(2)}.json`;
+    put(a, JSON.stringify({ sys_updated_by: 'first' }));
+    put(b, '{ not json');
+    put('x_app.manifest.json', JSON.stringify({ instance: 'acme', scope: { scope: 'x_app' }, records: {
+      [id(1)]: { class: 'sp_widget', name: 'A', path: a }, [id(2)]: { class: 'x_b', name: 'B', path: b },
+    } }));
+    const warnings: string[] = [];
+    const warn = (m: string) => warnings.push(m);
+    const by = async () => new Map((await readSnIndex(dir, { warn }))!.records.map(r => [r.sysId, r]));
+    const file = path.join(dir, a);
+    const atime = new Date(1_790_000_000_000);
+    const mtime = new Date(1_790_000_000_000);
+    fs.utimesSync(file, atime, mtime);
+    expect((await by()).get(id(1))?.updatedBy).toBe('first');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(new RegExp(`^ServiceNow record ${b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}: `));
+    // Same size and mtime: the cached fields stay.
+    fs.writeFileSync(file, JSON.stringify({ sys_updated_by: 'other' }));
+    fs.utimesSync(file, atime, mtime);
+    expect((await by()).get(id(1))?.updatedBy).toBe('first');
+    // A real edit is read again.
+    fs.writeFileSync(file, JSON.stringify({ sys_updated_by: 'second' }));
+    fs.utimesSync(file, atime, new Date(mtime.getTime() + 5000));
+    expect((await by()).get(id(1))?.updatedBy).toBe('second');
+    expect(warnings).toHaveLength(1);
+  });
+});

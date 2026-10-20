@@ -89,6 +89,8 @@ function pushHistory(history: string[], path: string): string[] {
   if (history[0] === path) return history;
   return [path, ...history.filter(p => p !== path)].slice(0, HISTORY_MAX);
 }
+/** `key` names the choices behind the filter, so a view can tell new choices from the same ones applied to new data. */
+export interface ViewFilter { key: string; path: (path: string) => boolean; change: (c: ChangeSummary) => boolean; event: (e: AgentEvent) => boolean }
 export type ConnectionState = 'connecting' | 'open' | 'closed' | 'unauthorized';
 
 /** Summaries with their per-file record keyed safely (see dict); none means the empty state. */
@@ -108,6 +110,8 @@ export interface StoreState {
   helloAt: number;
   root: string;
   name: string;
+  /** The project is a `livemap sn` mirror (from hello): the ServiceNow parts load only then. */
+  sn: boolean;
   files: Record<string, FileModel>;
   changes: ChangeSummary[];
   usedBy: UsedByEntry[];
@@ -166,6 +170,11 @@ export interface StoreState {
   /** Requests for the active view to bring something into view (seq makes repeats fire). */
   mapFocus: { path: string; seq: number } | null;
   tableFocus: { key: string; seq: number } | null;
+  /**
+   * What the views show while filters are on (the ServiceNow filter bar sets it with `useStore.setState`): files and
+   * changes that pass `path` and `change`, agent events that pass `event`. Unset or null shows everything.
+   */
+  viewFilter?: ViewFilter | null;
   routeTrace: { id: string; seq: number } | null;
   /** The ⌘K palette is open. */
   paletteOpen: boolean;
@@ -225,6 +234,7 @@ const initial = {
   helloAt: 0,
   root: '',
   name: '',
+  sn: false,
   files: dict<FileModel>(),
   changes: [],
   usedBy: [],
@@ -322,6 +332,7 @@ function replaceData(msg: ProjectState, st: StoreState) {
     helloAt: Date.now(),
     root: msg.root,
     name: msg.name,
+    sn: msg.sn === true,
     files,
     changes,
     usedBy: msg.usedBy,

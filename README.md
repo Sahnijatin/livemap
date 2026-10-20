@@ -67,6 +67,7 @@ LiveMap runs entirely on your machine: the server listens on `127.0.0.1` only, a
 - [Guide](docs/guide.md): the command line, the UI, history, summaries, exports and supported frameworks.
 - [Agents](docs/agents.md): what `livemap init` writes, cloud builders, Flag and Pause, attribution.
 - [Privacy](docs/privacy.md): what runs where, what is stored and sent.
+- [ServiceNow](docs/servicenow.md): mirror a ServiceNow scope, see which agent call changed each record, and filter by scope, update set, session or confidence.
 - [How it works](docs/how-it-works.md): the architecture.
 - [Contributing](CONTRIBUTING.md): building, testing and house rules.
 
