@@ -73,8 +73,9 @@ export function LiveHead() {
   // Showing the past: no Live tag (the center's banner says what is on show).
   const rewound = useStore(s => s.rewound !== null);
   // useLiveState's rule on narrow selectors, without its event scans.
-  const working = useStore(s => liveFlags(activeSession(s.sessions), s.control.paused).working);
-  const paused = useStore(s => liveFlags(activeSession(s.sessions), s.control.paused).paused);
+  // One scan of the sessions, as a string so the selector result compares by value.
+  const flags = useStore(s => { const f = liveFlags(activeSession(s.sessions), s.control.paused); return f.paused ? 'paused' : f.working ? 'working' : 'idle'; });
+  const working = flags === 'working', paused = flags === 'paused';
   return (
     <div className="live-h"><h3>Live session</h3>{working && !paused && !rewound && <span className="livetag"><i />Live</span>}{paused && <span className="livetag paused"><i />Paused</span>}</div>
   );

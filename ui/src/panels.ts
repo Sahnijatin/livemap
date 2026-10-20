@@ -2,12 +2,10 @@ import { useEffect } from 'react';
 import { isGated, useStore, type StoreState } from './store';
 import { NARROW_QUERY, isNarrow, isPhone } from './media';
 import { typingIn } from './keys';
-import { fitLayout, reach, restoreWide, type Panel as Side, type PanelLayout } from './panelLayout';
-
-type Panel = NonNullable<StoreState['panel']>;
+import { fitLayout, reach, restoreWide, type Panel, type PanelLayout } from './panelLayout';
 
 /** Each docked panel's name in labels, its shortcut key and its element id. */
-export const PANELS: Record<Side, { name: string; key: string; id: string }> = {
+export const PANELS: Record<Panel, { name: string; key: string; id: string }> = {
   files: { name: 'project panel', key: '[', id: 'sidebar' },
   inspector: { name: 'inspector', key: ']', id: 'inspector' },
 };
@@ -26,7 +24,7 @@ export function shownLayout(s: Shown): PanelLayout {
   return { ...l, collapsed: { ...l.collapsed, inspector: false } };
 }
 
-export interface Drawn { l: PanelLayout; fit: Record<Side, number>; reach: Record<Side, number> }
+export interface Drawn { l: PanelLayout; fit: Record<Panel, number>; reach: Record<Panel, number> }
 let memo: { layout: PanelLayout; peek: boolean; dock: StoreState['dock']; v: Drawn } | undefined;
 /** The shown layout and each panel's drawn width and reach, computed once per change of layout, peek or box. */
 export function drawn(s: StoreState): Drawn {

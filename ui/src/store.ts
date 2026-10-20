@@ -122,7 +122,7 @@ export interface StoreState {
   /** A line in the selected file to scroll the code view to (seq makes repeats fire). */
   reveal: { path: string; line: number; seq: number } | null;
   /** Narrow layouts: which slide-over panel is open. */
-  panel: 'files' | 'inspector' | null;
+  panel: Panel | null;
   /** Wide layouts: docked panel widths and collapsed state as the user set them, remembered across reloads. */
   layout: PanelLayout;
   /**
