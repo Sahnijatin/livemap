@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ChangeSummary, CodeSymbol, FileModel, Flag, Lang } from '@shared/types.js';
-import { buildMap, LARGE_PROJECT, type MapInput } from './mapModel';
+import { buildMap, largeNote, LARGE_PROJECT, type MapInput } from './mapModel';
 
 /** Slower CI runners scale wall-clock budgets (LIVEMAP_TIME_SCALE, set by CI on macOS and Windows). */
 const TIME_SCALE = Number(process.env.LIVEMAP_TIME_SCALE) || 1;
@@ -49,6 +49,54 @@ describe('buildMap', () => {
     expect(g.edges.find(e => e.id === 'src/components/Nav.tsx->src/services/auth.ts')).toBeTruthy();
     expect(g.files.every(f => f.rows.length === 0)).toBe(true);
     expect(g.large).toBe(false);
+  });
+
+  it('a folder mostly of markdown is in the Docs layer; its markdown still has no cards', () => {
+    const skill = '.agents/skills/supabase-row-level-security';
+    const list = [
+      file(`${skill}/validate.sh`, [], [sym('check')], 'shell'),
+      file(`${skill}/SKILL.md`, [], [sym('Title')], 'markdown'),
+      file(`${skill}/notes.md`, [], [sym('Title')], 'markdown'),
+      file('handbook/onboarding/setup.md', [], [sym('Title')], 'markdown'),
+      file('handbook/onboarding/faq.md', [], [sym('Title')], 'markdown'),
+      file('handbook/onboarding/snippet.ts', [], [sym('demo')]),
+      // Code with a README beside it stays code.
+      file('src/services/auth.ts', [], [sym('login')]),
+      file('src/services/user.ts', [], [sym('getUser')]),
+      file('src/services/README.md', [], [sym('Title')], 'markdown'),
+      // A package's README and CHANGELOG do not make it docs.
+      file('packages/foo/index.ts', [], [sym('main')]),
+      file('packages/foo/README.md', [], [sym('Title')], 'markdown'),
+      file('packages/foo/CHANGELOG.md', [], [sym('Title')], 'markdown'),
+      // Markdown must be more than half of the folder, not just its largest share.
+      file('lib/mixed/x.ts', [], [sym('x')]),
+      file('lib/mixed/y.sql', [], [sym('y')], 'sql'),
+      file('lib/mixed/a.md', [], [sym('Title')], 'markdown'),
+      file('lib/mixed/b.md', [], [sym('Title')], 'markdown'),
+    ];
+    const input = fixture({ files: Object.fromEntries(list.map(f => [f.path, f])) });
+    const g = buildMap(input, 'folders', new Set());
+    expect(g.folders.find(f => f.path === skill)?.layer).toBe('docs');
+    expect(g.folders.find(f => f.path === skill)?.counts.files).toBe(1);
+    expect(g.folders.find(f => f.path === 'handbook/onboarding')?.layer).toBe('docs');
+    expect(g.folders.find(f => f.path === 'src/services')?.layer).toBe('logic');
+    expect(g.folders.find(f => f.path === 'packages/foo')?.layer).toBe('core');
+    expect(g.folders.find(f => f.path === 'lib/mixed')?.layer).toBe('core');
+    expect(buildMap(input, 'files', new Set()).files.map(f => f.id)).toContain('handbook/onboarding/snippet.ts');
+    expect(buildMap(input, 'files', new Set()).files.some(f => f.id.endsWith('.md'))).toBe(false);
+  });
+
+  it('largeNote: each level says what it shows, only in a large project', () => {
+    const folders = 'Large project: showing folders. Open one to see its files.';
+    expect(largeNote('folders', true, 0, 12)).toBe(folders);
+    expect(largeNote('folders', true, 3, 12)).toBe(folders);
+    expect(largeNote('files', true, 0, 12)).toBe('Large project: open a folder to see its files.');
+    expect(largeNote('functions', true, 0, 12)).toBe('Large project: open a folder to see its functions.');
+    // While some folders are open, the note counts the closed ones; with all open there is none.
+    expect(largeNote('files', true, 3, 12)).toBe('9 folders are closed.');
+    expect(largeNote('functions', true, 11, 12)).toBe('1 folder is closed.');
+    expect(largeNote('files', true, 12, 12)).toBeNull();
+    for (const l of ['folders', 'files', 'functions'] as const) expect(largeNote(l, false, 0, 12)).toBeNull();
   });
 
   it('folders level: aggregated weights, root folder label', () => {

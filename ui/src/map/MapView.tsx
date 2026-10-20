@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  ConnectionMode, ReactFlow, ReactFlowProvider, getViewportForBounds, useReactFlow, useStore as useFlowStore, useStoreApi,
+  ConnectionMode, ReactFlow, ReactFlowProvider, ViewportPortal, useOnViewportChange, getViewportForBounds, useReactFlow, useStore as useFlowStore, useStoreApi,
   type Node, type Viewport,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -12,7 +12,7 @@ import { isNarrow } from '../media';
 import { useLiveRecent } from '../recent';
 import { useCurrentTarget } from '../live';
 import { workerRun, type ElkRun } from '../layout/elk';
-import { buildMap, codeFileCount, type Level, type MapGraph } from './mapModel';
+import { buildMap, codeFileCount, largeNote, type Level, type MapGraph } from './mapModel';
 import { emptyPositions, placeMap, type Positions } from './mapLayout';
 import { fileKind, filePins, type Pins } from './pins';
 import {
@@ -21,13 +21,15 @@ import {
 } from './mapFlow';
 import { MapContext, type MapActions } from './MapContext';
 import { FileNode } from './FileNode';
-import { FolderLabelNode, FolderNode } from './FolderNode';
+import { FolderLabelNode, FolderName, FolderNode } from './FolderNode';
 import { LinkEdge } from './LinkEdge';
 import { MapTools } from './MapTools';
 import { usePins } from './usePins';
 import { useNodeMotion } from './useNodeMotion';
 import { useFollowCamera } from './useFollowCamera';
 import { FOLLOW_MAX_ZOOM, MoveGesture } from './camera';
+import { FAR_ZOOM, folderBoxes, overviewLabels, quantZoom, shiftLabels } from './overview';
+import { layerVars } from '../components/icons';
 
 const nodeTypes = { file: FileNode, folder: FolderNode, folderLabel: FolderLabelNode };
 const edgeTypes = { link: LinkEdge };
@@ -40,8 +42,7 @@ const FOCUS_MIN_ZOOM = 0.8;
 const FOCUS_MS = 600;
 /** A palette focus waiting for a layout (level switch, folder opening) is dropped after this long. */
 export const FOCUS_WAIT_MS = 3000;
-/** Below this zoom the map drops card shadows and sub-labels (`.mapv.far`), which cost frames and cannot be read anyway. */
-export const FAR_ZOOM = 0.45;
+export { FAR_ZOOM };
 
 /**
  * Session memory (not storage), per project: each level's layout, the viewport, when new links first
@@ -99,6 +100,58 @@ function ZoomControls({ fitAll, onZoom }: { fitAll: () => void; onZoom: () => vo
       <button type="button" className="zfit" aria-label="Fit to screen" onClick={fitAll}>Fit</button>
       <button type="button" aria-label="Zoom in" onClick={() => { onZoom(); void rf.zoomIn({ duration: ms(250) }); }}>+</button>
     </div>
+  );
+}
+
+/** Nodes that have not moved for this long have settled (a drag or layout move ended): labels are placed again. */
+const SETTLE_MS = 150;
+
+/**
+ * Zoomed out: folder labels drawn at their normal screen size over the map, so a big project stays legible. They are
+ * placed when the nodes settle, at a zoom step or at the end of a camera move (only those wholly in view show); while
+ * nodes move they just follow their folder.
+ */
+function OverviewLayer({ graph, nodes }: { graph: MapGraph; nodes: MapFlowNode[] }) {
+  // A rounded zoom, so this re-renders a few times while zooming out, not every frame.
+  const q = useFlowStore(s => (s.transform[2] < FAR_ZOOM ? quantZoom(s.transform[2]) : 0));
+  const size = useFlowStore(s => `${s.width}x${s.height}`);
+  const storeApi = useStoreApi<MapFlowNode, LinkFlowEdge>();
+  const [moves, setMoves] = useState(0);
+  useOnViewportChange({ onEnd: () => setMoves(n => n + 1) });
+  // The nodes as of their last stop; before the first stop (a fresh layout), the live ones.
+  const [rest, setRest] = useState<MapFlowNode[]>([]);
+  useEffect(() => {
+    if (!q) return;
+    const t = window.setTimeout(() => setRest(nodes), SETTLE_MS);
+    return () => window.clearTimeout(t);
+  }, [q, nodes]);
+  const base = rest.length ? rest : nodes;
+  const boxes = useMemo(() => (q ? folderBoxes(base) : null), [q, base]);
+  const placed = useMemo(() => {
+    if (!q || !boxes) return [];
+    const { transform: [x, y, z], width, height } = storeApi.getState();
+    const view = width > 0 && height > 0 ? { x: -x / z, y: -y / z, w: width / z, h: height / z } : undefined;
+    return overviewLabels(graph.folders, boxes, graph.level, q, view, graph.large);
+    // `moves` and `size`: the visible area changed.
+  }, [graph, boxes, q, moves, size, storeApi]);
+  const labels = useMemo(() => (placed.length && base !== nodes ? shiftLabels(placed, boxes!, folderBoxes(nodes)) : placed), [placed, base, nodes, boxes]);
+  if (!labels.length) return null;
+  return (
+    <ViewportPortal>
+      {labels.map(l => (
+        <div
+          key={l.id}
+          className={graph.level === 'folders' ? 'ovl mid' : 'ovl'}
+          style={{ ...layerVars(l.layer), width: l.w, transform: `translate(${l.x}px,${l.y}px) scale(${1 / q})` }}
+          aria-hidden="true"
+        >
+          <span className="ovl-t">
+            <FolderName name={l.text} chars={l.chars} />
+            {l.isNew && <i className="ovl-new">New</i>}
+          </span>
+        </div>
+      ))}
+    </ViewportPortal>
   );
 }
 
@@ -394,6 +447,9 @@ function Canvas({ run, tools }: { run: ElkRun; tools: HTMLElement | null }) {
   gesture.current ??= new MoveGesture();
   // A boolean, so zooming re-renders the map only when it crosses the threshold.
   const far = useFlowStore(s => s.transform[2] < FAR_ZOOM);
+  // In a large project the files and functions levels show only open folders.
+  const open = useMemo(() => new Set(graph.files.map(f => f.folder)).size, [graph]);
+  const note = largeNote(graph.level, graph.large, open, graph.folders.length);
 
   return (
     <MapContext.Provider value={actions}>
@@ -448,11 +504,15 @@ function Canvas({ run, tools }: { run: ElkRun; tools: HTMLElement | null }) {
             proOptions={{ hideAttribution: true }}
             aria-label="Project map"
           >
-            <ZoomControls fitAll={actions.fitAll} onZoom={userMoved} />
+            <OverviewLayer graph={graph} nodes={nodes} />
           </ReactFlow>
         </div>
-        {graph.large && <div className="map-note glass" role="status">Large project: showing folders. Open a folder to see its files.</div>}
-        <p className="cv-hint glass">Drag to pan · ⌘ + scroll to zoom · click a card to inspect</p>
+        {/* A bar below the canvas (the canvas ends above it), so the note, hint and zoom buttons never cover a card. */}
+        <div className="mv-foot">
+          {note && <div className="map-note" role="status">{note}</div>}
+          <p className="cv-hint">{note ? 'Drag to pan · ⌘ + scroll to zoom' : 'Drag to pan · ⌘ + scroll to zoom · click a card to inspect'}</p>
+          <ZoomControls fitAll={actions.fitAll} onZoom={userMoved} />
+        </div>
       </div>
       {tools && createPortal(<MapTools followPaused={followPaused} />, tools)}
     </MapContext.Provider>

@@ -8,11 +8,27 @@ import { useMapActions } from './MapContext';
 import { Anchors } from './FileNode';
 import { useStore } from '../store';
 import { READ_ONLY_TIP } from '../history';
+import { MidName } from '../components/FileRow';
+import { nameEnd, nameFit, slash } from './overview';
 
 const midHandle: CSSProperties = { top: '50%', opacity: 0, pointerEvents: 'none' };
 const n = (v: number): string => v.toLocaleString();
 const plural = (v: number, one: string, many: string): string => `${n(v)} ${v === 1 ? one : many}`;
-const slash = (label: string, path: string): string => (path === '' ? label : `${label}/`);
+
+/** Characters of a folder card's name (15 px semibold in the card's text column). */
+const CARD_CHARS = 19;
+/** About 7 px a character for a region head's name (12 px semibold). */
+const HEAD_CHAR_W = 7;
+
+/**
+ * A folder name that fits `chars` characters (nameFit): whole, cut in the middle by MidName (the file tree's cut, with
+ * whole trailing folders), or "…" and its end when even the last folder leaves no room for a start.
+ */
+export function FolderName({ name, chars }: { name: string; chars: number }) {
+  const fit = nameFit(name, chars);
+  if (fit.mode === 'end') return <span className="fn end"><span>{`\u2026${nameEnd(name, fit.tailMax)}`}</span></span>;
+  return <MidName name={name} kind="path" tailMax={fit.tailMax} />;
+}
 
 /**
  * A folder. At the folders level it is a `.folder` card with counts (double-click or Enter opens its
@@ -53,7 +69,7 @@ function FolderNodeView({ id, data }: NodeProps<FolderFlowNode>) {
         <div className="fnm">
           <LayerTile layer={f.layer} className="ic" />
           <span className="ftx">
-            <span className="fl">{slash(f.label, f.path)}</span>
+            <span className="fl" title={f.label}><FolderName name={slash(f.label, f.path)} chars={CARD_CHARS} /></span>
             <span className="fly">{layer.name}</span>
           </span>
         </div>
@@ -75,14 +91,16 @@ function FolderNodeView({ id, data }: NodeProps<FolderFlowNode>) {
  * A folder region's header (the folder, its layer and counts), a node of its own so it paints above
  * the links that cross the region; in a large project it opens or closes the folder.
  */
-function FolderLabelNodeView({ data }: NodeProps<FolderLabelFlowNode>) {
+function FolderLabelNodeView({ data, width = 0 }: NodeProps<FolderLabelFlowNode>) {
   const { folder: f, large, expanded } = data;
+  // The head's room: the region less its insets and padding, the layer name and, in a large project, the toggle.
+  const chars = Math.floor((width - 44 - (LAYERS[f.layer].name.length * 6 + 5) - (large ? 74 : 0)) / HEAD_CHAR_W);
   const actions = useMapActions();
   return (
     <div className={clsx('mglabel', large && 'large')} style={layerVars(f.layer)} data-folder={f.id}>
-      <div className="mg-head" title={f.label}>
-        <span className="gl">
-          {slash(f.label, f.path)} <small>{LAYERS[f.layer].name}</small>
+      <div className="mg-head">
+        <span className="gl" title={f.label}>
+          <FolderName name={slash(f.label, f.path)} chars={chars} /><small>{LAYERS[f.layer].name}</small>
         </span>
         <span className="mg-ct">{plural(f.counts.files, 'file', 'files')} · {plural(f.counts.symbols, 'symbol', 'symbols')}</span>
       </div>

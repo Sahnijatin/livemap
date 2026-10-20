@@ -26,6 +26,25 @@ describe('layerOf', () => {
     expect(L('src/server/index.ts')).toBe('core');
     expect(L('app/api/users/route.ts')).toBe('api');
   });
+
+  it('puts code under a top-level docs folder in Docs, and agent folders (.agents, .claude) in Config', () => {
+    expect(L('docs/conf.py', { lang: 'python' })).toBe('docs');
+    expect(L('docs/examples/hello.ts')).toBe('docs');
+    expect(L('packages/sdk/documentation/demo.js', { lang: 'javascript' })).toBe('docs');
+    // Only at the top (or a monorepo package's top), and stronger rules win: data, config, API and UI.
+    expect(L('src/docs/render.ts')).toBe('core');
+    expect(L('app/docs/[slug]/page.tsx')).toBe('ui');
+    expect(L('app/api/docs/route.ts')).toBe('api');
+    expect(L('docs/examples/services/hello.ts')).toBe('logic');
+    expect(L('docs/schema.sql', { lang: 'sql' })).toBe('data');
+    expect(L('docs/docker-compose.yml', { lang: 'yaml' })).toBe('config');
+    expect(L('.agents/skills/stripe-webhooks/scripts/check.py', { lang: 'python' })).toBe('config');
+    expect(L('.claude/hooks/format.sh', { lang: 'shell' })).toBe('config');
+    // Tests stay tests, and a folder merely named like a doc stays code.
+    expect(L('docs/tests/a.test.ts')).toBe('test');
+    expect(L('src/doc/editor.ts')).toBe('core');
+    expect(L('src/docsearch/index.ts')).toBe('core');
+  });
 });
 
 describe('layerOf: ServiceNow mirror', () => {

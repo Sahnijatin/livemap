@@ -245,6 +245,16 @@ describe('splitName', () => {
     expect(splitName('src/componentsLarge1', 'dir')).toEqual(['src/', 'componentsLarge1']);
   });
 
+  it('a path keeps whole trailing folders up to two folder lengths, and a trailing slash stays on the end', () => {
+    expect(splitName('packages/feature-01-search/src', 'path')).toEqual(['packages/', 'feature-01-search/src']);
+    expect(splitName('packages/feature-01-search/src/', 'path')).toEqual(['packages/', 'feature-01-search/src/']);
+    expect(splitName('apps/web/src/hooks/', 'path')).toEqual(['apps/', 'web/src/hooks/']);
+    // A last folder longer than one folder length is split by word, as for a folder row.
+    expect(splitName('.agents/skills/supabase-row-level-security/', 'path')).toEqual(['.agents/skills/supabase-row-', 'level-security/']);
+    expect(splitName('src/app/(admin)/', 'dir')).toEqual(['src/app/', '(admin)/']);
+    expect(splitName('Project root', 'path')).toEqual(['Project root', '']);
+  });
+
   it('never cuts inside a character', () => {
     const name = '\u{1F600}'.repeat(20) + '\u{1F680}.ts';
     const [head, tail] = splitName(name);
