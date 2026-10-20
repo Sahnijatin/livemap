@@ -149,4 +149,13 @@ describe('midTrunc', () => {
     expect(s.endsWith('routes/invoices.ts')).toBe(true);
     expect(s).toContain('…');
   });
+  it('never returns more than n characters, even for tiny n', () => {
+    for (let n = 1; n <= 6; n++) {
+      const s = midTrunc('server/routes/users.ts', n);
+      expect(s.length).toBeLessThanOrEqual(n);
+      expect(s.endsWith('…')).toBe(true);
+    }
+    expect(midTrunc('server/routes/users.ts', 1)).toBe('…');
+    expect(midTrunc('server/routes/users.ts', 4)).toBe('ser…');
+  });
 });

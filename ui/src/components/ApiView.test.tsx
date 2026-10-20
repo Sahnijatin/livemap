@@ -301,6 +301,43 @@ describe('ApiView', () => {
     expect(host.querySelectorAll('.ap.on, .ap.dim').length).toBe(0);
   });
 
+  it('while a route is picked, hovering another kind of card keeps the pick; hovering a route previews it', () => {
+    mount();
+    const get = routeCard('GET', '/api/orders');
+    pick(get);
+    enter(card('service', 'orderService.ts'));
+    expect(get.classList.contains('on')).toBe(true);
+    expect(routeCard('POST', '/api/orders').classList.contains('dim')).toBe(true);
+    expect(edges()).toBe(3);
+    leave(card('service', 'orderService.ts'));
+    enter(routeCard('GET', '/api/users'));
+    expect(get.classList.contains('dim')).toBe(true);
+    expect(edges()).toBe(1);
+  });
+
+  it('Esc with focus on the page body clears a pick, ahead of the panels', () => {
+    mount();
+    const get = routeCard('GET', '/api/orders');
+    pick(get);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    expect(document.activeElement).toBe(document.body);
+    expect(key(document.body, 'Escape')).toBe(false);
+    expect(get.classList.contains('picked')).toBe(false);
+    // Nothing left to clear: Esc goes on to the panels.
+    expect(key(document.body, 'Escape')).toBe(true);
+  });
+
+  it('Esc in another input outside the view leaves the pick alone', () => {
+    mount();
+    pick(routeCard('GET', '/api/orders'));
+    const other = document.createElement('input');
+    document.body.appendChild(other);
+    act(() => other.focus());
+    expect(key(other, 'Escape')).toBe(true);
+    expect(routeCard('GET', '/api/orders').classList.contains('picked')).toBe(true);
+    other.remove();
+  });
+
   it('hovering a shared card lights every flow through it', () => {
     mount();
     enter(card('service', 'orderService.ts'));
@@ -409,13 +446,47 @@ describe('ApiView', () => {
     d.routes = [...a, ...b];
     mount(d);
     const head = (k: string) => groups().find(x => x.querySelector('.ap-gk')?.textContent === k)!;
-    expect(head('/api/a').querySelector('.ap-gn')?.textContent).toBe((CAP + 1).toLocaleString());
+    expect(head('/api/a').querySelector('.ap-gn')?.textContent).toBe(`${CAP} of ${(CAP + 1).toLocaleString()}`);
+    // Past the cap no group is drawn, header included; the cap bar stands for them.
+    expect(head('/api/b')).toBeUndefined();
     expect(cards('route')).toHaveLength(CAP);
     expect(host.textContent).toContain(`Show all ${(CAP + 4).toLocaleString()}`);
     act(() => head('/api/a').click());
     expect(cards('route').map(c => c.querySelector('.ap-t')?.textContent)).toEqual(['/api/b/r0', '/api/b/r1', '/api/b/r2']);
     expect(head('/api/b').querySelector('.ap-gn')?.textContent).toBe('3');
     expect(host.querySelector('.ap-cap')).toBeNull();
+  });
+
+  it('900 routes: groups past the cap stay out even when collapsed', () => {
+    const mk = (g: string, n: number) => Array.from({ length: n }, (_, i) => api('GET', `/api/${g}/r${String(i).padStart(4, '0')}`, 'getOrders', 18));
+    const d = domain();
+    d.routes = [...mk('a', 700), ...mk('b', 100), ...mk('c', 100)];
+    mount(d);
+    const head = (k: string) => groups().find(x => x.querySelector('.ap-gk')?.textContent === k)!;
+    const keys = () => groups().map(x => x.querySelector('.ap-gk')?.textContent);
+    expect(keys()).toEqual(['/api/a']);
+    expect(host.textContent).toContain('Show all 900');
+    act(() => head('/api/a').click());
+    expect(keys()).toEqual(['/api/a', '/api/b', '/api/c']);
+    expect(head('/api/a').querySelector('.ap-gn')?.textContent).toBe('700');
+    expect(cards('route')).toHaveLength(200);
+    act(() => head('/api/c').click());
+    act(() => head('/api/a').click());
+    // /api/a fills the cap again; /api/b and the collapsed /api/c lie past it.
+    expect(keys()).toEqual(['/api/a']);
+    expect(cards('route')).toHaveLength(CAP);
+    expect(host.textContent).toContain('Show all 800');
+  });
+
+  it('forgets a collapsed group whose routes all left', () => {
+    mount();
+    const g = () => groups().find(x => x.querySelector('.ap-gk')?.textContent === '/api/orders');
+    act(() => g()!.click());
+    const d = domain();
+    act(() => useStore.getState().apply({ type: 'domain', domain: { ...d, routes: d.routes.filter(r => !r.fullPath.startsWith('/api/orders')) } }));
+    expect(g()).toBeUndefined();
+    act(() => useStore.getState().apply({ type: 'domain', domain: domain() }));
+    expect(g()!.getAttribute('aria-expanded')).toBe('true');
   });
 
   it('shows the empty state with the supported frameworks', () => {

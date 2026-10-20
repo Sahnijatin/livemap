@@ -207,9 +207,10 @@ export function groupFlows(flows: Flow[]): FlowGroup[] {
   return [...out].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([key, list]) => ({ key, flows: list }));
 }
 
-/** `s` cut to `n` characters by an ellipsis in the middle, keeping more of the end (the file name). */
+/** `s` cut to `n` characters by an ellipsis in the middle, keeping more of the end (the file name); below 8, just the start. */
 export function midTrunc(s: string, n: number): string {
   if (s.length <= n) return s;
+  if (n < 8) return `${s.slice(0, n - 1)}…`;
   const head = Math.max(4, Math.floor((n - 1) * 0.3));
   return `${s.slice(0, head)}…${s.slice(s.length - (n - 1 - head))}`;
 }

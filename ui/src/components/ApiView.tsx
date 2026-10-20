@@ -6,7 +6,7 @@ import { isNarrow } from '../media';
 import { baseName } from '../recent';
 import {
   LANE_KINDS, buildFlows, flowGraph, groupFlows, handlerKey, midTrunc, placeLanes, routeKey, serviceKey, tableKey,
-  type Flow, type FlowGraph, type LaneKind,
+  type Flow, type FlowGraph, type FlowGroup, type LaneKind,
 } from '../api-flow';
 import { MethodPill } from './MethodPill';
 import { ApiIcon, Chevron, SearchIcon } from './icons';
@@ -52,7 +52,30 @@ const byPath = (a: Flow, b: Flow): number =>
   a.route.fullPath < b.route.fullPath ? -1 : a.route.fullPath > b.route.fullPath ? 1 : a.route.method.localeCompare(b.route.method) || a.route.line - b.route.line;
 
 const matches = (q: string, ...parts: string[]): boolean => !q || parts.join(' ').toLowerCase().includes(q);
-const flowMatches = (q: string, f: Flow): boolean => matches(q, f.route.method, f.route.fullPath, f.route.file);
+const routeMatches = (q: string, r: ApiRoute): boolean => matches(q, r.method, r.fullPath, r.file);
+
+/**
+ * Groups in drawing order under a search, how many routes match, and how many of those are in open groups. Up to `cap` routes of open
+ * groups are drawn; once it is reached no further group is drawn, collapsed headers included (the cap bar covers them).
+ */
+function drawGroups(all: FlowGroup[], q: string, collapsed: ReadonlySet<string>, cap: number): { rows: GroupRow[]; matched: number; drawable: number } {
+  let room = cap;
+  let matched = 0;
+  let drawable = 0;
+  const rows: GroupRow[] = [];
+  for (const gr of all) {
+    const flows = gr.flows.filter(f => routeMatches(q, f.route));
+    if (!flows.length) continue;
+    matched += flows.length;
+    const open = !collapsed.has(gr.key);
+    if (open) drawable += flows.length;
+    if (room <= 0) continue;
+    const drawn = open ? flows.slice(0, room) : [];
+    room -= drawn.length;
+    rows.push({ key: gr.key, flows: drawn, count: flows.length, open });
+  }
+  return { rows, matched, drawable };
+}
 
 /** A card's label, subtitle, icon and what clicking it opens; everything a lane card shows. */
 interface CardData { key: string; kind: LaneKind; label: string; sub?: string; title: string; icon: ReactNode; go: () => void; isNew: boolean; enter: boolean }
@@ -162,7 +185,7 @@ const RouteCard = memo(function RouteCard({ d, focus, picked, chars, style, onHo
   );
 });
 
-/** A route group: the routes drawn (none when collapsed or past the cap), how many match, whether it is open. */
+/** A route group: the routes drawn (none when collapsed, fewer when the cap cuts it), how many match, whether it is open. */
 interface GroupRow { key: string; flows: Flow[]; count: number; open: boolean }
 
 function GroupHead({ row, style, onToggle }: { row: GroupRow; style?: CSSProperties; onToggle: (k: string) => void }) {
@@ -170,7 +193,7 @@ function GroupHead({ row, style, onToggle }: { row: GroupRow; style?: CSSPropert
     <button type="button" className={clsx('ap-gh', row.open && 'open')} style={style} aria-expanded={row.open} onClick={() => onToggle(row.key)}>
       <Chevron />
       <code className="ap-gk">{row.key}</code>
-      <span className="ap-gn">{row.count.toLocaleString()}</span>
+      <span className="ap-gn">{row.open && row.flows.length < row.count ? `${row.flows.length.toLocaleString()} of ${row.count.toLocaleString()}` : row.count.toLocaleString()}</span>
     </button>
   );
 }
@@ -206,10 +229,13 @@ function laneGeometry(width: number): { x: number[]; w: number[]; total: number 
   return { x, w, total: at - gap };
 }
 
-/** The flows a hovered card (or else the picked route) traces, and whether to draw its lines (routes only). */
+/** The flows the hovered or picked card traces, and whether to draw its lines (routes only). */
 function useTrace(g: FlowGraph, hot: string | null, picked: string | null): { active: Set<number> | null; lines: boolean } {
   return useMemo(() => {
-    const k = hot && g.nodes.has(hot) ? hot : picked && g.nodes.has(picked) ? picked : null;
+    // A hovered route previews its flow; any other hovered card gives way to a pick.
+    const h = hot && g.nodes.has(hot) ? hot : null;
+    const p = picked && g.nodes.has(picked) ? picked : null;
+    const k = h && (g.nodes.get(h)!.kind === 'route' || !p) ? h : p;
     if (!k) return { active: null, lines: false };
     return { active: new Set(g.nodes.get(k)!.flows), lines: g.nodes.get(k)!.kind === 'route' };
   }, [g, hot, picked]);
@@ -371,21 +397,12 @@ function Flows({ domain }: { domain: DomainIndex }) {
   // Groups come from every route, so a filter narrows a group without regrouping.
   const allGroups = useMemo(() => groupFlows(sorted), [sorted]);
   const needle = q.trim().toLowerCase();
-  const filtered = useMemo(() => allGroups.map(gr => ({ key: gr.key, flows: gr.flows.filter(f => flowMatches(needle, f)) })).filter(gr => gr.flows.length), [allGroups, needle]);
-  const matched = useMemo(() => filtered.reduce((n, gr) => n + gr.flows.length, 0), [filtered]);
-  // The cap counts only routes in open groups; an open group entirely past it is left out with the rest.
-  const { groups, drawable } = useMemo(() => {
-    let room = all ? Infinity : CAP;
-    let drawable = 0;
-    const groups: GroupRow[] = [];
-    for (const gr of filtered) {
-      const open = !collapsed.has(gr.key);
-      const flows = open ? gr.flows.slice(0, room) : [];
-      if (open) { room -= flows.length; drawable += gr.flows.length; }
-      if (!open || flows.length) groups.push({ key: gr.key, flows, count: gr.flows.length, open });
-    }
-    return { groups, drawable };
-  }, [filtered, all, collapsed]);
+  // Collapsed groups whose routes all left are forgotten.
+  useEffect(() => {
+    const keys = new Set(allGroups.map(gr => gr.key));
+    if ([...collapsed].some(k => !keys.has(k))) setCollapsed(new Set([...collapsed].filter(k => keys.has(k))));
+  }, [allGroups, collapsed]);
+  const { rows: groups, matched, drawable } = useMemo(() => drawGroups(allGroups, needle, collapsed, all ? Infinity : CAP), [allGroups, needle, collapsed, all]);
   const shown = useMemo(() => groups.flatMap(gr => gr.flows), [groups]);
   const g = useMemo(() => flowGraph(shown, domain.dataRefs), [shown, domain.dataRefs]);
   const cards = useMemo(() => cardData(shown, domain, base), [shown, domain, base]);
@@ -409,20 +426,14 @@ function Flows({ domain }: { domain: DomainIndex }) {
       const r = domain.routes.find(x => x.id === routeTrace.id);
       if (r) {
         pendingTrace.current = { id: r.id, at: Date.now() };
-        const passes = r.kind === 'api' ? matches(needle, r.method, r.fullPath, r.file) : matches(needle, r.fullPath, r.framework);
+        const passes = r.kind === 'api' ? routeMatches(needle, r) : matches(needle, r.fullPath, r.framework);
         if (!passes) setQ('');
         if (r.kind === 'api') {
-          // Its place among the routes that will be drawn: open groups (its own opens) under the search that stays.
-          const q2 = passes ? needle : '';
-          let at = 0;
-          for (const gr of allGroups) {
-            const own = gr.flows.some(f => f.route.id === r.id);
-            if (own && collapsed.has(gr.key)) onToggle(gr.key);
-            if (!own && collapsed.has(gr.key)) continue;
-            const i = gr.flows.filter(f => flowMatches(q2, f)).findIndex(f => f.route.id === r.id);
-            if (i >= 0) { at += i; break; }
-            at += gr.flows.filter(f => flowMatches(q2, f)).length;
-          }
+          // Its place in the drawing order once its group is open, under the search that stays.
+          const own = allGroups.find(gr => gr.flows.some(f => f.route.id === r.id))?.key;
+          const open = new Set(collapsed);
+          if (own && open.delete(own)) onToggle(own);
+          const at = drawGroups(allGroups, passes ? needle : '', open, Infinity).rows.flatMap(gr => gr.flows).findIndex(f => f.route.id === r.id);
           if (!all && at >= CAP) setAll(true);
         }
       }
@@ -442,13 +453,16 @@ function Flows({ domain }: { domain: DomainIndex }) {
 
   // Esc clears the search, then the pick, and is left to the panels when neither is there; the arrow keys walk
   // the search box, group headers and route rows.
+  const escape = (): boolean => {
+    if (q) setQ('');
+    else if (picked) unpick();
+    else return false;
+    return true;
+  };
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const t = e.target as HTMLElement;
     if (e.key === 'Escape') {
-      if (q) setQ('');
-      else if (picked) unpick();
-      else return;
-      e.preventDefault();
+      if (escape()) e.preventDefault();
       return;
     }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
@@ -458,6 +472,21 @@ function Flows({ domain }: { domain: DomainIndex }) {
     const next = items[i + (e.key === 'ArrowDown' ? 1 : -1)];
     if (next) { e.preventDefault(); next.focus(); }
   };
+
+  // A mouse pick leaves focus on <body> in Safari and Firefox, so while a route is picked Esc from there clears it
+  // too; in capture, so it runs ahead of the panels' window listener.
+  const escapeRef = useRef(escape);
+  escapeRef.current = escape;
+  useEffect(() => {
+    if (!picked) return;
+    const onWinKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      if (document.activeElement && document.activeElement !== document.body) return;
+      if (escapeRef.current()) e.preventDefault();
+    };
+    window.addEventListener('keydown', onWinKey, true);
+    return () => window.removeEventListener('keydown', onWinKey, true);
+  }, [picked]);
 
   const view: ViewProps = { g, groups, cards, hot: liveHot, picked, onHot, onPick, onToggle, width: width || 1000 };
   return (
