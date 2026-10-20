@@ -297,7 +297,7 @@ describe('GitWatcher', () => {
     expect(got[0].text).toBe('c21');
     expect(got[99].text).toBe('c120');
     // 120 git processes in a row: each start costs tens of ms on Windows, past vitest's 5 s default.
-  }, 30_000);
+  }, 30_000 * TIME_SCALE);
 
   // Windows: a shell script cannot stand in for git.exe.
   it.skipIf(IS_WIN)('stop() ends a git command still running (on Windows it would keep the repo from being deleted)', async () => {
