@@ -39,6 +39,9 @@ function SideGhost({ back }: { back: boolean }) {
   );
 }
 
+/** A run separator's title: a ServiceNow version history import (`sn-history-<scope>-...`) ends, or LiveMap restarted. */
+const runTitle = (prevRun: string | undefined): string => (prevRun?.startsWith('sn-history-') ? 'Version history ends' : 'LiveMap restarted');
+
 /** The bucket index holding `seq` (the last bucket starting at or before it); -1 before the first. */
 function bucketOf(t: Ticks, seq: number): number {
   let i = -1;
@@ -264,7 +267,7 @@ export function Timeline() {
             );
           })}
         </div>
-        {ticks?.runStarts.map(r => r > from && <i key={r} className="tl-run" title="LiveMap restarted" style={{ left: `${fracOf(r) * 100}%` }} />)}
+        {ticks?.runStarts.map((r, i) => r > from && <i key={r} className="tl-run" title={runTitle(ticks.prevRuns?.[i])} style={{ left: `${fracOf(r) * 100}%` }} />)}
         <div
           className="thumb"
           role="slider"

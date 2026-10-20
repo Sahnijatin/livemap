@@ -479,7 +479,10 @@ describe('ticks', () => {
     expect(t.buckets).toHaveLength(1);
     expect(t.buckets[0].counts).toEqual({ prompt: 1, message: 2, tool: 2, change: 1, commit: 1, other: 4 });
     expect(t.runStarts).toEqual([1, 11]);
+    const ids = store.info().runs.map(r => r.id);
+    expect(t.prevRuns).toEqual(['', ids[0]]);
     expect(store.ticks(4, 2, 11).runStarts).toEqual([11]);
+    expect(store.ticks(4, 2, 11).prevRuns).toEqual([ids[0]]);
     await store.close();
   });
 

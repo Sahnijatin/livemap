@@ -211,3 +211,24 @@ describe('Inspector: In plain English', () => {
     expect(useStore.getState().summaries.files['src/a.ts']).toEqual({ hash: 'h', summary: 'Cached words.' });
   });
 });
+
+describe('Why it changed', () => {
+  it('names who saved a version history change that has no attribution', () => {
+    const saved = change('src/a.ts', 'modified', { savedBy: 'dev.user1' });
+    const agent = change('src/a.ts', 'modified', { savedBy: 'dev.user1', attribution: { agent: 'codex', sessionId: 's', confidence: 'exact' } });
+    const plain = change('src/a.ts', 'created');
+    useStore.getState().apply({
+      type: 'hello', root: '/p/shop', name: 'shop', files: [file('src/a.ts')], changes: [plain, saved, agent], usedBy: [], domain: emptyDomain(), indexing: false,
+      events: [], sessions: [], control: { paused: false, flags: [] },
+    });
+    act(() => root.render(<Inspector />));
+    act(() => useStore.getState().select('src/a.ts'));
+    act(() => { vi.advanceTimersByTime(200); });
+    const rows = [...host.querySelectorAll('.why .hrow .hx')].map(r => r.textContent);
+    expect(rows).toEqual([
+      'Edited by Codex', // an attribution wins over savedBy
+      'Edited. Saved by dev.user1 (version history)',
+      'Created. Changed outside an agent',
+    ]);
+  });
+});

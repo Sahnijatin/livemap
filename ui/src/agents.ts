@@ -160,6 +160,10 @@ export function ago(at: number, now: number): string {
 
 export const clock = (at: number): string => new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
+/** Who saved a change LiveMap saw only in a ServiceNow version history, when no tool call explains it. */
+export const savedByText = (c: { attribution?: unknown; savedBy?: string }): string | undefined =>
+  !c.attribution && c.savedBy ? `Saved by ${c.savedBy} (version history)` : undefined;
+
 /** A time of day for today, with the date for other days ("Oct 3, 10:42 AM") and the year for other years. */
 export function when(at: number, now = Date.now()): string {
   const d = new Date(at);

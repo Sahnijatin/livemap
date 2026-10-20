@@ -181,12 +181,14 @@ export class HistoryStore {
   /**
    * Kind counts over [from, to] (default: everything) in at most `buckets` (capped at 500) equal seq
    * ranges. Each bucket carries its first seq and the time of its first record. `runStarts` lists the
-   * first seq of each run in range (for a run trimmed by the cap, where its history now begins).
+   * first seq of each run in range (for a run trimmed by the cap, where its history now begins), and `prevRuns`
+   * the id of the run before each.
    */
   ticks(buckets: number, from?: number, to?: number): Ticks {
     this.flushSync();
-    const runStarts = this.runs.filter(r => r.lastSeq >= r.firstSeq).map(r => r.firstSeq);
-    return bucketTicks(this.index, buckets, runStarts, from, to);
+    const runs = this.runs.filter(r => r.lastSeq >= r.firstSeq);
+    const prevRuns = runs.map((_, i) => (i ? runs[i - 1].id : ''));
+    return bucketTicks(this.index, buckets, runs.map(r => r.firstSeq), from, to, prevRuns);
   }
 
   /** Records with seq in [from, to], oldest first, at most `limit` (default 1000). */

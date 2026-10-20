@@ -84,6 +84,13 @@ describe('Timeline', () => {
     expect(runs[0].getAttribute('title')).toBe('LiveMap restarted');
   });
 
+  it('titles the separator after a ServiceNow version history run "Version history ends"', async () => {
+    source.ticks.mockResolvedValue({ ...TICKS, prevRuns: ['', 'sn-history-x_acme_app-1759480000000'] });
+    render(<Timeline />);
+    await flush();
+    expect(host.querySelector('.tl-run')!.getAttribute('title')).toBe('Version history ends');
+  });
+
   it('shows LIVE and a slider at the live end', async () => {
     render(<Timeline />);
     await flush();

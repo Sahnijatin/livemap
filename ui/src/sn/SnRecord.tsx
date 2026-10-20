@@ -1,7 +1,7 @@
 import { useId, useMemo, useState } from 'react';
 import type { SnRecordInfo } from '@shared/sn.js';
 import { useStore } from '../store';
-import { agentName } from '../agents';
+import { agentName, savedByText } from '../agents';
 import {
   CONFIDENCE_HINT, CONFIDENCE_LABEL, inRecord, kindOf, levelOf, openUrl, recordOf, useSn, whyOf,
   type ConfidenceLevel,
@@ -94,6 +94,7 @@ export function SnRecordCard({ path }: { path: string }) {
   const why = latest ? whyOf(latest, kind, events, sessions) : {};
   const link = openUrl(index.instance, r.table, r.sysId, index.hosts);
   const who = a ? `${agentName(a.agent)}${why.session?.title ? `, ${why.session.title}` : ''}` : undefined;
+  const saved = latest && savedByText(latest);
 
   return (
     <div className="sec sn-rec" aria-label="ServiceNow record">
@@ -103,6 +104,7 @@ export function SnRecordCard({ path }: { path: string }) {
         {latest && (
           <>
             {who && <><dt>Session</dt><dd>{who}</dd></>}
+            {saved && <><dt>Change</dt><dd>{saved}</dd></>}
             {why.goal && <><dt>Goal</dt><dd><Expandable text={why.goal} /></dd></>}
             {why.step && <><dt>Step</dt><dd><Expandable text={why.step} /></dd></>}
             {why.action && <><dt>Action</dt><dd>{why.action}</dd></>}

@@ -11,7 +11,11 @@ export interface HistoryInfo {
 }
 /** One bucket of `/api/history/ticks`: its first seq, the time of its first record, and kind counts. */
 export interface TickBucket { seq: number; at: number; counts: Record<TickKind, number> }
-export interface Ticks { from: number; to: number; buckets: TickBucket[]; runStarts: number[] }
+export interface Ticks {
+  from: number; to: number; buckets: TickBucket[]; runStarts: number[];
+  /** For each of `runStarts`, the id of the run before it ('' for none). Absent where run ids are unknown (exports). */
+  prevRuns?: string[];
+}
 
 const OTHER = TICK_KINDS.indexOf('other');
 
@@ -45,16 +49,18 @@ export interface TickColumns { length: number; seq: ArrayLike<number>; at: Array
 /**
  * Kind counts over seqs [from, to] (default: everything) in at most `buckets` (capped at 500) equal seq
  * ranges. Each bucket carries its first seq and the time of its first record; a bucket with no records
- * takes the previous bucket's time. `runStarts` are passed through, limited to the range.
+ * takes the previous bucket's time. `runStarts` (and `prevRuns`, one per start) are passed through, limited to the range.
  * Shared by the history store and the export's embedded history source, so both bucket alike.
  */
-export function bucketTicks(cols: TickColumns, buckets: number, runStarts: number[], from?: number, to?: number): Ticks {
+export function bucketTicks(cols: TickColumns, buckets: number, runStarts: number[], from?: number, to?: number, prevRuns?: string[]): Ticks {
   const n = cols.length;
   if (!n) return { from: 0, to: 0, buckets: [], runStarts: [] };
   const lo = Math.max(from ?? cols.seq[0], cols.seq[0]);
   const hi = Math.min(to ?? cols.seq[n - 1], cols.seq[n - 1]);
-  const starts = runStarts.filter(s => s >= lo && s <= hi);
-  if (hi < lo) return { from: lo, to: hi, buckets: [], runStarts: starts };
+  const keep = runStarts.map(s => s >= lo && s <= hi);
+  const starts = runStarts.filter((_, i) => keep[i]);
+  const runs = prevRuns ? { prevRuns: prevRuns.filter((_, i) => keep[i]) } : {};
+  if (hi < lo) return { from: lo, to: hi, buckets: [], runStarts: starts, ...runs };
   const span = hi - lo + 1;
   const count = Math.min(span, Math.max(1, Math.min(MAX_TICK_BUCKETS, Math.floor(buckets) || 1)));
   const out: TickBucket[] = [];
@@ -70,7 +76,7 @@ export function bucketTicks(cols: TickColumns, buckets: number, runStarts: numbe
   }
   let prevAt = cols.at[first];
   for (const b of out) prevAt = b.at = b.at < 0 ? prevAt : b.at;
-  return { from: lo, to: hi, buckets: out, runStarts: starts };
+  return { from: lo, to: hi, buckets: out, runStarts: starts, ...runs };
 }
 
 /** The first position whose seq is at least `seq` (`length` when none is). */
