@@ -133,7 +133,7 @@ A table and time match (or a background script) counts only when the save's auth
 - Several records can share a file (a table and its columns). A save of a record whose file is already there is a change to that file.
 - It is added once per scope, and never again: live polling records every save after it. LiveMap notes the import in its history folder, so a restart or the history size cap does not add it twice. With `--no-history` nothing is recorded or added.
 - If the history read stopped early (it is partial), it is not added yet. A later start with the full history adds it.
-- The timeline shows times of day only, so a back-dated run reads like any other; the history's dates are in `<scope>.history.json`.
+- In the timeline, a save that matched no tool call reads "Saved by <user> (version history)", and a marker labeled "Version history ends" shows where the live run starts.
 
 The command prints how many versions it imported, how many log lines it read, how many saves matched, were ambiguous or matched nothing, and any SkyForge tools it does not know (they are read as reads).
 
