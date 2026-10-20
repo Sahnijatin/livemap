@@ -125,6 +125,16 @@ A table and time match (or a background script) counts only when the save's auth
 - **Scripts.** Background scripts and scheduled script jobs can write any table, so they only ever make a save `likely`.
 - **Limits.** The log has no session id and cuts argument values at about 100 characters. A `✅` line means the call returned, not that the write succeeded.
 
+**In the timeline.** When LiveMap starts on the mirror, it adds this history to the timeline as a back-dated run, before the live one, so rewind goes back to the scope's first saves and shows it growing.
+
+- Each save of a mirrored record becomes a change at its real time, with the record's files as they are now: the history says when a record changed and who saved it, not what it held then.
+- The run starts with the files no saved event creates: records older than the history, and files of no record. Recaptures, and saves of records that are not mirrored (deleted ones, for example), are left out.
+- Changes keep the match above: `log` and `likely` show as SkyForge. A save that matched no tool call is not agent work: it has no attribution, and keeps the ServiceNow user who saved it.
+- Several records can share a file (a table and its columns). A save of a record whose file is already there is a change to that file.
+- It is added once per scope, and never again: live polling records every save after it. LiveMap notes the import in its history folder, so a restart or the history size cap does not add it twice. With `--no-history` nothing is recorded or added.
+- If the history read stopped early (it is partial), it is not added yet. A later start with the full history adds it.
+- The timeline shows times of day only, so a back-dated run reads like any other; the history's dates are in `<scope>.history.json`.
+
 The command prints how many versions it imported, how many log lines it read, how many saves matched, were ambiguous or matched nothing, and any SkyForge tools it does not know (they are read as reads).
 
 ### `livemap mcp-proxy`

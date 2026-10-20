@@ -1,4 +1,6 @@
 import { DEFAULT_PORT } from './server/server.js';
+import type { ProjectModel } from './engine/project.js';
+import type { HistoryStore } from './history/store.js';
 import type { Analyzer } from './engine/domain/index.js';
 import type { RecordKey } from './agents/attribution.js';
 import type { SourceStatus } from './shared/protocol.js';
@@ -27,6 +29,11 @@ export interface ServeOptions {
   title?: string;
   /** Called once indexing is done and the UI is live, before serve resolves. */
   onReady?: (handles: ServeHandles) => void;
+  /**
+   * Runs once the first scan is done and before the live run starts, with the history store when history is
+   * on: a source writes back-dated runs here (the ServiceNow scope's version history). A failure is a warning.
+   */
+  beforeRun?: (ctx: { model: ProjectModel; history: HistoryStore; say: (line: string) => void }) => Promise<void>;
 }
 /** What core hands a source's command: the server loop and root resolution. */
 export interface CoreHooks {
