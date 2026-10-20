@@ -29,7 +29,7 @@ export default defineConfig([
     format: ['esm'],
     target: 'node18',
     platform: 'node',
-    clean: ['livemap-skyforge.js*'],
+    clean: ['!*/**', '!!(livemap-skyforge.js*)'],
     noExternal: [/.*/],
     removeNodeProtocol: false,
     splitting: false,

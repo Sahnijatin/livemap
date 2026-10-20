@@ -9,7 +9,7 @@ import configs from '../tsup.config';
 // tsup's own glob, resolved from tsup, as it deletes `**/*` plus the `clean` patterns (removeFiles).
 const { glob } = createRequire(createRequire(import.meta.url).resolve('tsup'))('tinyglobby') as typeof import('tinyglobby');
 
-const OUTPUT = ['cli.js', 'cli.js.map', 'hook.mjs', 'THIRD_PARTY_NOTICES.md', 'ui/index.html', 'ui/assets/cli.js', 'ui-export/index.html', 'grammars/tree-sitter-go.wasm'];
+const OUTPUT = ['cli.js', 'cli.js.map', 'hook.mjs', 'livemap-skyforge.js', 'THIRD_PARTY_NOTICES.md', 'ui/index.html', 'ui/assets/cli.js', 'ui-export/index.html', 'grammars/tree-sitter-go.wasm'];
 let dir = '';
 afterEach(() => { if (dir) fs.rmSync(dir, { recursive: true, force: true }); });
 
@@ -21,11 +21,11 @@ describe('tsup clean (#63)', () => {
       fs.writeFileSync(path.join(dir, f), '');
     }
     const list = configs as Options[];
-    expect(list).toHaveLength(2);
+    expect(list).toHaveLength(3);
     const deleted = await Promise.all(list.map(async c => {
       expect(Array.isArray(c.clean), 'clean must be a pattern list: `true` would empty dist/').toBe(true);
       return (await glob(['**/*', ...(c.clean as string[])], { cwd: dir })).sort();
     }));
-    expect(deleted).toEqual([['cli.js', 'cli.js.map'], ['hook.mjs']]);
+    expect(deleted).toEqual([['cli.js', 'cli.js.map'], ['hook.mjs'], ['livemap-skyforge.js']]);
   });
 });
