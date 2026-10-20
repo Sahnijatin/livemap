@@ -128,6 +128,11 @@ export class HistoryStore {
     this.runCapIfDue();
   }
 
+  /** Whether `importRun` was asked to write `id` before, whether or not its run is still on disk. */
+  imported(id: string): boolean {
+    return this.imports.has(id);
+  }
+
   /**
    * Writes a finished, back-dated run before the live one: `start` as its first record, then `records` with their
    * own times (oldest first), e.g. a ServiceNow scope's version history, so rewind can go back before LiveMap ran.
@@ -135,11 +140,6 @@ export class HistoryStore {
    * cap deletes its run), when there is nothing to write, or when the store cannot write. It must be called
    * before `startRun`; the cap is checked when the live run starts.
    */
-  /** Whether `importRun` was asked to write `id` before, whether or not its run is still on disk. */
-  imported(id: string): boolean {
-    return this.imports.has(id);
-  }
-
   async importRun(id: string, start: ProjectState, records: { at: number; msg: ServerMessage }[]): Promise<number> {
     if (this.disabled || this.closed || this.readOnly || this.current || !records.length) return 0;
     if (this.imported(id) || this.runs.some(r => r.id === id) || !/^[\w.-]+$/.test(id)) return 0;

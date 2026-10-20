@@ -244,7 +244,7 @@ describe('HistoryStore.importRun and importScopeHistory', () => {
     expect(info.runs[0].lastSeq - info.runs[0].firstSeq).toBe(3001);
     expect((await store.stateAt(info.runs[0].lastSeq)).files).toHaveLength(1700);
     await store.close();
-  }, 60_000);
+  }, 60_000 * TIME_SCALE);
 });
 
 describe('the fixture history as a back-dated run', () => {
@@ -271,7 +271,7 @@ describe('the fixture history as a back-dated run', () => {
     }
     model = new ProjectModel(root, { analyzers: [...ANALYZERS, serviceNowAnalyzer(root)] });
     await model.scan();
-  }, 120_000);
+  }, 120_000 * TIME_SCALE);
   afterAll(() => rmTree(dir));
 
   it('replays the scope growing, and ends where the live run starts', async () => {
