@@ -208,6 +208,16 @@ test('agent flow: transcript, attribution, flags, pause, cursor and git', async 
   git('add', SERVICE);
   git('commit', '-q', '-m', 'Add refund endpoint');
   await expect(feed(page).locator('.f-git').filter({ hasText: 'Add refund endpoint' })).toBeVisible({ timeout: 5000 });
+  // A merge folds into one compact line; the Live session lists the real commit, not the merge.
+  git('checkout', '-q', '-b', 'e2e-feature');
+  git('commit', '-q', '--allow-empty', '-m', 'Feature work');
+  git('checkout', '-q', '-');
+  git('merge', '-q', '--no-ff', '-m', 'Merge pull request #12 from acme/e2e-feature', 'e2e-feature');
+  await expect(feed(page).locator('.f-git.merge').filter({ hasText: 'Merge pull request #12' })).toBeVisible({ timeout: 5000 });
+  await page.getByRole('button', { name: '‹ Live session' }).click();
+  const commits = page.locator('.gitlist .gitrow');
+  await expect(commits.first()).toContainText('Feature work');
+  await expect(commits.filter({ hasText: 'Merge pull request' })).toHaveCount(0);
 
   // 9. Dark-mode screenshots of the final state.
   await page.screenshot({ path: 'test-results/agents-dark-5-final.png' });

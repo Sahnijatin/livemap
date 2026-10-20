@@ -174,6 +174,15 @@ describe('Attributor', () => {
     expect(attr.attribute(change(), T0)).toBeUndefined();
   });
 
+  it('a merge seen with the commit it brought in never takes the credit for its files', () => {
+    const { hub, attr } = setup();
+    hub.ingestRaw([
+      commitEv(T0 - 5000, T0 - 1000, ['src/a.ts'], 'Feature work'),
+      { ...commitEv(T0 - 4000, T0 - 1000, ['src/a.ts'], 'Merge pull request #12 from acme/x'), sessionId: 'Ada', merge: true },
+    ], gitHints);
+    expect(attr.attribute(change(), T0)).toMatchObject({ sessionId: 'Ann', confidence: 'exact', intent: 'Feature work' });
+  });
+
   it('I5: a commit seen after the change back-fills it as exact', () => {
     const { hub, attr } = setup();
     const got: Array<[number, Attribution]> = [];
