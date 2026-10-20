@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { DomainIndex, Table } from '@shared/domain.js';
 import { useStore } from '../store';
 import { emptyDomain } from '../fixtures';
-import { LAYOUT_TIMEOUT, NODE_W, relationLinks, type ElkRun } from '../layout/schemaLayout';
+import { LARGE, LAYOUT_TIMEOUT, NODE_W, relationLinks, type ElkRun } from '../layout/schemaLayout';
 import { CAP, SchemaView, TURN_DEBOUNCE, pickTables } from './SchemaView';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -302,6 +302,91 @@ describe('SchemaView palette focus (tableFocus)', () => {
     expect(wrap(`cap${CAP + 4}`)!.classList.contains('pulse')).toBe(true);
     expect(Math.abs(centerX(`cap${CAP + 4}`))).toBeLessThan(1);
   });
+});
+
+describe('SchemaView table list', () => {
+  /** `n` tables: Hub, Kid0 to Kid{n-3} linking to Hub (the first via `hubId`, a column search finds), and Lone. */
+  function family(n: number, tag: string): Table[] {
+    const hub: Table = { ...bare(`${tag}Hub`), fields: [user.fields[0], { name: 'email', type: 'String', file: F }] };
+    const kids = Array.from({ length: n - 2 }, (_, i): Table => ({
+      ...bare(`${tag}Kid${i}`),
+      fields: [user.fields[0], { name: i === 0 ? 'hubId' : 'parentId', type: 'String', fk: { table: hub.table, field: 'id' }, file: F }],
+      relations: [{ field: i === 0 ? 'hubId' : 'parentId', to: hub.table, many: false, via: 'fk' }],
+    }));
+    return [hub, ...kids, bare(`${tag}Lone`)];
+  }
+  const list = () => host.querySelector<HTMLElement>('.sv-list');
+  const rows = () => [...host.querySelectorAll<HTMLButtonElement>('.sv-row')];
+  const names = () => rows().map(r => r.querySelector('.sv-rn')!.textContent);
+  const search = () => host.querySelector<HTMLInputElement>('.sv-list input[type=search]')!;
+  const wrap = (k: string) => host.querySelector<HTMLElement>(`.react-flow__node[data-id="${k}"]`)!;
+  async function type(v: string) {
+    const input = search();
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    await act(async () => { set.call(input, v); input.dispatchEvent(new Event('input', { bubbles: true })); });
+  }
+  const esc = (el: Element) => act(() => { el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it(`is open for over ${LARGE} tables, listing each by name with column and relation counts`, async () => {
+    await mount(family(LARGE + 4, 'Lst'));
+    expect(list()).not.toBeNull();
+    expect(rows()).toHaveLength(LARGE + 4);
+    expect(names()).toEqual([...names()].sort((a, b) => a!.localeCompare(b!)));
+    const hub = rows().find(r => r.dataset.table === 'lsthub')!;
+    expect(hub.querySelector('.sv-cols')?.textContent).toBe('2');
+    expect(hub.querySelector('.sv-rels')?.textContent).toBe(String(LARGE + 2));
+    expect(hub.getAttribute('aria-label')).toBe(`LstHub, 2 columns, ${LARGE + 2} relations`);
+    expect(host.querySelector('.sv-count')?.textContent).toBe(`${LARGE + 4} tables`);
+  });
+
+  it('is closed for a small schema until the Tables button opens it', async () => {
+    await mount(family(6, 'Sml'));
+    expect(list()).toBeNull();
+    const open = [...host.querySelectorAll('button')].find(b => b.textContent === 'Tables')!;
+    await act(async () => open.click());
+    expect(rows()).toHaveLength(6);
+  });
+
+  it('filters by table or column name, shows the matching columns, and Esc clears the search', async () => {
+    await mount(family(LARGE + 4, 'Flt'));
+    await type('lone');
+    expect(names()).toEqual(['FltLone']);
+    expect(host.querySelector('.sv-count')?.textContent).toBe(`1 of ${LARGE + 4} tables`);
+    await type('hubid');
+    expect(names()).toEqual(['FltKid0']);
+    expect(rows()[0].querySelector('.sv-hit')?.textContent).toBe('hubId');
+    await type('nothing here');
+    expect(rows()).toHaveLength(0);
+    expect(list()!.textContent).toContain('No tables match “nothing here”.');
+    await esc(search());
+    expect(search().value).toBe('');
+    expect(rows()).toHaveLength(LARGE + 4);
+  });
+
+  it('clicking a table focuses it: marked and centered, its relations lit, the rest dimmed, until Esc', async () => {
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: q.includes('prefers-reduced-motion'), media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }));
+    await mount(family(LARGE + 4, 'Pick'));
+    const row = rows().find(r => r.dataset.table === 'pickkid3')!;
+    await act(async () => row.click());
+    await settleLayout();
+    expect(row.getAttribute('aria-current')).toBe('true');
+    expect(wrap('pickkid3').classList.contains('focus')).toBe(true);
+    expect(wrap('pickkid3').classList.contains('hl')).toBe(true);
+    expect(wrap('pickhub').classList.contains('hl')).toBe(true);
+    expect(wrap('picklone').classList.contains('dim')).toBe(true);
+    const m = /translate\(([-\d.e]+)px,\s*([-\d.e]+)px\)\s*scale\(([-\d.e]+)\)/.exec(host.querySelector<HTMLElement>('.react-flow__viewport')!.style.transform)!;
+    expect(Math.abs((posOf('pickkid3')!.x + NODE_W / 2) * Number(m[3]) + Number(m[1]) - 250)).toBeLessThan(1);
+    // Hovering another table (a tap on a phone) lights it too, without dimming the focused one.
+    await act(async () => { wrap('picklone').dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body })); });
+    expect(wrap('picklone').classList.contains('hl')).toBe(true);
+    expect(wrap('pickkid3').classList.contains('dim')).toBe(false);
+    await act(async () => { wrap('picklone').dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body })); });
+    await esc(search());
+    expect(wrap('pickkid3').classList.contains('focus')).toBe(false);
+    expect(wrap('picklone').classList.contains('dim')).toBe(false);
+  });
+
 });
 
 describe('SchemaView layout direction (pane aspect)', () => {

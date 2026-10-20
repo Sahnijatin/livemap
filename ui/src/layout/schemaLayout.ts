@@ -152,6 +152,126 @@ export function elkGraph(tables: Table[], direction: Direction = 'RIGHT'): ElkNo
   };
 }
 
+/** Over this many tables a schema is large: grouped layout, lines between groups only on focus, the table list open. */
+export const LARGE = 20;
+/** A table linked to this many others is a hub (users, organizations): its links do not join groups. */
+export const HUB_DEGREE = 8;
+/** Space between groups; wider than ELK's 44 px between cards, so groups read apart. */
+const GROUP_GAP = 96;
+const CARD_GAP = 44;
+
+/** A large schema's groups, as table keys in table order. */
+export interface Groups {
+  /** Tables joined by links that do not touch a hub; ELK lays each out. */
+  comps: string[][];
+  /** Each hub first, then the tables whose only links go to it (or to it and smaller hubs). */
+  hubs: string[][];
+  /** Tables with no links at all. */
+  loose: string[];
+}
+
+export function schemaGroups(tables: Table[]): Groups {
+  const index = new Map(tables.map((t, i) => [tableKey(t), i]));
+  const nb = new Map<string, Set<string>>(tables.map(t => [tableKey(t), new Set()]));
+  for (const l of relationLinks(tables)) {
+    if (l.from === l.to) continue;
+    nb.get(l.from)!.add(l.to);
+    nb.get(l.to)!.add(l.from);
+  }
+  const hubs = new Map<string, string[]>();
+  for (const [k, s] of nb) if (s.size >= HUB_DEGREE) hubs.set(k, [k]);
+  const comps: string[][] = [];
+  const loose: string[] = [];
+  const seen = new Set<string>();
+  for (const k of nb.keys()) {
+    if (hubs.has(k) || seen.has(k)) continue;
+    const comp: string[] = [];
+    const stack = [k];
+    seen.add(k);
+    while (stack.length) {
+      const x = stack.pop()!;
+      comp.push(x);
+      for (const y of nb.get(x)!) if (!hubs.has(y) && !seen.has(y)) { seen.add(y); stack.push(y); }
+    }
+    if (comp.length > 1) { comps.push(comp.sort((a, b) => index.get(a)! - index.get(b)!)); continue; }
+    let hub: string | null = null;
+    for (const y of nb.get(k)!) if (hubs.has(y) && (!hub || nb.get(y)!.size > nb.get(hub)!.size)) hub = y;
+    if (hub) hubs.get(hub)!.push(k);
+    else loose.push(k);
+  }
+  return { comps, hubs: [...hubs.values()], loose };
+}
+
+/**
+ * The links to draw. A large schema draws only links inside a linked component (ELK routes those cleanly) plus
+ * every link of the `active` (focused or hovered) table; hub links would otherwise cross the whole canvas.
+ */
+export function shownLinks(tables: Table[], links: Link[], active: string | null): Link[] {
+  if (tables.length <= LARGE) return links;
+  const comp = new Map<string, number>();
+  schemaGroups(tables).comps.forEach((c, i) => { for (const k of c) comp.set(k, i); });
+  return links.filter(l => l.from === active || l.to === active || (comp.has(l.from) && comp.get(l.from) === comp.get(l.to)));
+}
+
+type Block = { w: number; h: number; pos: Map<string, Pos> };
+
+/** Cards in `cols` columns, each card going to the shortest column. */
+function masonry(tables: Table[]): Block {
+  const cols = Math.ceil(Math.sqrt(tables.length));
+  const y = new Array<number>(cols).fill(0);
+  const pos = new Map<string, Pos>();
+  for (const t of tables) {
+    const c = y.indexOf(Math.min(...y));
+    pos.set(tableKey(t), { x: c * (NODE_W + CARD_GAP), y: y[c] });
+    y[c] += nodeHeight(t) + CARD_GAP;
+  }
+  return { w: Math.min(cols, tables.length) * (NODE_W + CARD_GAP) - CARD_GAP, h: Math.max(...y) - CARD_GAP, pos };
+}
+
+/**
+ * Positions for a large schema: one ELK run over the linked components, hub groups and loose tables in compact
+ * grids, then every group packed in rows, tallest first, to the direction's aspect (wide for RIGHT, tall for DOWN).
+ */
+async function groupedLayout(tables: Table[], run: ElkRun, direction: Direction): Promise<Map<string, Pos>> {
+  const byKey = new Map(tables.map(t => [tableKey(t), t]));
+  const g = schemaGroups(tables);
+  const blocks: Block[] = [];
+  if (g.comps.length) {
+    const res = await run(elkGraph(g.comps.flat().map(k => byKey.get(k)!), direction));
+    const elk = new Map((res.children ?? []).map(c => [c.id, { x: c.x ?? 0, y: c.y ?? 0 }]));
+    for (const comp of g.comps) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const k of comp) {
+        const p = elk.get(k) ?? { x: 0, y: 0 };
+        x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y);
+        x1 = Math.max(x1, p.x + NODE_W); y1 = Math.max(y1, p.y + nodeHeight(byKey.get(k)!));
+      }
+      const pos = new Map(comp.map(k => { const p = elk.get(k) ?? { x: 0, y: 0 }; return [k, { x: p.x - x0, y: p.y - y0 }]; }));
+      blocks.push({ w: x1 - x0, h: y1 - y0, pos });
+    }
+  }
+  for (const keys of [...g.hubs, g.loose]) if (keys.length) blocks.push(masonry(keys.map(k => byKey.get(k)!)));
+  const area = blocks.reduce((s, b) => s + (b.w + GROUP_GAP) * (b.h + GROUP_GAP), 0);
+  const width = Math.max(...blocks.map(b => b.w), Math.sqrt(area * (direction === 'DOWN' ? 0.6 : 1.6)));
+  blocks.sort((a, b) => b.h - a.h);
+  const out = new Map<string, Pos>();
+  let x = 0, y = 0, rowH = 0;
+  for (const b of blocks) {
+    if (x > 0 && x + b.w > width) { x = 0; y += rowH + GROUP_GAP; rowH = 0; }
+    for (const [k, p] of b.pos) out.set(k, { x: x + p.x, y: y + p.y });
+    x += b.w + GROUP_GAP;
+    rowH = Math.max(rowH, b.h);
+  }
+  return out;
+}
+
+/** Positions for every table from scratch: one ELK run for a small schema, the grouped layout for a large one. */
+async function placeAll(tables: Table[], run: ElkRun, direction: Direction): Promise<Map<string, Pos>> {
+  if (tables.length > LARGE) return groupedLayout(tables, run, direction);
+  const res = await run(elkGraph(tables, direction));
+  return new Map((res.children ?? []).map(c => [c.id, { x: c.x ?? 0, y: c.y ?? 0 }]));
+}
+
 type Box = { x: number; y: number; w: number; h: number };
 /** Within the 24 px gap of each other. */
 const hits = (a: Box, b: Box): boolean =>
@@ -197,9 +317,9 @@ export async function layoutTables(tables: Table[], prev: Map<string, Pos>, run:
   const out = settle(tables, kept);
   if (!fresh.length) return out;
 
-  const res = await withTimeout(run(elkGraph(tables, direction)), LAYOUT_TIMEOUT);
+  const placed = await withTimeout(placeAll(tables, run, direction), LAYOUT_TIMEOUT);
   const elkPos = new Map<string, Pos>();
-  for (const c of res.children ?? []) elkPos.set(c.id, { x: Math.round(c.x ?? 0), y: Math.round(c.y ?? 0) });
+  for (const [k, p] of placed) elkPos.set(k, { x: Math.round(p.x), y: Math.round(p.y) });
 
   const byKey = new Map(tables.map(t => [tableKey(t), t]));
   const boxes: Box[] = [...out].map(([k, p]) => ({ ...p, w: NODE_W, h: nodeHeight(byKey.get(k)!) }));
