@@ -103,7 +103,10 @@ describe('change facts in the mirror', () => {
   });
 });
 
-describe('live polling', () => {
+// Each test pulls the fixture scope through the mock nexus first, which takes seconds on a slow runner.
+const TIME_SCALE = Number(process.env.LIVEMAP_TIME_SCALE) || 1;
+
+describe('live polling', { timeout: 15_000 * TIME_SCALE }, () => {
   it('costs two queries when nothing changed, and writes nothing', async () => {
     const { m, poller, firstPoll } = await setup();
     m.calls.length = 0;
