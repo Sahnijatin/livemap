@@ -5,7 +5,7 @@ import path from 'node:path';
 import { pullScope, resolveScope } from '../../plugins/servicenow/backfill.js';
 import { importHistory, parsePayload, snTime, type HistoryEvent } from '../../plugins/servicenow/history.js';
 import { layoutMirror } from '../../plugins/servicenow/mirror.js';
-import { NexusClient } from '../../plugins/servicenow/nexus.js';
+import { NexusClient, NexusDeadlineError } from '../../plugins/servicenow/nexus.js';
 import { DEFAULT_LOG_WINDOW_MS, LOG_LEAD_MS, instanceName, matchHistory, parseArgs, parseLog, toCall, toolRole, type LogCall } from '../../plugins/servicenow/skyforge-log.js';
 import { buildTimeline, homeRelative } from '../../plugins/servicenow/timeline.js';
 import { historyPath, readHistory, snRoot, writeHistory, writeMirror } from '../../plugins/servicenow/writer.js';
@@ -83,6 +83,10 @@ describe('history import from the BharatBank fixture', () => {
     m.calls.length = 0;
     const h = await importHistory(c, scope, pulled.inventory, { full: pulled.full });
     expect(h).toMatchObject({ versions: 183, versionsBy: 'application', fromUpdateXml: 0, xmlEvents: 0, captured: 0 });
+    // Skipping the name sweep is said out loud.
+    expect(h.warnings).toEqual([expect.stringMatching(/update name lookup is skipped/)]);
+    // Each version row is its own save, even two of one record in the same second.
+    expect(saves(h.events)).toHaveLength(183);
     expect(h.events.every(e => e.source === 'version')).toBe(true);
     expect(queriesOf(m, 'sys_update_version').some(x => String(x.args.query).startsWith('nameIN'))).toBe(false);
     expect(queriesOf(m, 'sys_update_xml').some(x => (x.args.fields as string[]).includes('payload'))).toBe(false);
@@ -100,8 +104,8 @@ describe('history import from the BharatBank fixture', () => {
     const { scope, pulled } = await pull(c);
     const h = await importHistory(c, scope, pulled.inventory);
     expect(h).toMatchObject({ versions: 183, versionsBy: 'name', fromUpdateXml: 0 });
-    // One event per save: the fixture's 183 rows hold 112 saves; the rest write the same save again.
-    expect(saves(h.events)).toHaveLength(112);
+    // The mock makes one version row per update_xml row, and each version row is a save of its own.
+    expect(saves(h.events)).toHaveLength(183);
   });
 
   it('pages by short page, not has_more, with {link, value} references flattened', async () => {
@@ -176,14 +180,37 @@ describe('history import from the BharatBank fixture', () => {
     ]);
   });
 
-  it('stops at its time budget with a warning and a partial result', async () => {
-    const { c } = await setup();
+  it('keeps the versions source when the budget runs out while reading them', async () => {
+    const { m, c } = await setup({ versions: 'application' });
     const { scope, pulled } = await pull(c);
-    // Each query takes a simulated 20 s; the budget covers the first few.
-    let t = 0;
-    const h = await importHistory(c, scope, pulled.inventory, { budgetMs: 50_000, now: () => (t += 10_000) });
+    m.calls.length = 0;
+    // Each nexus call takes a simulated 10 s. The probe and two version pages fit; the third does not.
+    const h = await importHistory(c, scope, pulled.inventory, { budgetMs: 25_000, pageSize: 50, now: () => m.calls.length * 10_000 });
+    expect(m.calls).toHaveLength(3);
+    expect(h).toMatchObject({ partial: true, versionsBy: 'application' });
+  });
+
+  it('checks the deadline between pages of one query', async () => {
+    const { m, c } = await setup();
+    m.calls.length = 0;
+    // Each call takes a simulated second; the deadline falls during the first page.
+    await expect(c.query('sys_metadata', { pageSize: 100, deadline: { at: 500, now: () => m.calls.length * 1000 } })).rejects.toBeInstanceOf(NexusDeadlineError);
+    expect(m.calls.filter(x => (x.inner ?? x.tool) === 'sn_query_table')).toHaveLength(1);
+  });
+
+  it('stops at its time budget with a warning and a partial result', async () => {
+    const { m, c } = await setup();
+    const { scope, pulled } = await pull(c);
+    m.calls.length = 0;
+    // Each nexus call takes a simulated 10 s. The run reads the rows and versions, then runs out in the payloads.
+    const full = await importHistory(c, scope, pulled.inventory);
+    const firstPayload = m.calls.findIndex(x => Array.isArray(x.args.fields) && (x.args.fields as string[]).includes('payload'));
+    expect(full.partial).toBe(false);
+    m.calls.length = 0;
+    const budget = (firstPayload + 1) * 10_000 + 5_000;
+    const h = await importHistory(c, scope, pulled.inventory, { budgetMs: budget, now: () => m.calls.length * 10_000 });
     expect(h.partial).toBe(true);
-    expect(h.warnings.join('\n')).toMatch(/stopped after 50 s .*partial/);
+    expect(h.warnings.join('\n')).toMatch(/stopped after \d+ s .*partial/);
     // Rows whose payload was not read are left out rather than dated by their rewritten row time.
     expect(h.warnings.join('\n')).toMatch(/update_xml rows left out/);
     for (const e of saves(h.events)) if (e.kind !== 'deleted') expect(new Date(e.at).toISOString().slice(0, 7)).not.toBe('2026-07');
@@ -234,7 +261,8 @@ describe('SkyForge log parsing', () => {
     expect(instanceName('https://Acme.service-now.com/')).toBe('acme');
     expect(instanceName('acme.service-now.com')).toBe('acme');
     expect(instanceName('acme')).toBe('acme');
-    expect(instanceName('snow.example.com:443')).toBe('snow.example.com');
+    expect(instanceName('snow.example.com:443')).toBeNull();
+    expect(instanceName('https://10.0.0.5/')).toBeNull();
   });
 
   // The tools seen in SkyForge's log, and what a start line of each becomes (null: not a write).
@@ -250,6 +278,12 @@ describe('SkyForge log parsing', () => {
     ['tool=sn_update_set_manage, action=switch, update_set_id=' + id, null],
     ['tool=sn_update_set_manage, action=current', null],
     ['tool=sn_update_set_manage, action=create, name=Release 2', null],
+    ['tool=sn_update_set_query, action=list', null],
+    ['tool=sn_update_set_query, action=current', null],
+    ['tool=sn_ensure_active_update_set, name=Release 2', null],
+    ['tool=sn_update_set_manage, action=add_artifact, artifact_type=script_include, artifact_sys_id=' + id, { kind: 'capture', tables: ['sys_script_include'], sysId: id }],
+    ['tool=sn_update_set_manage, action=add_artifact, artifact_type=script_action, artifact_sys_id=' + id, { kind: 'capture', tables: ['sysevent_script_action'] }],
+    ['tool=sn_update_set_manage, action=add_artifact, artifact_type=ui_action, artifact_sys_id=' + id, { kind: 'capture', tables: ['sys_ui_action'] }],
     ['tool=sn_update_set_manage, action=add_artifact, update_set_id=' + 'cd'.repeat(16) + ', artifact_table=sp_widget, artifact_sys_id=' + id, { kind: 'capture', tables: ['sp_widget'], sysId: id }],
     ['tool=sn_update_set_manage, action=add_artifact, artifact_type=sp_page, artifact_sys_id=' + id + ', artifact_name=Home', { kind: 'capture', tables: ['sp_page'], sysId: id, names: ['home'] }],
     ['tool=sn_create_field, table=x_app_t, column_name=credit_score, column_label=Credit Score, internal_type=integer',
@@ -297,18 +331,55 @@ describe('SkyForge log parsing', () => {
     ['tool=sn_execute_background_script, script=var gr = new GlideRecord("x_app_t")..., ...+1 more', { kind: 'script', anyTable: true }],
     ['tool=sn_schedule_script_job, name=Fix data, ...+2 more', { kind: 'script', anyTable: true }],
     ['tool=sn_delete_record, table=x_app_t, sys_id=' + id, { kind: 'delete', tables: ['x_app_t'], sysId: id }],
+    // Tools seen in the real log.
+    ['tool=sn_assign_tool_to_agent, agent_id=' + id, { kind: 'update', anyTable: true }],
+    ['tool=sn_bulk_update, table=x_app_t, query=active=true', { kind: 'update', tables: ['x_app_t'] }],
+    ['tool=sn_bulk_update, query=active=true', { kind: 'update', anyTable: true }],
+    ['tool=sn_catalog_item_manager, action=create, name=New card', { kind: 'create', tables: ['sc_cat_item'], names: ['new card'] }],
+    ['tool=sn_catalog_item_manager, action=update, sys_id=' + id, { kind: 'update', tables: ['sc_cat_item'], sysId: id }],
+    ['tool=sn_catalog_item_manager, action=get, sys_id=' + id, null],
+    ['tool=sn_cleanup_workspace_t2e, workspace=cards', { kind: 'script', anyTable: true }],
+    ['tool=sn_configure_macroponent, macroponent=card', { kind: 'update', anyTable: true }],
+    ['tool=sn_decision_create, name=Card limits', { kind: 'create', tables: ['sys_decision'], names: ['card limits'] }],
+    ['tool=sn_email_notification_manage, action=create, name=Approved', { kind: 'create', tables: ['sysevent_email_action'] }],
+    ['tool=sn_email_notification_manage, action=delete, sys_id=' + id, { kind: 'delete', tables: ['sysevent_email_action'], sysId: id }],
+    ['tool=sn_email_notification_manage, action=list', null],
+    ['tool=sn_invoke_ai_agent, agent=triage', { kind: 'script', anyTable: true }],
+    ['tool=sn_manage_workspace_list_config, action=update, list=cards', { kind: 'update', anyTable: true }],
+    ['tool=sn_manage_workspace_list_config, action=get', null],
+    ['tool=sn_manage_workspace_navigation, action=set_landing_page, workspace=cards', { kind: 'update', anyTable: true }],
+    ['tool=sn_par_create_dashboard, name=Cards', { kind: 'create', anyTable: true }],
+    ['tool=sn_par_update_dashboard, sys_id=' + id, { kind: 'update', anyTable: true, sysId: id }],
+    ['tool=sn_plugin_manage, action=activate, plugin_id=com.example', { kind: 'script', anyTable: true }],
+    ['tool=sn_plugin_manage, action=list', null],
+    ['tool=sn_property_manager, action=set, name=x_app.limit, value=42', { kind: 'update', tables: ['sys_properties'], names: ['x_app.limit'] }],
+    ['tool=sn_property_manager, action=get, name=x_app.limit', null],
+    ['tool=sn_rest_message_manage, action=create, name=Bureau', { kind: 'create', tables: ['sys_rest_message', 'sys_rest_message_fn'] }],
+    ['tool=sn_scheduled_job_manage, action=create, name=Nightly', { kind: 'create', tables: ['sysauto_script'] }],
+    ['tool=sn_scheduled_job_manage, action=run_now, sys_id=' + id, { kind: 'script', anyTable: true }],
+    ['tool=sn_scheduled_job_manage, action=list', null],
+    ['tool=sn_scripted_rest_api, action=create, name=Cards API', { kind: 'create', tables: ['sys_ws_definition', 'sys_ws_operation'] }],
+    ['tool=sn_uib_page_manage, action=create, name=Home', { kind: 'create', tables: ['sys_ux_screen'] }],
+    ['tool=sn_uib_page_manage, action=list', null],
+    ['tool=sn_wire_dashboard_home, dashboard_id=' + id, { kind: 'update', anyTable: true }],
+    ...['sn_aggregate_metrics', 'sn_blast_radius_apps', 'sn_blast_radius_artifact_dependencies', 'sn_blast_radius_impact_map',
+      'sn_blast_radius_reverse_dependencies', 'sn_blast_radius_table_configs', 'sn_catalog_item_search', 'sn_code_search', 'sn_data_export',
+      'sn_decision_evaluate', 'sn_decision_get', 'sn_decision_list', 'sn_deployment_debug', 'sn_deployment_status', 'sn_elevate_role',
+      'sn_export_to_xml', 'sn_inspect_mutations', 'sn_par_get_dashboard', 'sn_property_query', 'sn_uib_discover',
+    ].map((t): [string, null] => [`tool=${t}, table=x_app_t`, null]),
   ];
   it.each(TOOLS)('reads %s', (args, want) => {
     const call = toCall(7, at, 'tool_execute', parseArgs(args));
     if (want === null) expect(call).toBeNull();
     else expect(call).toMatchObject({ line: 7, at, ...want });
     // A direct call reads the same as one through tool_execute.
-    const [, tool, rest] = /^tool=([a-z_]+)(?:, )?(.*)$/.exec(args)!;
+    const [, tool, rest] = /^tool=([a-z0-9_]+)(?:, )?(.*)$/.exec(args)!;
     expect(toCall(7, at, tool, parseArgs(rest))).toEqual(call);
   });
   it('knows every tool in the table, and names the rest unknown', () => {
-    for (const [args] of TOOLS) expect(toolRole(/^tool=([a-z_]+)/.exec(args)![1]), args).not.toBe('unknown');
+    for (const [args] of TOOLS) expect(toolRole(/^tool=([a-z0-9_]+)/.exec(args)![1]), args).not.toBe('unknown');
     expect(toolRole('sn_frobnicate')).toBe('unknown');
+    expect(toolRole('sn_update_set_query')).toBe('read');
   });
 
   it('pairs a completion line with the start it ends, counting blank lines', () => {
@@ -334,8 +405,30 @@ describe('SkyForge log parsing', () => {
       '[2026-06-03T16:00:03.000Z] [INFO] [Auth] ✅ Connected to other.service-now.com',
       `[2026-06-03T16:00:04.000Z] [INFO] [Tool] tool_execute | tool=sn_record_manage, table=t, action=update, sys_id=${id}`,
     ].join('\n'));
-    expect(scan.calls.map(c => c.host)).toEqual([undefined, 'acme', 'other']);
+    // The third call comes 3 s after acme's connect line: two processes may share the log, so it is unknown.
+    expect(scan.calls.map(c => c.host)).toEqual([undefined, 'acme', undefined]);
     expect(scan.hosts).toEqual(['acme', 'other']);
+  });
+  it('makes a call\'s instance unknown when another instance connected in the 10 minutes before it', () => {
+    const t = (min: number) => new Date(Date.parse('2026-06-03T16:00:00Z') + min * 60_000).toISOString();
+    const write = (min: number) => `[${t(min)}] [INFO] [Tool] tool_execute | tool=sn_record_manage, table=t, action=update, sys_id=${id}`;
+    const connect = (min: number, host: string) => `[${t(min)}] [INFO] [Auth] ✅ Connected to ${host}`;
+    const scan = parseLog([
+      connect(0, 'acme.service-now.com'), write(1),
+      connect(2, 'other.service-now.com'), connect(3, 'acme.service-now.com'), write(4),
+      write(14),
+      connect(20, 'intranet.example.com'), write(21),
+      connect(25, 'acme.service-now.com'), write(26),
+    ].join('\n'));
+    expect(scan.calls.map(c => c.host)).toEqual(['acme', undefined, 'acme', undefined, undefined]);
+  });
+  it('learns the agent\'s ServiceNow user from scope and update set calls', () => {
+    const scan = parseLog([
+      `[2026-06-03T16:00:00.000Z] [INFO] [Tool] tool_execute | tool=sn_record_manage, table=t, action=update, sys_id=${id}`,
+      '[2026-06-03T16:00:01.000Z] [INFO] [Tool] tool_execute | tool=sn_switch_application_scope, scope=x_app, servicenow_username=Agent.User',
+      `[2026-06-03T16:00:02.000Z] [INFO] [Tool] tool_execute | tool=sn_record_manage, table=t, action=update, sys_id=${id}`,
+    ].join('\n'));
+    expect(scan.calls.map(c => c.user)).toEqual([undefined, 'agent.user']);
   });
   it('reads every line of the fixture log', () => {
     const scan = parseLog(fx.mcpLogExcerpt.lines.join('\n'));
@@ -353,7 +446,7 @@ describe('matching history to the log', () => {
   const ev = (over: Partial<HistoryEvent>): HistoryEvent => ({
     at: at0, kind: 'modified', table: 'sp_widget', update: 'u', name: 'n', keys: [], author: 'admin', source: 'version', confidence: 'history', ...over,
   });
-  const call = (over: Partial<LogCall>): LogCall => ({ line: 1, at: at0 - 2000, tool: 'sn_record_manage', kind: 'update', tables: ['sp_widget'], names: [], host: 'inmorphisdemo3', ...over });
+  const call = (over: Partial<LogCall>): LogCall => ({ line: 1, at: at0 - 2000, tool: 'sn_record_manage', kind: 'update', tables: ['sp_widget'], names: [], host: 'inmorphisdemo3', user: 'admin', ...over });
   const id = 'ef'.repeat(16);
   const other = 'aa'.repeat(16);
 
@@ -364,7 +457,7 @@ describe('matching history to the log', () => {
       call({ sysId: id }),
       call({ line: 2, tool: 'sn_create_field', kind: 'create', tables: ['sys_dictionary'], collection: 'x_app_t', names: ['credit score'] }),
     ], I);
-    expect(counts).toEqual({ events: 2, matched: 2, ambiguous: 0, hostUnknown: 0, timeOnly: 0, unmatched: 0 });
+    expect(counts).toEqual({ events: 2, matched: 2, ambiguous: 0, hostUnknown: 0, timeOnly: 0, authorUnchecked: 0, unmatched: 0 });
     expect(upd).toMatchObject({ confidence: 'log', log: [{ line: 1, tool: 'sn_record_manage' }] });
     expect(crt).toMatchObject({ confidence: 'log', log: [{ line: 2, tool: 'sn_create_field' }] });
   });
@@ -422,6 +515,26 @@ describe('matching history to the log', () => {
     expect(counts).toMatchObject({ matched: 0, timeOnly: 2 });
   });
 
+  it('keeps a save by someone other than the agent out of table and time and script matches', () => {
+    const script = call({ tool: 'sn_execute_background_script', kind: 'script', tables: [], anyTable: true });
+    const human = ev({ sysId: id, author: 'jane.dev', at: at0 + 20_000 });
+    expect(matchHistory([human], [script, call({ line: 2 })], I).unmatched).toBe(1);
+    expect(human.confidence).toBe('history');
+    // The agent's own save still gets the script as a candidate.
+    const own = ev({ sysId: id, author: 'Admin', at: at0 + 20_000 });
+    expect(matchHistory([own], [script], I).timeOnly).toBe(1);
+    // A call that names the record matches whoever saved it.
+    const named = ev({ sysId: id, author: 'jane.dev' });
+    expect(matchHistory([named], [call({ sysId: id })], I).matched).toBe(1);
+    // With no known user, the author is not checked, and the match says so.
+    const anyone = ev({ sysId: id, author: 'jane.dev', at: at0 + 20_000 });
+    expect(matchHistory([anyone], [{ ...script, user: undefined }], I)).toMatchObject({ timeOnly: 0, authorUnchecked: 1 });
+    expect(anyone).toMatchObject({ confidence: 'likely', reason: 'author not checked' });
+    // The nexus session's user stands in when the log does not say.
+    const again = ev({ sysId: id, author: 'jane.dev', at: at0 + 20_000 });
+    expect(matchHistory([again], [{ ...script, user: undefined }], { ...I, agentUser: 'admin' }).unmatched).toBe(1);
+  });
+
   it('uses an asymmetric window: about 2 s before the call starts, the window after it ends', () => {
     const c = call({ sysId: id, at: at0, end: at0 + 5000 });
     const before = (ms: number) => { const e = ev({ sysId: id, at: at0 - ms }); matchHistory([e], [c], I); return e.confidence; };
@@ -470,8 +583,8 @@ describe('matching history to the log', () => {
     const { c } = await setup();
     const { scope, pulled, manifest, files } = await pull(c);
     writeMirror(snRoot(dir), files, manifest);
-    const t = await buildTimeline(c, scope, pulled.inventory, manifest, { logFile: logFile(), full: pulled.full });
-    expect(t.doc.log).toMatchObject({ found: true, lines: 401, parsed: 401, windowMs: 60_000, otherInstance: 0, unknownInstance: 0 });
+    const t = await buildTimeline(c, scope, pulled.inventory, manifest, { logFile: logFile(), full: pulled.full, agentUser: 'admin' });
+    expect(t.doc.log).toMatchObject({ found: true, lines: 401, parsed: 401, windowMs: 60_000, otherInstance: 0, unknownInstance: 0, agentUser: 'admin', agentUserFrom: 'session' });
     expect(t.doc.counts).toEqual(FIXTURE_COUNTS);
     // Every log match names its record; every likely one keeps its candidates.
     for (const e of t.doc.events) {
@@ -494,7 +607,7 @@ describe('matching history to the log', () => {
   it('matches nothing at log when the log never says which instance it is on', async () => {
     const { c } = await setup();
     const { scope, pulled, manifest } = await pull(c);
-    const t = await buildTimeline(c, scope, pulled.inventory, manifest, { logFile: logFile(false), full: pulled.full });
+    const t = await buildTimeline(c, scope, pulled.inventory, manifest, { logFile: logFile(false), full: pulled.full, agentUser: 'admin' });
     expect(t.doc.counts.matched).toBe(0);
     expect(t.doc.counts.hostUnknown).toBe(FIXTURE_COUNTS.matched);
     expect(t.doc.log?.unknownInstance).toBe(t.doc.log?.calls);
@@ -517,4 +630,4 @@ describe('matching history to the log', () => {
 });
 
 /** The fixture's attribution, as the PR states it. */
-const FIXTURE_COUNTS = { events: 112, matched: 18, ambiguous: 0, hostUnknown: 0, timeOnly: 3, unmatched: 91 };
+const FIXTURE_COUNTS = { events: 112, matched: 18, ambiguous: 0, hostUnknown: 0, timeOnly: 3, authorUnchecked: 0, unmatched: 91 };

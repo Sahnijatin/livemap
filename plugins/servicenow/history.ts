@@ -15,7 +15,7 @@
  *
  * The import has a time budget: when it runs out, it stops with a warning and returns what it read.
  */
-import { NexusToolError, type NexusClient, type SnRecord } from './nexus.js';
+import { NexusDeadlineError, NexusToolError, type NexusClient, type SnRecord } from './nexus.js';
 import { WITHHELD_CLASS, type InventoryRow, type ScopeInfo } from './mirror.js';
 
 /** How an event was attributed: `history` (no agent match), `log` (a SkyForge log line names it), `likely`. */
@@ -45,6 +45,8 @@ export interface HistoryEvent {
   confidence: HistoryConfidence;
   /** The matched call (`log`), or every candidate (`likely`). */
   log?: LogRef[];
+  /** Why a `likely` match is no stronger, when that is not plain from its candidates (`author not checked`). */
+  reason?: string;
 }
 
 export interface HistoryResult {
@@ -183,12 +185,13 @@ export async function importHistory(client: NexusClient, scope: ScopeInfo, inven
   const q = async (table: string, query: string, fields: string[], size = pageSize, max?: number): Promise<SnRecord[]> => {
     if (now() > deadline) throw new BudgetSpent();
     queries++;
-    return client.query(table, { query, fields, pageSize: size, orderBy: 'sys_id', ...(max === undefined ? {} : { max }) });
+    // The deadline is checked between pages too, and caps each page's wait.
+    return client.query(table, { query, fields, pageSize: size, orderBy: 'sys_id', deadline: { at: deadline, now }, ...(max === undefined ? {} : { max }) });
   };
   /** A source the instance refuses (an ACL, a missing table) is skipped with a warning, not fatal. */
   const tolerant = async (what: string, read: () => Promise<void>): Promise<void> => {
     try { await read(); } catch (e) {
-      if (e instanceof BudgetSpent) {
+      if (e instanceof BudgetSpent || e instanceof NexusDeadlineError) {
         if (!partial) warnings.push(`stopped after ${Math.round((opts.budgetMs ?? DEFAULT_HISTORY_BUDGET_MS) / 1000)} s while reading ${what}; the history is partial`);
         partial = true;
         return;
@@ -213,10 +216,12 @@ export async function importHistory(client: NexusClient, scope: ScopeInfo, inven
   await tolerant('sys_update_version', async () => {
     const probe = await q('sys_update_version', `application=${scope.sys_id}`, [...VERSION_FIELDS, 'application'], 1, 1);
     if (probe.length && probe[0].application === scope.sys_id) {
+      // Set first, so a budget stop mid-read still says where the partial versions came from.
+      versionsBy = 'application';
+      warnings.push('sys_update_version has rows for this application, so the update name lookup is skipped; records whose versions carry no application fall back to sys_update_xml');
       for (const r of await q('sys_update_version', `application=${scope.sys_id}`, [...VERSION_FIELDS, 'application'])) {
         if (r.application === scope.sys_id && !withheld(tableOfUpdate(r.name, byUpdate), r.name)) versions.push(r);
       }
-      versionsBy = 'application';
     }
   });
 
@@ -235,8 +240,8 @@ export async function importHistory(client: NexusClient, scope: ScopeInfo, inven
         for (const r of await q('sys_update_version', `nameIN${part.join(',')}`, VERSION_FIELDS)) {
           if (!withheld(tableOfUpdate(r.name, byUpdate), r.name)) versions.push(r);
         }
+        if (versions.length) versionsBy = 'name';
       }
-      if (versions.length) versionsBy = 'name';
     });
   }
   const versionNames = new Set(versions.map(v => v.name));
@@ -290,9 +295,9 @@ export async function importHistory(client: NexusClient, scope: ScopeInfo, inven
 
   const events: HistoryEvent[] = [];
   const seen = new Set<string>();
-  /** One event per update name, kind and time: recaptures can write the same save several times. */
-  const add = (e: HistoryEvent): void => {
-    const key = `${e.update}|${e.kind}|${e.at}`;
+  /** One event per update name, kind and time (and version row): recaptures can write the same save several times. */
+  const add = (e: HistoryEvent, row = ''): void => {
+    const key = `${e.update}|${e.kind}|${e.at}|${row}`;
     if (seen.has(key)) return;
     seen.add(key);
     events.push(e);
@@ -300,7 +305,8 @@ export async function importHistory(client: NexusClient, scope: ScopeInfo, inven
   for (const v of versions) {
     const at = snTime(v.sys_created_on);
     if (Number.isNaN(at)) continue;
-    add({ ...base(v.name, v.record_name || ''), at, kind: v.action === 'DELETE' ? 'deleted' : 'modified', author: v.sys_created_by || 'unknown', source: 'version' });
+    // Each version row is its own save, even two in the same second.
+    add({ ...base(v.name, v.record_name || ''), at, kind: v.action === 'DELETE' ? 'deleted' : 'modified', author: v.sys_created_by || 'unknown', source: 'version' }, v.sys_id);
   }
   const xmlNames = new Set<string>();
   let unread = 0;

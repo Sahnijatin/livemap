@@ -6,7 +6,7 @@ import path from 'node:path';
 import type { Args, CoreHooks } from '../../src/cli-args.js';
 import { DEFAULT_PORT } from '../../src/server/server.js';
 import { serviceNowAnalyzer } from './analyzer.js';
-import { instanceInfo, pullScope, resolveScope, ScopeNotFoundError } from './backfill.js';
+import { instanceInfo, pullScope, resolveScope, ScopeNotFoundError, sessionUser } from './backfill.js';
 import { layoutMirror } from './mirror.js';
 import { DEFAULT_NEXUS_URL, NexusClient, NexusOfflineError, NexusToolError } from './nexus.js';
 import { recordResolver } from './records.js';
@@ -114,7 +114,8 @@ export async function runServiceNow(argv: string[], core: CoreHooks): Promise<vo
     else {
       // History is extra: any failure is a warning, and the mirror and UI go on without it.
       try {
-        const timeline = await buildTimeline(client, scope, pulled.inventory, manifest, { logFile: args.skyforgeLog, windowMs: args.logWindowSec * 1000, full: pulled.full });
+        const agentUser = args.skyforgeLog ? await sessionUser(client) : null;
+        const timeline = await buildTimeline(client, scope, pulled.inventory, manifest, { logFile: args.skyforgeLog, windowMs: args.logWindowSec * 1000, full: pulled.full, agentUser });
         writeHistory(root, scope.scope, timeline.doc);
         const h = timeline.history;
         const recaptures = h.captured ? `, plus ${n(h.captured)} recaptures` : '';
@@ -130,8 +131,12 @@ export async function runServiceNow(argv: string[], core: CoreHooks): Promise<vo
           say(`SkyForge log: ${n(timeline.log.parsed)} lines parsed (${n(log.calls)} write calls${elsewhere}) from ${log.file}`);
           const unknown = Object.entries(timeline.log.unknownTools).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
           if (unknown.length) say(`SkyForge log: tools LiveMap does not know, read as reads: ${unknown.map(([t, k]) => `${t} (${n(k)})`).join(', ')}`);
+          say(log.agentUser
+            ? `SkyForge user: ${log.agentUser} (from the ${log.agentUserFrom === 'log' ? 'log' : 'nexus session'}). Saves by other users match only calls that name them.`
+            : 'SkyForge user: unknown. Table and time matches are marked "author not checked".');
           const pct = c.events ? Math.round((c.matched / c.events) * 100) : 0;
-          say(`Attribution: ${n(c.matched)} matched, ${n(c.ambiguous + c.timeOnly + c.hostUnknown)} ambiguous (${n(c.timeOnly)} on table and time only, ${n(c.hostUnknown)} on an unknown instance), ${n(c.unmatched)} unmatched (${pct}% matched; window ${args.logWindowSec} s).`);
+          const loose = c.timeOnly + c.authorUnchecked;
+          say(`Attribution: ${n(c.matched)} matched, ${n(c.ambiguous + loose + c.hostUnknown)} ambiguous (${n(loose)} on table and time only, ${n(c.authorUnchecked)} of them with the author not checked, ${n(c.hostUnknown)} on an unknown instance), ${n(c.unmatched)} unmatched (${pct}% matched; window ${args.logWindowSec} s).`);
         }
         say(`History: ${path.relative(project, historyPath(root, scope.scope))}`);
       } catch (e) {

@@ -16,6 +16,8 @@ export interface TimelineOptions {
   /** Full records from the pull, by sys_id. */
   full?: Map<string, SnRecord>;
   history?: Omit<HistoryOptions, 'full'>;
+  /** The ServiceNow user SkyForge works as, when known (see `sessionUser`). */
+  agentUser?: string | null;
 }
 
 export interface TimelineEvent extends HistoryEvent {
@@ -30,7 +32,9 @@ export interface TimelineDoc {
   /** `file` is relative to the home folder (`~/...`) when it lies under it. */
   log: { file: string; found: boolean; lines: number; parsed: number; calls: number; windowMs: number;
     /** Write calls made while the log was connected to another instance, or to none it named. */
-    otherInstance: number; unknownInstance: number } | null;
+    otherInstance: number; unknownInstance: number;
+    /** The agent's ServiceNow user, and where it came from. */
+    agentUser: string | null; agentUserFrom: 'log' | 'session' | null } | null;
   counts: MatchCounts;
   events: TimelineEvent[];
 }
@@ -61,7 +65,9 @@ export async function buildTimeline(client: NexusClient, scope: ScopeInfo, inven
   const calls = log?.calls ?? [];
   const otherInstance = calls.filter(c => c.host && instance && c.host !== instance).length;
   const unknownInstance = calls.filter(c => !c.host || !instance).length;
-  const counts = matchHistory(events, log?.calls ?? [], { windowMs, instance: manifest.instance || null });
+  const agentUser = opts.agentUser ?? null;
+  const fromLog = calls.find(c => c.user)?.user ?? null;
+  const counts = matchHistory(events, calls, { windowMs, instance: manifest.instance || null, agentUser });
   const doc: TimelineDoc = {
     instance: manifest.instance,
     scope: { sys_id: scope.sys_id, scope: scope.scope, name: scope.name },
@@ -70,7 +76,8 @@ export async function buildTimeline(client: NexusClient, scope: ScopeInfo, inven
       captured: history.captured, versionsBy: history.versionsBy, partial: history.partial,
     },
     log: opts.logFile
-      ? { file: homeRelative(opts.logFile), found: log !== null, lines: log?.lines ?? 0, parsed: log?.parsed ?? 0, calls: calls.length, windowMs, otherInstance, unknownInstance }
+      ? { file: homeRelative(opts.logFile), found: log !== null, lines: log?.lines ?? 0, parsed: log?.parsed ?? 0, calls: calls.length, windowMs, otherInstance, unknownInstance,
+        agentUser: fromLog ?? agentUser, agentUserFrom: fromLog ? 'log' : agentUser ? 'session' : null }
       : null,
     counts,
     events,

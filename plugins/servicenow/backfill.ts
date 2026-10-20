@@ -93,3 +93,19 @@ export async function pullScope(client: NexusClient, scope: ScopeInfo, opts: Pul
   failedClasses.sort((a, b) => (a.class < b.class ? -1 : 1));
   return { inventory, full, failedClasses, queries };
 }
+
+/**
+ * The ServiceNow user nexus works as, from `sn_session_context` (lowercased); null when it cannot say. Any
+ * failure reads as unknown: history attribution then marks table and time matches `author not checked`.
+ */
+export async function sessionUser(client: NexusClient): Promise<string | null> {
+  try {
+    const body = await client.execute('sn_session_context') as Record<string, unknown> | null;
+    const d = (body && typeof body === 'object' && body.data && typeof body.data === 'object' ? body.data : body ?? {}) as Record<string, unknown>;
+    const s = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim().toLowerCase() : undefined);
+    const u = d.user && typeof d.user === 'object' ? d.user as Record<string, unknown> : {};
+    return s(d.user_name) ?? s(d.username) ?? s(d.userName) ?? s(u.user_name) ?? s(u.name) ?? s(d.user) ?? null;
+  } catch {
+    return null;
+  }
+}

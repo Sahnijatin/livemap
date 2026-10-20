@@ -43,20 +43,29 @@ export interface LogCall {
   sysId?: string;
   /** Lowercased full names the call gives the record (id, name, title, label, ...). */
   names: string[];
-  /** The instance host the log last connected to before this call. */
+  /** The instance the log last connected to before this call; unset when unknown or when another instance
+   *  connected in the 10 minutes before it (several SkyForge processes write the same file). */
   host?: string;
+  /** The ServiceNow user SkyForge last said it works as (`servicenow_username=`), lowercased. */
+  user?: string;
 }
 
 const START = /^\[([^\]]+)\] \[(\w+)\] \[Tool\] (\S+) \| (.*)$/;
 const DONE = /^\[([^\]]+)\] \[(\w+)\] \[Tool\] (\S+) (?:✅|❌|✔|✖)\s*(\d+)\s*ms\b/;
-const AUTH = /^\[[^\]]+\] \[\w+\] \[Auth\] (?:✅\s*)?Connected to\s+(\S+)/;
+const AUTH = /^\[([^\]]+)\] \[\w+\] \[Auth\] (?:✅\s*)?Connected to\s+(\S+)/;
+/** Another instance connecting this soon before a call makes the call's instance unknown. */
+export const HOST_MIX_MS = 10 * 60_000;
 const SYS_ID = /^[0-9a-f]{32}$/i;
 const TABLE = /^[a-z][a-z0-9_]*$/;
 
-/** An instance as a short name: `https://acme.service-now.com/` and `acme.service-now.com` are `acme`. */
-export function instanceName(host: string): string {
+/**
+ * An instance as a short name: `https://acme.service-now.com/`, `acme.service-now.com` and `acme` are `acme`.
+ * Any other host is not an instance name LiveMap can compare: null (unknown).
+ */
+export function instanceName(host: string): string | null {
   const h = host.trim().toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/[/:].*$/, '');
-  return h.endsWith('.service-now.com') ? h.slice(0, -'.service-now.com'.length) : h;
+  if (h.endsWith('.service-now.com')) return h.slice(0, -'.service-now.com'.length) || null;
+  return /^[a-z0-9-]+$/.test(h) ? h : null;
 }
 
 /** `k=v, k=v` as logged; a value can hold `, ` itself, so only `, key=` starts a new pair. */
@@ -127,27 +136,80 @@ const ARTIFACT_TYPES: Record<string, string> = {
   script_include: 'sys_script_include', business_rule: 'sys_script', client_script: 'sys_script_client',
   ui_action: 'sys_ui_action', ui_policy: 'sys_ui_policy', ui_page: 'sys_ui_page', ui_script: 'sys_ui_script',
   notification: 'sysevent_email_action', acl: 'sys_security_acl', flow: 'sys_hub_flow', scheduled_job: 'sysauto_script',
+  script_action: 'sysevent_script_action', ui_macro: 'sys_ui_macro', email_notification: 'sysevent_email_action',
 };
+/** An `artifact_type` or `type` argument as a table: a known type, or a name that looks like a table. */
+const artifactTable = (v: string | undefined): string | undefined => {
+  const t = full(v)?.toLowerCase();
+  if (!t) return undefined;
+  return ARTIFACT_TYPES[t] ?? (TABLE.test(t) && /^(sys|sp|sn|sc|x|u|item|cmdb|sysevent|sysauto|ua)_/.test(t) ? t : undefined);
+};
+
+/**
+ * Tools whose `action` (or `operation`) says what they do. Only create, update, delete, set and run actions
+ * write; get, list, query and the rest read. `tables` are the tables they write; none means any table. A run
+ * action executes code, like a background script.
+ */
+const MANAGED: Record<string, { tables: string[]; runs?: true }> = {
+  sn_catalog_item_manager: { tables: ['sc_cat_item'] },
+  sn_email_notification_manage: { tables: ['sysevent_email_action'] },
+  sn_property_manager: { tables: ['sys_properties'] },
+  sn_rest_message_manage: { tables: ['sys_rest_message', 'sys_rest_message_fn'] },
+  sn_scheduled_job_manage: { tables: ['sysauto_script'], runs: true },
+  sn_scripted_rest_api: { tables: ['sys_ws_definition', 'sys_ws_operation'] },
+  sn_uib_page_manage: { tables: ['sys_ux_screen'] },
+  sn_manage_workspace_list_config: { tables: [] },
+  sn_manage_workspace_navigation: { tables: [] },
+  sn_plugin_manage: { tables: [], runs: true },
+};
+/** Writes with no action argument: their kind, and the tables they write (none: any table). */
+const DIRECT: Record<string, { kind: LogCall['kind']; tables: string[] }> = {
+  sn_decision_create: { kind: 'create', tables: ['sys_decision'] },
+  sn_par_create_dashboard: { kind: 'create', tables: [] },
+  sn_par_update_dashboard: { kind: 'update', tables: [] },
+  sn_wire_dashboard_home: { kind: 'update', tables: [] },
+  sn_configure_macroponent: { kind: 'update', tables: [] },
+  sn_assign_tool_to_agent: { kind: 'update', tables: [] },
+  sn_bulk_update: { kind: 'update', tables: [] },
+  sn_cleanup_workspace_t2e: { kind: 'script', tables: [] },
+  sn_invoke_ai_agent: { kind: 'script', tables: [] },
+};
+/** What an action does: null for reads. */
+function actionKind(action: string): 'create' | 'update' | 'delete' | 'run' | null {
+  if (/^(create|add|insert)/.test(action)) return 'create';
+  if (/^(update|set|edit|assign|configure|remove_from|reorder)/.test(action)) return 'update';
+  if (/^(delete|remove)/.test(action)) return 'delete';
+  if (/^(run|execute|trigger|activate|install|upgrade|repair)/.test(action)) return 'run';
+  return null;
+}
 const PORTAL_LAYOUT = ['sp_container', 'sp_row', 'sp_column', 'sp_instance'];
 /** Records a flow designer step adds to a flow, besides the flow itself. */
 const FLOW_PARTS = ['sys_hub_flow', 'sys_hub_trigger_instance', 'sys_hub_action_instance', 'sys_hub_flow_logic', 'sys_hub_sub_flow_instance', 'sys_hub_flow_variable'];
 
-/** Tools that only read or change session state. */
+/** Tools that only read or change session state (update set selection included). */
 const READS = new Set([
   'sn_query_table', 'sn_get_table_metadata', 'sn_get_instance_info', 'sn_session_context', 'sn_pull_artifact',
   'sn_get_current_scope', 'sn_switch_application_scope', 'sn_discover_platform_tables', 'sn_table_schema_discovery',
-  'sn_load_skill', 'sn_plan_ai_agent', 'tool_search', 'tool_execute',
+  'sn_load_skill', 'sn_plan_ai_agent', 'tool_search', 'tool_execute', 'sn_update_set_query', 'sn_ensure_active_update_set',
+  'sn_aggregate_metrics', 'sn_blast_radius_apps', 'sn_blast_radius_artifact_dependencies', 'sn_blast_radius_impact_map',
+  'sn_blast_radius_reverse_dependencies', 'sn_blast_radius_table_configs', 'sn_catalog_item_search', 'sn_code_search',
+  'sn_data_export', 'sn_decision_evaluate', 'sn_decision_get', 'sn_decision_list', 'sn_deployment_debug',
+  'sn_deployment_status', 'sn_elevate_role', 'sn_export_to_xml', 'sn_inspect_mutations', 'sn_par_get_dashboard',
+  'sn_property_query', 'sn_uib_discover',
 ]);
 const READ_PREFIX = /^sn_(get|list|search|find|validate|check|analyze|describe|discover|preview|explain|plan)_/;
 
 /** What LiveMap makes of a tool: a write it knows, a read, or a tool it does not know (counted as a read). */
 export function toolRole(tool: string): 'write' | 'read' | 'unknown' {
-  if (READS.has(tool) || READ_PREFIX.test(tool) || tool === 'sn_update_set_manage') return 'read';
-  if (CREATES[tool] || /^sn_(create|update|delete)_/.test(tool)) return 'write';
+  if (READS.has(tool) || READ_PREFIX.test(tool)) return 'read';
+  if (CREATES[tool] || MANAGED[tool] || DIRECT[tool] || GENERIC_WRITE.test(tool)) return 'write';
   if (['sn_record_manage', 'sn_edit_by_sysid', 'sn_push_artifact', 'sn_update_sp_widget', 'sn_artifact_manage', 'sn_add_form_field',
-    'sn_build_portal_layout', 'sn_intermediate_flow', 'sn_disable_business_rule', 'sn_execute_background_script', 'sn_schedule_script_job'].includes(tool)) return 'write';
+    'sn_build_portal_layout', 'sn_intermediate_flow', 'sn_disable_business_rule', 'sn_execute_background_script', 'sn_schedule_script_job',
+    'sn_update_set_manage'].includes(tool)) return 'write';
   return 'unknown';
 }
+/** Create, update and delete tools LiveMap has no entry for. Update set tools are not record writes. */
+const GENERIC_WRITE = /^sn_(create|update|delete)_(?!set_)/;
 
 /** Turns one start line into a write call, or null for reads and anything that names no record. */
 export function toCall(line: number, at: number, outer: string, args: Record<string, string>): LogCall | null {
@@ -175,8 +237,7 @@ export function toCall(line: number, at: number, outer: string, args: Record<str
     if (tool === 'sn_create_field' || tool === 'sn_create_choice') { name(args.column_name); name(args.element); }
   } else if (tool === 'sn_record_manage' || tool === 'sn_artifact_manage') {
     const kind = action === 'create' ? 'create' : action === 'update' ? 'update' : action === 'delete' ? 'delete' : null;
-    const type = full(args.type ?? args.artifact_type)?.toLowerCase();
-    const table = tableArg ?? (type ? ARTIFACT_TYPES[type] ?? (TABLE.test(type) && type.includes('_') ? type : undefined) : undefined);
+    const table = tableArg ?? artifactTable(args.type ?? args.artifact_type);
     if (kind) call = table ? make(kind, [table]) : make(kind, [], sysId || kind === 'delete' ? {} : { anyTable: true });
   } else if (tool === 'sn_edit_by_sysid' || tool === 'sn_push_artifact') {
     call = make('update', tableArg ? [tableArg] : []);
@@ -204,12 +265,24 @@ export function toCall(line: number, at: number, outer: string, args: Record<str
   } else if (tool === 'sn_update_set_manage') {
     // Adding a record to an update set writes its update_xml row again, without saving the record.
     if (['add_artifact', 'force_capture', 'capture', 'add_record'].includes(action)) {
-      const t = [args.artifact_table, args.artifact_type, args.table].map(full).find(v => v && TABLE.test(v));
+      // `artifact_type` can be a type (`script_include`) rather than a table.
+      const t = [args.artifact_table, args.artifact_type, args.table].map(artifactTable).find(Boolean);
       call = make('capture', t ? [t] : [], t || sysId ? {} : { anyTable: true });
       name(args.artifact_name);
     }
   } else if (tool === 'sn_execute_background_script' || tool === 'sn_schedule_script_job') {
     return { line, at, tool, kind: 'script', tables: [], anyTable: true, names: [] };
+  } else if (MANAGED[tool]) {
+    const spec = MANAGED[tool];
+    const kind = actionKind(action);
+    if (kind === 'run') call = spec.runs ? make('script', [], { anyTable: true }) : make('update', spec.tables, spec.tables.length ? {} : { anyTable: true });
+    else if (kind) call = make(kind, spec.tables, spec.tables.length ? {} : { anyTable: true });
+  } else if (DIRECT[tool]) {
+    const spec = DIRECT[tool];
+    const tables = spec.tables.length ? spec.tables : tableArg && spec.kind !== 'script' ? [tableArg] : [];
+    call = make(spec.kind, tables, tables.length ? {} : { anyTable: true });
+  } else if (/^sn_update_set_/.test(tool)) {
+    return null;
   } else if (/^sn_create_/.test(tool)) {
     // A create tool LiveMap has no table for: its `table=` is often the parent table, not the record's.
     call = make('create', [], { anyTable: true });
@@ -241,7 +314,10 @@ export class LogReader {
   private readonly hosts = new Set<string>();
   lines = 0;
   parsed = 0;
-  private host: string | undefined;
+  /** The host of the last connect line (null: one LiveMap cannot name), and when each host last connected. */
+  private host: string | null = null;
+  private readonly connected = new Map<string, number>();
+  private user: string | undefined;
   /** Starts per tool still waiting for a completion line. */
   private open = new Map<string, LogCall[]>();
   constructor(private readonly range?: { from: number; to: number }) {}
@@ -255,15 +331,20 @@ export class LogReader {
       const at = Date.parse(m[1]);
       if (Number.isNaN(at)) return;
       this.parsed++;
-      if (this.range && (at < this.range.from || at > this.range.to)) return;
       const args = parseArgs(m[4]);
+      // The ServiceNow user SkyForge works as, from scope and update set calls.
+      const user = full(args.servicenow_username)?.toLowerCase();
+      if (user) this.user = user;
+      if (this.range && (at < this.range.from || at > this.range.to)) return;
       const call = toCall(line, at, m[3], args);
       if (!call) {
         const tool = /^[a-z0-9_]+/.exec(m[3] === 'tool_execute' ? args.tool ?? '' : m[3])?.[0];
         if (tool && toolRole(tool) === 'unknown') this.unknownTools[tool] = (this.unknownTools[tool] ?? 0) + 1;
         return;
       }
-      if (this.host) call.host = this.host;
+      const host = this.hostAt(at);
+      if (host) call.host = host;
+      if (this.user) call.user = this.user;
       this.calls.push(call);
       const list = this.open.get(call.tool) ?? [];
       list.push(call);
@@ -273,8 +354,12 @@ export class LogReader {
     m = AUTH.exec(text);
     if (m) {
       this.parsed++;
-      this.host = instanceName(m[1]);
-      this.hosts.add(this.host);
+      this.host = instanceName(m[2]);
+      const at = Date.parse(m[1]);
+      if (this.host) {
+        this.hosts.add(this.host);
+        if (!Number.isNaN(at)) this.connected.set(this.host, at);
+      } else if (!Number.isNaN(at)) this.connected.set('', at);
       return;
     }
     m = DONE.exec(text);
@@ -296,6 +381,16 @@ export class LogReader {
     const [c] = list.splice(best, 1);
     c.end = end;
     c.ms = ms;
+  }
+
+  /**
+   * The instance a call at `at` ran on: the last connect line's, unless another instance (or one LiveMap cannot
+   * name) connected within HOST_MIX_MS before it. Then two SkyForge processes may share the log.
+   */
+  private hostAt(at: number): string | undefined {
+    if (!this.host) return undefined;
+    for (const [h, t] of this.connected) if (h !== this.host && t <= at && at - t < HOST_MIX_MS) return undefined;
+    return this.host;
   }
 
   result(): LogScan { return { lines: this.lines, parsed: this.parsed, calls: this.calls, unknownTools: this.unknownTools, hosts: [...this.hosts].sort() }; }
@@ -326,8 +421,10 @@ export interface MatchCounts {
   ambiguous: number;
   /** One call names the record, but its instance is unknown. */
   hostUnknown: number;
-  /** Calls share only the record's table (or can write any table) and time. */
+  /** Calls share only the record's table (or can write any table) and time, and the author is the agent's. */
   timeOnly: number;
+  /** The same, but the agent's ServiceNow user is unknown, so the author was not checked. */
+  authorUnchecked: number;
   unmatched: number;
 }
 
@@ -335,6 +432,8 @@ export interface MatchOptions {
   windowMs?: number;
   /** The mirrored instance. Calls on another instance are dropped; calls on an unknown one stay `likely`. */
   instance: string | null;
+  /** The ServiceNow user SkyForge works as (from `sn_session_context`), when the log does not say. */
+  agentUser?: string | null;
 }
 
 const ref = (c: LogCall): LogRef => (c.ms === undefined ? { line: c.line, at: c.at, tool: c.tool } : { line: c.line, at: c.at, tool: c.tool, ms: c.ms });
@@ -354,14 +453,17 @@ const KINDS: Record<HistoryEvent['kind'], LogCall['kind'][]> = {
  *   also when `sys_dictionary_<collection>_<name>` is the update name).
  * - One naming candidate on a known instance: `log`, and that call is used up for table and time matches.
  *   Several, or one on an unknown instance: `likely`, with all of them. Candidates that name nothing (table
- *   and time only): `likely`, with all of them, never `log`. None: the event stays `history`.
+ *   and time only, or any table): `likely`, with all of them, never `log`, and only when the save's author is
+ *   the agent's ServiceNow user (the call's `user`, else `agentUser`). With no known user they still count, as
+ *   `author not checked`. None: the event stays `history`.
  */
 export function matchHistory(events: HistoryEvent[], calls: LogCall[], opts: MatchOptions): MatchCounts {
   const windowMs = opts.windowMs ?? DEFAULT_LOG_WINDOW_MS;
   const instance = opts.instance ? instanceName(opts.instance) : null;
   const sorted = calls.filter(c => !c.host || !instance || c.host === instance).sort((a, b) => a.at - b.at);
   const known = (c: LogCall) => Boolean(c.host && instance);
-  const counts: MatchCounts = { events: 0, matched: 0, ambiguous: 0, hostUnknown: 0, timeOnly: 0, unmatched: 0 };
+  const agentUser = opts.agentUser?.toLowerCase() || undefined;
+  const counts: MatchCounts = { events: 0, matched: 0, ambiguous: 0, hostUnknown: 0, timeOnly: 0, authorUnchecked: 0, unmatched: 0 };
   const plans = events.map(e => {
     // Calls whose start can be in range (a call's span can run past its start).
     let lo = 0;
@@ -370,29 +472,39 @@ export function matchHistory(events: HistoryEvent[], calls: LogCall[], opts: Mat
     while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid].at < from) lo = mid + 1; else hi = mid; }
     const near: LogCall[] = [];
     const named: LogCall[] = [];
+    let unchecked = false;
     const sysId = e.sysId?.toLowerCase();
+    const author = e.author.toLowerCase();
+    /** A call that does not name the record is a candidate only when the save's author is the agent's user. */
+    const loose = (c: LogCall) => {
+      const user = c.user ?? agentUser;
+      if (!user) unchecked = true;
+      else if (user !== author) return;
+      near.push(c);
+    };
     for (let i = lo; i < sorted.length && sorted[i].at <= e.at + LOG_LEAD_MS; i++) {
       const c = sorted[i];
       if (e.at < c.at - LOG_LEAD_MS || e.at > (c.end ?? c.at) + windowMs) continue;
       if (c.sysId && sysId && c.sysId !== sysId) continue;
       if (c.kind !== 'script' && !KINDS[e.kind].includes(c.kind)) continue;
-      if (c.anyTable) { near.push(c); continue; }
+      if (c.anyTable) { loose(c); continue; }
       const sameId = c.sysId !== undefined && c.sysId === sysId;
       if (!c.tables.includes(e.table) && !sameId) continue;
       if (c.collection && e.collection && c.collection !== e.collection.toLowerCase()) continue;
-      near.push(c);
       const dictName = c.collection !== undefined && c.names.some(n => e.update === `${e.table}_${c.collection}_${n}`);
       if (sameId || dictName || c.names.some(n => e.keys.includes(n))) named.push(c);
+      else loose(c);
     }
-    return { e, near, named };
+    return { e, near, named, unchecked };
   });
   // Calls that name exactly one record's save are spent on it.
   const used = new Set<LogCall>();
   for (const p of plans) if (p.named.length === 1 && known(p.named[0])) used.add(p.named[0]);
-  for (const { e, near, named } of plans) {
+  for (const { e, near, named, unchecked } of plans) {
     const tally = e.kind !== 'captured';
     if (tally) counts.events++;
     delete e.log;
+    delete e.reason;
     const rest = near.filter(c => !used.has(c));
     let outcome: Exclude<keyof MatchCounts, 'events'>;
     if (named.length === 1 && known(named[0])) {
@@ -406,7 +518,10 @@ export function matchHistory(events: HistoryEvent[], calls: LogCall[], opts: Mat
     } else if (rest.length) {
       e.confidence = 'likely';
       e.log = rest.map(ref);
-      outcome = 'timeOnly';
+      // A candidate whose user is unknown: the save may be anyone's.
+      const anyUnchecked = unchecked && rest.some(c => !(c.user ?? agentUser));
+      if (anyUnchecked) e.reason = 'author not checked';
+      outcome = anyUnchecked ? 'authorUnchecked' : 'timeOnly';
     } else {
       e.confidence = 'history';
       outcome = 'unmatched';

@@ -77,12 +77,13 @@ test('livemap sn: mirrors the BharatBank scope and shows it in the Map and Schem
   expect(out).toMatch(/Pulled 1,683 records in \d+ classes/);
   expect(out).toMatch(/Versions imported: 112 \(0 from sys_update_version, 112 from sys_update_xml, plus 167 recaptures\) for 111 records/);
   expect(out).toMatch(/SkyForge log: 401 lines parsed \(146 write calls\) from /);
-  expect(out).toContain('Attribution: 18 matched, 3 ambiguous (3 on table and time only, 0 on an unknown instance), 91 unmatched (16% matched; window 60 s).');
+  expect(out).toContain('SkyForge user: admin (from the nexus session). Saves by other users match only calls that name them.');
+  expect(out).toContain('Attribution: 18 matched, 3 ambiguous (3 on table and time only, 0 of them with the author not checked, 0 on an unknown instance), 91 unmatched (16% matched; window 60 s).');
   expect(out).not.toContain('warning: history');
   expect(out).toContain('LiveMap is watching x_snc_cc_offering on inmorphisdemo3');
   await page.goto(url);
   await expect(page.getByText('x_snc_cc_offering on inmorphisdemo3').first()).toBeVisible();
-  expect(new Set(nexus.calls.map(c => c.inner ?? c.tool))).toEqual(new Set(['sn_query_table', 'sn_get_instance_info']));
+  expect(new Set(nexus.calls.map(c => c.inner ?? c.tool))).toEqual(new Set(['sn_query_table', 'sn_get_instance_info', 'sn_session_context']));
   const manifest = JSON.parse(fs.readFileSync(path.join(tmp, '.livemap', 'sn', 'x_snc_cc_offering.manifest.json'), 'utf8'));
   expect(Object.keys(manifest.records)).toHaveLength(1683);
 
