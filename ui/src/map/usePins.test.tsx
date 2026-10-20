@@ -37,6 +37,17 @@ describe('usePins', () => {
     act(() => h.root.unmount());
   });
 
+  it('pins a file named __proto__ as a key, and constructor reads as unpinned (#72)', () => {
+    const h = harness();
+    act(() => h.root.render(<h.Probe project="/p/c" />));
+    act(() => { h.store().pin('files', '__proto__', { x: 1, y: 2 }); });
+    expect(Object.keys(h.store().get().files)).toEqual(['__proto__']);
+    expect(h.store().get().files.constructor).toBeUndefined();
+    act(() => h.store().reset());
+    expect(h.store().get().folders.constructor).toBeUndefined();
+    act(() => h.root.unmount());
+  });
+
   it('writes a pending save when the project changes, then loads the new project', () => {
     vi.useFakeTimers();
     const h = harness();

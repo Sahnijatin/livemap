@@ -2,6 +2,7 @@ import type { HistoryInfo, TickKind, Ticks } from '@shared/history.js';
 import type { HistoryStatus, ServerMessage } from '@shared/protocol.js';
 import type { ProjectState } from '@shared/state.js';
 import { authHeaders } from './connection';
+import { dict } from './dict';
 
 export type { HistoryInfo, TickKind, Ticks };
 
@@ -49,7 +50,7 @@ export function setHistorySource(s: HistorySource): void {
 let code: Record<string, string> | null | undefined;
 export const embeddedCode = () => code;
 export function setEmbeddedCode(c: Record<string, string> | null | undefined): void {
-  code = c;
+  code = c ? dict(c) : c;
 }
 
 /** Tooltip on everything that is read-only while the UI shows the past. */

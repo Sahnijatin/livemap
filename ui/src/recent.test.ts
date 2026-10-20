@@ -28,3 +28,9 @@ describe('live badges', () => {
     expect(live['constructor']).toBeUndefined();
   });
 });
+
+describe('liveRecent keys (#72)', () => {
+  it('a file named constructor reads as absent until it is recent', () => {
+    expect(liveRecent({}, 0).constructor).toBeUndefined();
+  });
+});
