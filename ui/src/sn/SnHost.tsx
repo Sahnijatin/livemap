@@ -9,8 +9,8 @@ import { activeCount, filtersUrl, readFilters, viewFilter, type Filters } from '
 
 /*
  * The ServiceNow parts of the page, for a `livemap sn` project only: the unattributed badge in the toolbar, the filter
- * bar over the views, and the diagnostics panel. Loaded lazily after the first hello; renders nothing when the
- * server has no ServiceNow mirror.
+ * bar over the views, and the diagnostics panel. Loaded lazily after the first hello for every live project; without
+ * a ServiceNow mirror it renders only the third-party notices link.
  */
 
 /** The mirror's records are read again this long after the last change (a burst of saves reads them once). */
@@ -117,10 +117,13 @@ export default function SnHost() {
     .sort((a, b) => b.lastAt - a.lastAt)
     .map(s => [s.id, `${agentName(s.agent)}: ${s.title || s.id}`]), [sessions]);
 
-  if (!ok || !index) return null;
+  // The third-party notices link, in the Live session view of every live project (this module loads for all of them).
+  const notices = <Slot id="notices"><a className="notices" href="/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer">Third-party notices</a></Slot>;
+  if (!ok || !index) return notices;
   const n = activeCount(filters);
   return (
     <>
+      {notices}
       <Slot id="sn-badge">
         <button
           type="button"
