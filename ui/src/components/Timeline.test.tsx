@@ -85,7 +85,7 @@ describe('Timeline', () => {
   });
 
   it('titles the separator after a ServiceNow version history run "Version history ends"', async () => {
-    source.ticks.mockResolvedValue({ ...TICKS, prevRuns: ['', 'sn-history-x_acme_app-1759480000000'] });
+    source.ticks.mockResolvedValue({ ...TICKS, prevRuns: ['', 'sn-history-x_acme_app'] });
     render(<Timeline />);
     await flush();
     expect(host.querySelector('.tl-run')!.getAttribute('title')).toBe('Version history ends');
@@ -241,20 +241,33 @@ describe('Timeline', () => {
   });
 
   it('dates a past day on the label, the slider and the banner, and shows only the time for today', async () => {
-    const past = new Date(2025, 2, 3, 9, 5).getTime();
-    useStore.getState().rewind({ ...projectState(), seq: 70, at: past });
-    render(<><Timeline /><RewoundBanner /></>);
-    await flush();
-    expect(when(past)).not.toBe(clock(past));
-    expect(host.querySelector('.tl-time')!.textContent).toBe(when(past));
-    expect(thumb().getAttribute('aria-valuetext')).toBe(`${when(past)}, 4 events`);
-    expect(host.querySelector('.rw-banner')!.textContent).toContain(`Viewing ${when(past)}.`);
+    // A fixed clock just after midnight: "today" must not depend on when the test runs.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 20, 0, 0, 30));
+    try {
+      const past = new Date(2025, 2, 3, 9, 5).getTime();
+      useStore.getState().rewind({ ...projectState(), seq: 70, at: past });
+      render(<><Timeline /><RewoundBanner /></>);
+      await flush();
+      expect(when(past)).not.toBe(clock(past));
+      expect(host.querySelector('.tl-time')!.textContent).toBe(when(past));
+      expect(thumb().getAttribute('aria-valuetext')).toBe(`${when(past)}, 4 events`);
+      expect(host.querySelector('.rw-banner')!.textContent).toContain(`Viewing ${when(past)}.`);
 
-    const today = Date.now() - 1000;
-    act(() => useStore.getState().rewind({ ...projectState(), seq: 70, at: today }));
-    await flush();
-    expect(host.querySelector('.tl-time')!.textContent).toBe(clock(today));
-    expect(host.querySelector('.rw-banner')!.textContent).toContain(`Viewing ${clock(today)}.`);
+      const today = new Date(2026, 9, 20, 0, 0, 10).getTime();
+      act(() => useStore.getState().rewind({ ...projectState(), seq: 70, at: today }));
+      await flush();
+      expect(host.querySelector('.tl-time')!.textContent).toBe(clock(today));
+      expect(host.querySelector('.rw-banner')!.textContent).toContain(`Viewing ${clock(today)}.`);
+
+      const lateYesterday = new Date(2026, 9, 19, 23, 59).getTime();
+      act(() => useStore.getState().rewind({ ...projectState(), seq: 70, at: lateYesterday }));
+      await flush();
+      expect(host.querySelector('.tl-time')!.textContent).toBe(when(lateYesterday));
+      expect(when(lateYesterday)).not.toBe(clock(lateYesterday));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reserves the REWOUND side in both states, so the track keeps its width when a drag rewinds', async () => {
@@ -268,7 +281,7 @@ describe('Timeline', () => {
     // The time slot is sized by the widest times (two-digit hours, morning and evening, and a date with its year).
     expect([...ghost().querySelectorAll('.g-time > span')].map(e => e.textContent)).toEqual([
       clock(new Date(2000, 0, 1, 10, 58).getTime()), clock(new Date(2000, 0, 1, 22, 58).getTime()),
-      when(new Date(2000, 8, 28, 22, 58).getTime()),
+      ...Array.from({ length: 12 }, (_, m) => when(new Date(2000, m, 28, 22, 58).getTime())),
     ]);
     expect(ghost().querySelectorAll('button, [tabindex]')).toHaveLength(0);
 

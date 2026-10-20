@@ -15,13 +15,13 @@ const TICKS_EVERY_MS = 5000;
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 
 /**
- * The widest times this locale prints (two-digit hours, morning and evening, and a date with its year, as a
- * back-dated run shows): they size the reserved time slot.
+ * The widest times this locale prints (two-digit hours, morning and evening, and a date with its year in every
+ * month, since month names differ in width, as a back-dated run shows): they size the reserved time slot.
  */
 const WIDEST_TIMES = [
   clock(new Date(2000, 0, 1, 10, 58).getTime()),
   clock(new Date(2000, 0, 1, 22, 58).getTime()),
-  when(new Date(2000, 8, 28, 22, 58).getTime()),
+  ...Array.from({ length: 12 }, (_, m) => when(new Date(2000, m, 28, 22, 58).getTime())),
 ];
 
 /**
@@ -39,7 +39,7 @@ function SideGhost({ back }: { back: boolean }) {
   );
 }
 
-/** A run separator's title: a ServiceNow version history import (`sn-history-<scope>-...`) ends, or LiveMap restarted. */
+/** A run separator's title: a ServiceNow version history import (`sn-history-<scope>`) ends, or LiveMap restarted. */
 const runTitle = (prevRun: string | undefined): string => (prevRun?.startsWith('sn-history-') ? 'Version history ends' : 'LiveMap restarted');
 
 /** The bucket index holding `seq` (the last bucket starting at or before it); -1 before the first. */
