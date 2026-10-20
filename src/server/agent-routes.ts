@@ -74,7 +74,7 @@ const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 
 
 /**
  * `POST /hook`: machine endpoint authenticated only by the `x-livemap-token` header. Takes agent hook
- * payloads (`{agent, event, payload}`) and capture events (`{source: "mcp-proxy", ...}`).
+ * payloads (`{agent, event, payload}`) and capture events (`{source: "mcp-proxy" | "skyforge-plugin", ...}`).
  */
 export async function handleHook(req: http.IncomingMessage, res: http.ServerResponse, json: Json, token: string, hub: AgentHub | undefined): Promise<void> {
   const h = req.headers['x-livemap-token'];
@@ -84,7 +84,7 @@ export async function handleHook(req: http.IncomingMessage, res: http.ServerResp
   const body = await readJsonBody(req, MAX_HOOK_BODY);
   if (!body.ok) return body.status === 413 ? rejectBody(req, res, json, 413, body.error) : json(body.status, { error: body.error });
   const v = body.value;
-  // A tool call captured by `livemap mcp-proxy`: recorded only, never blocked.
+  // A tool call or session text captured by `livemap mcp-proxy` or the SkyForge plugin: recorded only, never blocked.
   if (isCapture(v)) {
     try { ingestCapture(hub, v); } catch { /* a bad capture must not fail the sender */ }
     return json(200, { block: null });

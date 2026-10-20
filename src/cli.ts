@@ -19,6 +19,8 @@ import { ANALYZERS } from './engine/domain/index.js';
 // The ServiceNow source registers here until the plugin loader (#53) can load it.
 import { runServiceNow } from '../plugins/servicenow/cli.js';
 import { runMcpProxy } from './proxy/cli.js';
+import { runInstallPlugin } from '../plugins/servicenow/skyforge-plugin/install.js';
+import { runBackfillSessions } from '../plugins/servicenow/skyforge-plugin/backfill-sessions.js';
 import { AGENT_NAMES, detectAgents, initAgents, installHookScript, removeAgents, type AgentName } from './init.js';
 
 interface InitArgs { dir: string; agents?: AgentName[]; remove: boolean }
@@ -150,6 +152,8 @@ async function main(): Promise<void> {
   if (argv[0] === 'init') return runInit(argv.slice(1));
   if (argv[0] === 'export') return runExport(argv.slice(1));
   if (argv[0] === 'mcp-proxy') return runMcpProxy(argv.slice(1));
+  if (argv[0] === 'sn' && argv[1] === 'install-plugin') return runInstallPlugin(argv.slice(2));
+  if (argv[0] === 'sn' && argv[1] === 'backfill-sessions') return runBackfillSessions(argv.slice(2));
   if (argv[0] === 'sn') return runServiceNow(argv.slice(1), { serve, resolveRoot });
   const args = parseArgs(argv);
   return serve(resolveRoot(args.dir), args);

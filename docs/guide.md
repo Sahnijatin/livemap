@@ -17,6 +17,8 @@ livemap init [dir=.] [--agents claude,codex,cursor] [--remove]
 livemap export [dir=.] [--session ID] [--no-code] [--out FILE]
 livemap sn [dir=.] --scope NAMESPACE|SYS_ID [--instance NAME] [--nexus URL] [--port N] [--no-open] [--no-history] [--mirror-only]
 livemap mcp-proxy --upstream URL [--header NAME=VALUE]... [--timeout SEC] | --upstream-cmd "COMMAND"
+livemap sn install-plugin [--uninstall]
+livemap sn backfill-sessions --since DATE [--url URL] [--dry-run]
 ```
 
 `dir` is the project folder in every command. It defaults to the current folder. `-h` or `--help` prints the usage. Options that take a value also accept `=` (`--port=5000`, `--agents=claude`, `--out=shop.html`).
@@ -125,6 +127,26 @@ LiveMap matches each instance change to the call that made it, in this order. Th
 A change no rule fits is shown as made outside an agent. Clock skew between your machine and the instance is allowed for, 5 seconds by default.
 
 The update set and run window rules need each change's time, user and update set, which come from the instance's change log (`sys_update_xml`). Live polling of that log is not in this release yet, so for now those two rules do not match. The record rule and the time rule work without it.
+
+### `livemap sn install-plugin`
+
+Copies LiveMap's SkyForge plugin into SkyForge's plugin folder, `~/.skyforge/plugin/livemap-skyforge.js` (on Windows, `C:\Users\<you>\.skyforge\plugin\livemap-skyforge.js`). It shows the path and copies only after you type `y`. Then restart SkyForge. SkyForge loads every file in that folder when it starts, so no SkyForge setting changes.
+
+`--uninstall` removes that one file, again after a `y`. Restart SkyForge afterwards.
+
+The plugin reports SkyForge's nexus tool calls from the TUI and the Hub to a running `livemap sn`, with the same redaction, update set tracking and matching as `livemap mcp-proxy`. It also sends each prompt and each finished piece of assistant text, so the inspector can show the Goal and the Step. Other SkyForge tools (shell, file edits) are not sent. If LiveMap is not running, the plugin drops the events and SkyForge works as before. Set `LIVEMAP_PLUGIN_DEBUG=1` before starting SkyForge to log tool names and argument names (never values) to `~/.livemap/logs/skyforge-plugin.log`.
+
+### `livemap sn backfill-sessions`
+
+Sends SkyForge sessions from before the plugin was installed to the running `livemap sn`, with their real times. It reads SkyForge's local API with GET requests only: `/api/analytics/sessions` for the list (with each session's instance), and `/session/<id>/message` for each session's prompts, assistant text and tool calls. MCP sessions are skipped: those are desktop clients' calls, which `livemap mcp-proxy` covers.
+
+| Option | Default | What it does |
+|---|---|---|
+| `--since DATE` | required | Only activity from this date (`2026-10-01`) or time (`2026-10-01T09:00`) on. |
+| `--url URL` | `http://127.0.0.1:4096` | SkyForge's local API. |
+| `--dry-run` | off | Counts what it would send, and sends nothing. |
+
+Start `livemap sn` first. LiveMap keeps the latest 2,000 agent events in memory, so a long backfill keeps the newest ones.
 
 ### Environment variables
 

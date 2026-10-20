@@ -166,6 +166,9 @@ export interface CaptureEvent {
   own?: boolean;
 }
 
+/** Results larger than this are not parsed for the capture: only their `isError` flag counts. */
+export const MAX_PARSED_RESULT = 1024 * 1024;
+
 /** Tools whose results say who the session is or which update set is current: their results are always read. */
 export const CONTEXT_TOOLS = new Set(['sn_session_context', 'sn_get_instance_info', 'sn_update_set_manage', 'sn_update_set_query', 'sn_ensure_active_update_set', 'sn_switch_application_scope']);
 const USER_KEYS = ['user_name', 'username', 'userName', 'user_id', 'user'];
@@ -313,4 +316,24 @@ export function buildCapture(call: CallInput, ctx: SessionContext): CaptureEvent
   if (res.error) ev.error = res.error;
   if (call.own) ev.own = true;
   return ev;
+}
+
+/** A session's prompt, assistant text or idle status, posted to `/hook` by the SkyForge plugin. */
+export interface TextEvent {
+  source: 'skyforge-plugin';
+  kind: 'prompt' | 'message' | 'idle';
+  sessionId: string;
+  at: number;
+  text?: string;
+}
+
+/** Longest text sent for one prompt or message. */
+export const MAX_TEXT = 8000;
+
+/** A text event with its secrets cut out and its length capped; undefined when there is no text to send. */
+export function buildText(kind: TextEvent['kind'], sessionId: string, at: number, text?: string): TextEvent | undefined {
+  if (kind === 'idle') return { source: 'skyforge-plugin', kind, sessionId, at };
+  const t = text?.trim();
+  if (!t) return undefined;
+  return { source: 'skyforge-plugin', kind, sessionId, at, text: redactText(t.length > MAX_TEXT ? t.slice(0, MAX_TEXT) : t) };
 }

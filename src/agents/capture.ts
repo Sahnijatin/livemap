@@ -1,13 +1,17 @@
 /**
- * Capture events from `livemap mcp-proxy` (and later the SkyForge plugin) as hub events: one tool_start at
- * the call's start and one tool_end at its end, so attribution sees the call's whole run window.
+ * Capture events from `livemap mcp-proxy` and LiveMap's SkyForge plugin as hub events. A tool call becomes one
+ * tool_start at the call's start and one tool_end at its end, so attribution sees the call's whole run window.
+ * The plugin also sends the session's prompts, assistant text and idle status (`kind`), for the inspector's
+ * Goal and Step.
  */
 import type { AgentHub } from './hub.js';
 import type { AgentKind, AgentTool, RawAgentEvent, SnContext } from '../shared/types.js';
 import { classifyTool, type RecordTarget } from '../shared/tools.js';
 import { toolLabel } from './labels.js';
 
-export const CAPTURE_SOURCES = new Set(['mcp-proxy']);
+export const CAPTURE_SOURCES = new Set(['mcp-proxy', 'skyforge-plugin']);
+const AGENT_OF: Record<string, AgentKind> = { 'mcp-proxy': 'mcp-client', 'skyforge-plugin': 'skyforge' };
+const TEXT_KINDS = new Set(['prompt', 'message']);
 const MAX_OUTPUT = 4000;
 /** Event times more than this far from the server's clock are clamped: a capture describes a call that just ended. */
 const MAX_FUTURE_MS = 60_000;
@@ -40,6 +44,8 @@ export const isCapture = (v: unknown): v is Obj => isObj(v) && typeof v.source =
  */
 export function captureEvents(v: Obj, now: number = Date.now()): RawAgentEvent[] {
   if (v.own === true) return [];
+  const agent: AgentKind = AGENT_OF[String(v.source)] ?? 'other';
+  if (typeof v.kind === 'string') return textEvents(v, agent, now);
   const sessionId = str(v.sessionId);
   const callId = str(v.callId);
   const tool = str(v.tool);
@@ -75,7 +81,6 @@ export function captureEvents(v: Obj, now: number = Date.now()): RawAgentEvent[]
     id: callId, name: tool, label: toolLabel(name, input), paths: [],
     ...(c.inner ? { inner: c.inner } : {}), access: c.access, ...(targets.length ? { targets } : {}), ...(Object.keys(sn).length ? { sn } : {}),
   };
-  const agent: AgentKind = 'mcp-client';
   const ok = v.ok !== false;
   const error = str(v.error);
   const endTool: AgentTool = { ...base, ok, ...(error ? { output: error.slice(0, MAX_OUTPUT) } : {}) };
@@ -85,10 +90,21 @@ export function captureEvents(v: Obj, now: number = Date.now()): RawAgentEvent[]
   ];
 }
 
+/** A prompt, assistant text or idle status of a session: `{kind, sessionId, at, text?}`. */
+function textEvents(v: Obj, agent: AgentKind, now: number): RawAgentEvent[] {
+  const sessionId = str(v.sessionId);
+  const at = Math.min(num(v.at) ?? now, now + MAX_FUTURE_MS);
+  if (!sessionId) return [];
+  if (v.kind === 'idle') return [{ agent, sessionId, at, type: 'status', status: 'idle' }];
+  const text = str(v.text);
+  if (!TEXT_KINDS.has(v.kind as string) || !text) return [];
+  return [{ agent, sessionId, at, type: v.kind as 'prompt' | 'message', text }];
+}
+
 /** Records one capture in the hub. Returns false when it was ignored. */
 export function ingestCapture(hub: AgentHub, v: Obj, now: number = Date.now()): boolean {
   const events = captureEvents(v, now);
   if (!events.length) return false;
-  hub.ingestRaw(events, { agent: 'mcp-client', cwd: '', hooks: true });
+  hub.ingestRaw(events, { agent: events[0].agent, cwd: '', hooks: true });
   return true;
 }
