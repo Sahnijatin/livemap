@@ -387,7 +387,7 @@ test('map: a large project opens at folders; one folder expands; the palette rea
   await tab(page, 'map').click();
   await expect(page.locator('.folder')).toHaveCount(12, { timeout: 15_000 });
   await expect(page.locator('.mini-seg').getByRole('button', { name: 'Folders', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('status').filter({ hasText: 'Large project: showing folders. Open a folder to see its files.' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Large project: showing folders. Open one to see its files.' })).toBeVisible();
 
   await page.locator('.folder[data-folder="dir:pkg/mod3"]').dblclick();
   await expect(page.locator('.mini-seg').getByRole('button', { name: 'Files', exact: true })).toHaveAttribute('aria-pressed', 'true');
@@ -401,6 +401,62 @@ test('map: a large project opens at folders; one folder expands; the palette rea
   await page.keyboard.type('mod7_file12');
   await expect(palette.locator('[cmdk-item] .pl', { hasText: /^mod7_file12\.ts$/ })).toBeVisible();
   await page.keyboard.press('Escape');
+});
+
+test('map: a large project stays legible zoomed out; docs folders are Docs; notes fit each level without overlapping', async ({ page }) => {
+  test.setTimeout(60_000);
+  const big = tempDir('livemap-map-scale-');
+  generate(big, 40, 800);
+  // A skill folder full of markdown, with one script.
+  const skill = path.join(big, '.agents/skills/supabase-row-level-security-policies');
+  fs.mkdirSync(skill, { recursive: true });
+  for (let i = 0; i < 8; i++) fs.writeFileSync(path.join(skill, `reference-${i}.md`), `# Reference ${i}\n\n## Part\n`);
+  fs.writeFileSync(path.join(skill, 'validate.sh'), 'check() {\n  echo ok\n}\n');
+  const bigUrl = await startCli(big);
+  await open(page, bigUrl);
+  await tab(page, 'map').click();
+  await expect(page.locator('.folder')).toHaveCount(41, { timeout: 15_000 });
+
+  const skillCard = page.locator('.folder[data-folder="dir:.agents/skills/supabase-row-level-security-policies"]');
+  await expect(skillCard.locator('.fly')).toHaveText('Docs');
+  // Cut in the middle: the end of the name shows; the full path is the title.
+  await expect(skillCard.locator('.fl')).toHaveAttribute('title', '.agents/skills/supabase-row-level-security-policies');
+  await expect(skillCard.locator('.fl .fn > span').last()).toHaveText('policies/');
+
+  // No two of the notes, the hint, the zoom buttons and the Map tools overlap, at desktop and phone widths.
+  const parts = ['.map-note', '.cv-hint', '.zoomctl', '.c-tools'];
+  const noOverlap = async (label: string) => {
+    const shown = [];
+    for (const s of parts) if (await page.locator(s).isVisible()) shown.push(page.locator(s));
+    for (let i = 0; i < shown.length; i++) {
+      for (let j = i + 1; j < shown.length; j++) expect(await intersects(shown[i], shown[j]), `${label}: ${parts[i]} / ${parts[j]}`).toBe(false);
+    }
+  };
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: width > 640 ? 900 : 844 });
+    await setLevel(page, 'Folders');
+    await expect(page.locator('.map-note')).toHaveText('Large project: showing folders. Open one to see its files.');
+    await noOverlap(`folders ${width}`);
+    await setLevel(page, 'Files');
+    await expect(page.locator('.map-note')).toHaveText('Large project: open a folder to see its files.');
+    await noOverlap(`files ${width}`);
+    await setLevel(page, 'Functions');
+    await expect(page.locator('.map-note')).toHaveText('Large project: open a folder to see its functions.');
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await setLevel(page, 'Folders');
+  await settledCamera(page);
+
+  // Zoomed far out, folders carry overview labels at a readable size on screen.
+  for (let k = 0; k < 8; k++) await page.getByRole('button', { name: 'Zoom out' }).click();
+  await settledCamera(page);
+  expect((await viewport(page)).zoom).toBeLessThan(0.3);
+  const labels = page.locator('.ovl-t');
+  await expect(labels.first()).toBeVisible();
+  expect(await labels.count()).toBeGreaterThanOrEqual(8);
+  const h = (await labels.first().boundingBox())!.height;
+  expect(h).toBeGreaterThan(24);
+  expect(h).toBeLessThan(36);
 });
 
 test('map: frame budget while panning 500 files at the files level', async ({ page }) => {

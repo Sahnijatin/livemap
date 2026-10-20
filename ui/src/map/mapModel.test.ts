@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ChangeSummary, CodeSymbol, FileModel, Flag, Lang } from '@shared/types.js';
-import { buildMap, LARGE_PROJECT, type MapInput } from './mapModel';
+import { buildMap, largeNote, LARGE_PROJECT, type MapInput } from './mapModel';
 
 /** Slower CI runners scale wall-clock budgets (LIVEMAP_TIME_SCALE, set by CI on macOS and Windows). */
 const TIME_SCALE = Number(process.env.LIVEMAP_TIME_SCALE) || 1;
@@ -49,6 +49,40 @@ describe('buildMap', () => {
     expect(g.edges.find(e => e.id === 'src/components/Nav.tsx->src/services/auth.ts')).toBeTruthy();
     expect(g.files.every(f => f.rows.length === 0)).toBe(true);
     expect(g.large).toBe(false);
+  });
+
+  it('a folder mostly of markdown is in the Docs layer; its markdown still has no cards', () => {
+    const skill = '.agents/skills/supabase-row-level-security';
+    const list = [
+      file(`${skill}/validate.sh`, [], [sym('check')], 'shell'),
+      file(`${skill}/SKILL.md`, [], [sym('Title')], 'markdown'),
+      file(`${skill}/notes.md`, [], [sym('Title')], 'markdown'),
+      file('handbook/onboarding/setup.md', [], [sym('Title')], 'markdown'),
+      file('handbook/onboarding/faq.md', [], [sym('Title')], 'markdown'),
+      file('handbook/onboarding/snippet.ts', [], [sym('demo')]),
+      // Code with a README beside it stays code.
+      file('src/services/auth.ts', [], [sym('login')]),
+      file('src/services/user.ts', [], [sym('getUser')]),
+      file('src/services/README.md', [], [sym('Title')], 'markdown'),
+    ];
+    const input = fixture({ files: Object.fromEntries(list.map(f => [f.path, f])) });
+    const g = buildMap(input, 'folders', new Set());
+    expect(g.folders.find(f => f.path === skill)?.layer).toBe('docs');
+    expect(g.folders.find(f => f.path === skill)?.counts.files).toBe(1);
+    expect(g.folders.find(f => f.path === 'handbook/onboarding')?.layer).toBe('docs');
+    expect(g.folders.find(f => f.path === 'src/services')?.layer).toBe('logic');
+    expect(buildMap(input, 'files', new Set()).files.map(f => f.id)).toEqual([`${skill}/validate.sh`, 'handbook/onboarding/snippet.ts', 'src/services/auth.ts', 'src/services/user.ts']);
+  });
+
+  it('largeNote: each level says what it shows, only in a large project', () => {
+    expect(largeNote('folders', true, false)).toBe('Large project: showing folders. Open one to see its files.');
+    expect(largeNote('files', true, false)).toBe('Large project: open a folder to see its files.');
+    expect(largeNote('functions', true, false)).toBe('Large project: open a folder to see its functions.');
+    // With a folder open, the files and functions levels need no note.
+    expect(largeNote('files', true, true)).toBeNull();
+    expect(largeNote('functions', true, true)).toBeNull();
+    expect(largeNote('folders', true, true)).toBe('Large project: showing folders. Open one to see its files.');
+    for (const l of ['folders', 'files', 'functions'] as const) expect(largeNote(l, false, false)).toBeNull();
   });
 
   it('folders level: aggregated weights, root folder label', () => {
