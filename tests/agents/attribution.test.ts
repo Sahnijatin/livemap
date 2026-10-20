@@ -266,6 +266,22 @@ describe('#49: MCP writes and record targets', () => {
     expect(attr.attribute(change({ path: `x_app/widget/cc_apply__${SYS_ID}/template.html` }), T0)?.confidence).toBe('likely');
   });
 
+  it('reports the gap between an exact match and the record\'s instance time, for learning the skew', () => {
+    const at = T0 + 2500;
+    const { attr, feed } = setupWith({ recordOf: p => { const k = mirror(p); return k ? { ...k, updatedOn: at } : undefined; } });
+    const gaps: number[] = [];
+    attr.on('recordGap', (g: number) => gaps.push(g));
+    feed(mcpTool('S', EXEC, T0 - 1000, { inner: 'sn_push_artifact', access: 'write', targets: [{ kind: 'record', instance: 'inmorphisdemo3', table: 'sp_widget', sysId: SYS_ID }] }));
+    expect(attr.attribute(change({ path: `x_app/widget/cc_apply__${SYS_ID}/client.js` }), T0)).toMatchObject({ confidence: 'exact' });
+    expect(gaps).toEqual([at - (T0 - 1000)]);
+    // No instance time: nothing to learn from.
+    const plain = setupWith({ recordOf: mirror });
+    plain.attr.on('recordGap', (g: number) => gaps.push(g));
+    plain.feed(mcpTool('S', EXEC, T0 - 1000, { inner: 'sn_push_artifact', access: 'write', targets: [{ kind: 'record', instance: 'inmorphisdemo3', table: 'sp_widget', sysId: SYS_ID }] }));
+    plain.attr.attribute(change({ path: `x_app/widget/cc_apply__${SYS_ID}/client.js` }), T0);
+    expect(gaps).toHaveLength(1);
+  });
+
   it('a record write arriving after the change upgrades it late', () => {
     const { attr, feed } = setupWith({ recordOf: mirror });
     const got: Attribution[] = [];

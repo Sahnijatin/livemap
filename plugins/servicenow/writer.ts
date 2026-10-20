@@ -44,6 +44,10 @@ export function writeMirror(root: string, files: Map<string, string>, manifest: 
   mkdirPrivate(root);
   writeIfChanged(path.join(root, '.gitignore'), LOCAL_IGNORE);
   const prev = readManifest(root, ns);
+  // The manifest first: the watcher reports a file's change as soon as it lands, and the record resolver
+  // must already see that record's last change (who, when, which update set) by then.
+  const stored: StoredManifest = { ...manifest, files: [...files.keys()].sort() };
+  writeIfChanged(manifestPath(root, ns), `${JSON.stringify(stored, null, 2)}\n`);
   let written = 0;
   let unchanged = 0;
   const dirs = new Set<string>();
@@ -59,8 +63,6 @@ export function writeMirror(root: string, files: Map<string, string>, manifest: 
     try { fs.unlinkSync(path.join(root, ...rel.split('/'))); removed++; } catch { /* already gone */ }
     pruneEmpty(root, path.dirname(path.join(root, ...rel.split('/'))));
   }
-  const stored: StoredManifest = { ...manifest, files: [...files.keys()].sort() };
-  writeIfChanged(manifestPath(root, ns), `${JSON.stringify(stored, null, 2)}\n`);
   return { written, unchanged, removed, root };
 }
 
@@ -102,4 +104,31 @@ export function writeHistory(root: string, scope: string, history: unknown): boo
 
 export function readHistory<T>(root: string, scope: string): T | null {
   try { return JSON.parse(fs.readFileSync(historyPath(root, scope), 'utf8')) as T; } catch { return null; }
+}
+
+/**
+ * The live poller's state, kept across runs so a restart catches up instead of re-reading everything:
+ * one cursor per source (`YYYY-MM-DD HH:MM:SS`, instance time) and the clock skew it learned.
+ */
+export interface PollState {
+  version: 1;
+  scope: string;
+  cursors: { updateXml?: string; metadata?: string; deleted?: string };
+  /** sys_ids already applied at each cursor's second, so a row in the same second is not applied twice. */
+  seen?: { updateXml?: string[]; metadata?: string[]; deleted?: string[] };
+  skewMs?: number;
+}
+export const statePath = (root: string): string => path.join(root, 'state.json');
+
+/** The poller's state for `scope`, or null when there is none (or it is another scope's). */
+export function readPollState(root: string, scope: string): PollState | null {
+  try {
+    const s = JSON.parse(fs.readFileSync(statePath(root), 'utf8')) as PollState;
+    return s.version === 1 && s.scope === scope ? s : null;
+  } catch { return null; }
+}
+
+export function writePollState(root: string, state: PollState): void {
+  mkdirPrivate(root);
+  writeIfChanged(statePath(root), `${JSON.stringify(state, null, 2)}\n`);
 }

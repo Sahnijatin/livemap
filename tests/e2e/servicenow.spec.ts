@@ -21,7 +21,7 @@ function startSn(dir: string, nexusUrl: string, logFile: string): Promise<string
   return new Promise((resolve, reject) => {
     const p = spawn(process.execPath, [
       path.join(root, 'dist/cli.js'), 'sn', dir, '--scope', 'x_snc_cc_offering', '--instance', 'inmorphisdemo3',
-      '--nexus', nexusUrl, '--skyforge-log', logFile, '--no-open', '--port', '0',
+      '--nexus', nexusUrl, '--skyforge-log', logFile, '--no-open', '--port', '0', '--poll', '2',
     ], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, LIVEMAP_HOME: home } });
     proc = p;
     const timer = setTimeout(() => { p.kill('SIGKILL'); reject(new Error(`livemap sn did not print a URL:\n${out}`)); }, 60_000);
@@ -122,4 +122,36 @@ test('livemap sn: mirrors the BharatBank scope and shows it in the Map and Schem
   await expect(app.locator('.rules .col.rule').first()).toBeVisible();
   await page.waitForTimeout(1000);
   await page.screenshot({ path: path.join(shots, 'servicenow-schema.png'), animations: 'disabled' });
+});
+
+test('livemap sn: a record saved on the instance shows within 8 s, and an outage shows the instance offline', async ({ page }) => {
+  await expect.poll(() => out, { timeout: 30_000 }).toContain('Live polling every 2 s (read-only).');
+  await page.goto(url);
+  await expect(page.getByRole('status').filter({ hasText: 'Live' })).toBeAttached({ timeout: 30_000 });
+  const fx = loadFixture();
+  const rule = fx.tables.sys_script[0] as Record<string, string>;
+  // A business rule saved in the platform UI: a new update_xml row, its record and its inventory row.
+  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  nexus.live.rows.sys_update_set = [{ sys_id: '5f0000000000000000000000000fe001', name: 'Card refresh' }];
+  nexus.live.rows.sys_update_xml = [{
+    sys_id: '5e0000000000000000000000000000e1', name: `sys_script_${rule.sys_id}`, type: 'Business Rule', target_name: rule.name, action: 'INSERT_OR_UPDATE',
+    update_set: '5f0000000000000000000000000fe001', sys_created_by: 'dev.one', sys_updated_by: 'dev.one', sys_updated_on: now, payload: '',
+  }];
+  nexus.live.rows.sys_script = [{ ...rule, script: '// saved in the platform UI\n', sys_updated_on: now, sys_updated_by: 'dev.one' }];
+  nexus.live.rows.sys_metadata = [{ sys_id: rule.sys_id, sys_class_name: 'sys_script', sys_name: rule.sys_name, sys_updated_on: now, sys_updated_by: 'dev.one', sys_scope: fx.scope.sys_id }];
+  const card = page.locator('article.f-chg .p').filter({ hasText: rule.sys_id });
+  await expect(card.first()).toBeVisible({ timeout: 8000 });
+  const manifest = JSON.parse(fs.readFileSync(path.join(tmp, '.livemap', 'sn', 'x_snc_cc_offering.manifest.json'), 'utf8'));
+  expect(manifest.records[rule.sys_id]).toMatchObject({ updateSet: '5f0000000000000000000000000fe001', updateSetName: 'Card refresh', updatedBy: 'dev.one', updatedOn: now });
+  // Polls only read.
+  expect(new Set(nexus.calls.map(c => c.inner ?? c.tool))).toEqual(new Set(['sn_query_table', 'sn_get_instance_info', 'sn_session_context']));
+
+  // nexus goes down: the chip says so, and the map stays.
+  nexus.live.down = true;
+  await expect(page.getByRole('status').filter({ hasText: 'Offline' })).toBeAttached({ timeout: 15_000 });
+  await expect(page.getByText('instance offline')).toBeVisible();
+  await expect(card.first()).toBeVisible();
+  nexus.live.down = false;
+  await expect(page.getByRole('status').filter({ hasText: 'Live' })).toBeAttached({ timeout: 30_000 });
+  await expect.poll(() => out, { timeout: 5000 }).toContain('Instance back online; catching up.');
 });

@@ -51,7 +51,7 @@ export function applyMessage(state: ProjectState, msg: ServerMessage): ProjectSt
   switch (msg.type) {
     case 'hello': {
       // Replaces everything. Tolerates a hello without agent fields or a domain, like the UI store.
-      const { type: _type, history: _history, seq: _seq, ...rest } = msg;
+      const { type: _type, history: _history, seq: _seq, source: _source, ...rest } = msg;
       return {
         ...rest,
         changes: msg.changes.slice(-MAX_CHANGES),
@@ -72,6 +72,7 @@ export function applyMessage(state: ProjectState, msg: ServerMessage): ProjectSt
       return { ...state, domain: msg.domain };
     case 'indexing':
     case 'history':
+    case 'source':
       return state;
     case 'summary':
       return patchChange(state, msg.changeId, { summary: msg.summary });

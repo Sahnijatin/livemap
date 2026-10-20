@@ -10,7 +10,7 @@ import type { Attributor } from '../agents/attribution.js';
 import { buildUsedBy, type TokenCache } from '../engine/usedby.js';
 import { buildDomainIndex, newDataRefCache } from '../engine/domain/build-index.js';
 import type { DomainIndex } from '../shared/domain.js';
-import type { HistoryStatus, ServerMessage, UsedByEntry } from '../shared/protocol.js';
+import type { HistoryStatus, ServerMessage, SourceStatus, UsedByEntry } from '../shared/protocol.js';
 import type { ProjectState } from '../shared/state.js';
 import { RECORDED_TYPES, type HistoryStore } from '../history/store.js';
 import type { AgentEvent, AgentSession, Attribution, ChangeSummary, CodeSymbol, ControlState, FileModel } from '../shared/types.js';
@@ -78,6 +78,8 @@ export interface LiveMapServer {
   setIndexing(done: number, total: number): void;
   /** Indexing finished: send hello to every client, and to every client that connects later. */
   ready(): void;
+  /** The data source's state (a ServiceNow instance): kept for later hellos and sent to every client. */
+  setSource(source: SourceStatus): void;
 }
 
 const HOST = '127.0.0.1';
@@ -387,7 +389,8 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     summaries: summariesState(),
     ...(sn ? { sn: true } : {}),
   });
-  const hello = (state: ProjectState = liveState()): ServerMessage => ({ type: 'hello', ...state, history: historyStatus(), seq });
+  let source: SourceStatus | undefined;
+  const hello = (state: ProjectState = liveState()): ServerMessage => ({ type: 'hello', ...state, history: historyStatus(), seq, ...(source ? { source } : {}) });
   /**
    * Starts a recording run from the live state (the run-start record carries it, without the hello's
    * recording fields) and returns the hello for it. The run is current once startRun returns its promise.
@@ -675,6 +678,10 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
       isReady = true;
       // The run starts before the first hello, so everything recorded after it builds on that hello's state.
       broadcast(startRun());
+    },
+    setSource(next: SourceStatus): void {
+      source = next;
+      if (isReady && !closed) broadcast({ type: 'source', source: next });
     },
     async close(): Promise<void> {
       closed = true;

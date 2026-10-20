@@ -141,6 +141,13 @@ export interface MockNexus {
   headers: http.IncomingHttpHeaders[];
   /** Transports that connected: 'http' or 'sse'. */
   sessions: string[];
+  /** MCP client names from each `initialize`. */
+  clients: string[];
+  /**
+   * Changes made while the mock runs, as a live poll sees them: rows per table, read on every query, that add
+   * to the fixture's or replace a row with the same sys_id. `down` makes every request fail with 503.
+   */
+  live: { rows: Record<string, Rec[]>; down: boolean };
   close(): Promise<void>;
 }
 
@@ -152,13 +159,23 @@ export async function startMockNexus(opts: MockNexusOptions = {}): Promise<MockN
   const headers: http.IncomingHttpHeaders[] = [];
   const sessions: string[] = [];
   let failLeft = opts.failCalls ?? 0;
+  const clients: string[] = [];
+  const live: MockNexus['live'] = { rows: {}, down: false };
+  /** The fixture's rows of a table with the live ones laid over them. */
+  const rowsOf = (table: string): Rec[] => {
+    const base = tableRows(fx, table, opts.unrecorded ?? 'inventory', opts.versions, opts.extraUpdateXml);
+    const extra = (live.rows[table] ?? []).map(r => (table === 'sys_update_xml' ? { application: fx.scope.sys_id, ...r } : r));
+    if (!extra.length) return base;
+    const ids = new Set(extra.map(r => r.sys_id));
+    return [...base.filter(r => !ids.has(r.sys_id)), ...extra];
+  };
   const searched = new Set<string>();
   const text = (v: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(v) }] });
 
   const query = (a: Record<string, unknown>) => {
     const table = String(a.table ?? '');
     if (opts.failTables?.includes(table)) return { success: false, error: `Insufficient rights to query ${table}` };
-    let rows = tableRows(fx, table, opts.unrecorded ?? 'inventory', opts.versions, opts.extraUpdateXml).filter(r => matches(r, a.query as string | undefined));
+    let rows = rowsOf(table).filter(r => matches(r, a.query as string | undefined));
     const order = typeof a.order_by === 'string' ? a.order_by : undefined;
     if (order) {
       const desc = order.startsWith('-');
@@ -222,6 +239,7 @@ export async function startMockNexus(opts: MockNexusOptions = {}): Promise<MockN
 
   const httpServer = http.createServer(async (req, res) => {
     headers.push(req.headers);
+    if (live.down) { req.resume(); res.writeHead(503).end('unavailable'); return; }
     const url = new URL(req.url ?? '/', 'http://x');
     try {
       if (url.pathname === '/mcp/messages' && req.method === 'POST') {
@@ -245,6 +263,8 @@ export async function startMockNexus(opts: MockNexusOptions = {}): Promise<MockN
       if (opts.sseOnly) { res.writeHead(405).end(); return; }
       const body = req.method === 'POST' ? await readBody(req) : undefined;
       if (failLeft > 0 && isToolCall(body)) { failLeft--; res.writeHead(503).end('unavailable'); return; }
+      const init = body as { method?: string; params?: { clientInfo?: { name?: string } } } | undefined;
+      if (init?.method === 'initialize' && init.params?.clientInfo?.name) clients.push(init.params.clientInfo.name);
       let t = typeof sid === 'string' ? streams.get(sid) : undefined;
       if (!t) {
         t = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID(), onsessioninitialized: (id) => { streams.set(id, t!); } });
@@ -260,7 +280,7 @@ export async function startMockNexus(opts: MockNexusOptions = {}): Promise<MockN
   const port = (httpServer.address() as { port: number }).port;
   return {
     url: `http://127.0.0.1:${port}/mcp`,
-    calls, headers, sessions,
+    calls, headers, sessions, clients, live,
     close: async () => {
       for (const t of streams.values()) await t.close().catch(() => {});
       for (const t of sse.values()) await t.close().catch(() => {});

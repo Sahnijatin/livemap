@@ -15,7 +15,7 @@ How to run LiveMap and what each part of the UI does. For agent setup see [agent
 livemap [dir=.] [--port N] [--no-open] [--pull[=SEC]] [--no-history] [--summaries]
 livemap init [dir=.] [--agents claude,codex,cursor] [--remove]
 livemap export [dir=.] [--session ID] [--no-code] [--out FILE]
-livemap sn [dir=.] --scope NAMESPACE|SYS_ID [--instance NAME] [--nexus URL] [--skyforge-log FILE|none] [--log-window SECONDS] [--port N] [--no-open] [--no-history] [--mirror-only]
+livemap sn [dir=.] --scope NAMESPACE|SYS_ID [--instance NAME] [--nexus URL] [--skyforge-log FILE|none] [--log-window SECONDS] [--poll SECONDS|off] [--port N] [--no-open] [--no-history] [--mirror-only]
 livemap mcp-proxy --upstream URL [--header NAME=VALUE]... [--timeout SEC] | --upstream-cmd "COMMAND"
 livemap sn install-plugin [--uninstall]
 livemap sn backfill-sessions --since DATE [--url URL] [--limit N] [--dry-run]
@@ -71,6 +71,7 @@ Mirrors a ServiceNow application scope to files, then runs LiveMap on them. It r
 | `--nexus URL` | `http://127.0.0.1:3006/mcp` | nexus's MCP endpoint. LiveMap tries Streamable HTTP first, then SSE. |
 | `--skyforge-log FILE\|none` | `~/.skyforge/skyforge-mcp.log` | SkyForge's MCP log, used to attribute past changes to SkyForge tool calls. `none` skips it. |
 | `--log-window SECONDS` | `60` | How long after a tool call ends a change can come and still match it (1 to 3600). A change may come at most 2 seconds before the call starts. |
+| `--poll SECONDS\|off` | `5` | How often LiveMap reads the instance for changes while the UI runs (2 to 60). `off` shows the mirror as pulled. |
 | `--port N` | `4317` | As for `livemap`. |
 | `--no-open` | the browser opens | As for `livemap`. |
 | `--no-history` | history is imported and recorded | Skips the history import, and records nothing, as for `livemap`. |
@@ -85,6 +86,18 @@ On the map, a portal links to its home page, a page to its layout, a layout to t
 Credential records (`sys_auth_profile*`, `oauth_entity*`, `discovery_credentials`) are listed by name only, fields named like passwords, secrets, tokens or keys are never written, and system properties are read without their values. The `.livemap` folder is readable only by you. When `dir` is inside a git repository, LiveMap adds `.livemap/` to its `.gitignore`; elsewhere it leaves `.gitignore` alone.
 
 A second `livemap sn` on the same folder updates the mirror in place: unchanged files are not rewritten, and files of records that are gone or renamed are removed.
+
+Each record's files also say how it last changed, from its latest `sys_update_xml` row: `meta.json` and the other JSON files carry `sys_update_set` (`value` is the update set's sys_id, `display_value` its name), `sys_updated_by` and `sys_updated_on`, and a script's first line carries `updateSet`, `updateSetName`, `updatedBy` and `updatedOn`. A record changed outside update sets has no update set; its user and time come from `sys_metadata`.
+
+#### Live changes
+
+While the UI runs, LiveMap reads the instance every 5 seconds (`--poll`) and updates the mirror, so a change made in the platform, by an agent or by a teammate shows on the map and in Activity within a few seconds, with its diff.
+
+- **What it reads.** `sys_update_xml` rows of the scope and `sys_metadata` records of the scope, each since the last change it saw. When nothing changed, that is two queries. Changed records are then read in full. Deleted records come from update_xml rows with action `DELETE`, and from `sys_metadata_delete` every 30 seconds.
+- **Where it stops.** The last time seen in each source is kept in `.livemap/sn/state.json`. A restart catches up from there.
+- **Clock skew.** Each change matched exactly to a tool call shows how far the instance clock is from this machine's. LiveMap uses the median of the last 21 to widen its matching windows, and keeps it in `state.json`.
+- **Offline.** When nexus does not answer, the status chip says "Offline: instance offline", the map shows the last mirror, and LiveMap tries again less often, up to once a minute. Once nexus answers, it catches up from where it stopped.
+- **LiveMap's own calls.** Its nexus session is named `livemap`, so the proxy and the plugin never report its reads as agent activity.
 
 #### History import
 
@@ -155,7 +168,7 @@ LiveMap matches each instance change to the call that made it, in this order. Th
 
 A change no rule fits is shown as made outside an agent. Clock skew between your machine and the instance is allowed for, 5 seconds by default.
 
-The update set and run window rules need each change's time, user and update set, which come from the instance's change log (`sys_update_xml`). Live polling of that log is not in this release yet, so for now those two rules do not match. The record rule and the time rule work without it.
+The update set and run window rules need each change's time, user and update set. LiveMap reads them from the instance's change log (`sys_update_xml`) as it polls (see [Live changes](#live-changes)), so these rules work while `livemap sn` runs with polling on.
 
 ### `livemap sn install-plugin`
 

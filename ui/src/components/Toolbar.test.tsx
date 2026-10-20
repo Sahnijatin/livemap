@@ -7,7 +7,7 @@ import { emptyDomain } from '../fixtures';
 
 vi.mock('../api', () => ({ addFlag: vi.fn(), removeFlag: vi.fn(), setPaused: vi.fn() }));
 const api = await import('../api');
-const { PauseButton, ProjectChip } = await import('./Toolbar');
+const { PauseButton, ProjectChip, StatusChip } = await import('./Toolbar');
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -58,6 +58,32 @@ describe('PauseButton', () => {
     expect(button().disabled).toBe(true);
     await act(async () => resolve());
     expect(button().disabled).toBe(false);
+  });
+});
+
+describe('StatusChip', () => {
+  const hello = (source?: { name: string; state: 'online' | 'offline' }) => useStore.getState().apply({
+    type: 'hello', root: '/p/sn', name: 'sn', files: [], changes: [], usedBy: [], domain: emptyDomain(),
+    indexing: false, events: [], sessions: [], control: { paused: false, flags: [] }, ...(source ? { source } : {}),
+  });
+  const chip = () => host.querySelector('.statuschip')?.textContent;
+
+  it('says the instance is offline while the source is, and Live again once it is back', () => {
+    useStore.getState().setConnection('open');
+    act(() => hello({ name: 'ServiceNow', state: 'offline' }));
+    act(() => root.render(<StatusChip />));
+    expect(chip()).toBe('Offlineinstance offline');
+    expect(host.querySelector('.dot.warn')).not.toBeNull();
+    act(() => useStore.getState().apply({ type: 'source', source: { name: 'ServiceNow', state: 'online' } }));
+    expect(chip()).toBe('Livewatching');
+  });
+
+  it('keeps the source state live while rewound', () => {
+    useStore.getState().setConnection('open');
+    act(() => hello());
+    act(() => useStore.setState({ rewound: { seq: 1, at: 1 } }));
+    act(() => useStore.getState().apply({ type: 'source', source: { name: 'ServiceNow', state: 'offline' } }));
+    expect(useStore.getState().source?.state).toBe('offline');
   });
 });
 

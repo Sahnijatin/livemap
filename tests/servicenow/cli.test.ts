@@ -21,17 +21,20 @@ const fail = (m: string): never => { throw new Error(m); };
 describe('parseSnArgs', () => {
   it('reads every option, with = or a space', () => {
     expect(parseSnArgs(['proj', '--scope', 'x_snc_cc_offering', '--instance=inmorphisdemo3', '--nexus', 'http://127.0.0.1:4000/mcp', '--port=0', '--no-open', '--no-history', '--mirror-only',
-      '--skyforge-log', 'D:\\logs\\mcp.log', '--log-window=90'], fail))
+      '--skyforge-log', 'D:\\logs\\mcp.log', '--log-window=90', '--poll', '10'], fail))
       .toEqual({
         dir: 'proj', scope: 'x_snc_cc_offering', instance: 'inmorphisdemo3', nexus: 'http://127.0.0.1:4000/mcp', port: 0, open: false, history: false, mirrorOnly: true,
-        skyforgeLog: 'D:\\logs\\mcp.log', logWindowSec: 90,
+        skyforgeLog: 'D:\\logs\\mcp.log', logWindowSec: 90, pollSec: 10,
       });
   });
   it('defaults nexus, port, open, history and the SkyForge log', () => {
     expect(parseSnArgs(['--scope', 'x_a'], fail)).toMatchObject({
       dir: '.', nexus: DEFAULT_NEXUS_URL, port: 4317, open: true, history: true, mirrorOnly: false,
-      skyforgeLog: DEFAULT_SKYFORGE_LOG, logWindowSec: 60,
+      skyforgeLog: DEFAULT_SKYFORGE_LOG, logWindowSec: 60, pollSec: 5,
     });
+    expect(parseSnArgs(['--scope', 'x_a', '--poll', 'off'], fail).pollSec).toBeNull();
+    expect(() => parseSnArgs(['--scope', 'x', '--poll', '1'], fail)).toThrow(/invalid --poll/);
+    expect(() => parseSnArgs(['--scope', 'x', '--poll', '61'], fail)).toThrow(/invalid --poll/);
     expect(DEFAULT_SKYFORGE_LOG).toBe(path.join(os.homedir(), '.skyforge', 'skyforge-mcp.log'));
     expect(parseSnArgs(['--scope', 'x_a', '--skyforge-log', 'none'], fail).skyforgeLog).toBeNull();
     expect(() => parseSnArgs(['--scope', 'x', '--log-window', '0'], fail)).toThrow(/invalid --log-window/);

@@ -79,6 +79,8 @@ export interface HistoryOptions {
   chunk?: number;
   /** Full records from the pull, by sys_id: they name dictionary entries' update names. */
   full?: Map<string, SnRecord>;
+  /** The scope's update_xml rows, when the caller already read them (readChangeRows): saves a query. */
+  updateXml?: SnRecord[];
   /** Time budget in ms (default DEFAULT_HISTORY_BUDGET_MS). */
   budgetMs?: number;
   /** Clock for the budget (tests). */
@@ -227,7 +229,8 @@ export async function importHistory(client: NexusClient, scope: ScopeInfo, inven
   // 2. Every update_xml row of the scope, without payloads.
   let xml: SnRecord[] = [];
   await tolerant('sys_update_xml', async () => {
-    xml = (await q('sys_update_xml', `application=${scope.sys_id}`, XML_FIELDS)).filter(r => !withheld(tableOfUpdate(r.name, byUpdate), r.name));
+    const rows = opts.updateXml ?? await q('sys_update_xml', `application=${scope.sys_id}`, XML_FIELDS);
+    xml = rows.filter(r => !withheld(tableOfUpdate(r.name, byUpdate), r.name));
   });
 
   // 3. Versions by update name: every name the scope uses when none came by application, else only the

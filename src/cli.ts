@@ -279,6 +279,11 @@ async function serve(root: string, args: Args, opts: ServeOptions = {}): Promise
   if (stopping) return;
   if (model.truncated) process.stderr.write(`livemap: indexed the first ${model.limit} files only\n`);
   server.ready();
+  opts.onReady?.({
+    setSkewMs: ms => attributor.setSkewMs(ms),
+    onRecordGap: listener => { attributor.on('recordGap', listener); },
+    setSource: status => server.setSource(status),
+  });
 }
 
 main().catch(e => {
