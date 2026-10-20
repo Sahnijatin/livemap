@@ -4,6 +4,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { ensureDir, FILE_MODE } from '../history/paths.js';
 import { callProvider, ProviderError } from './providers.js';
+import { ASK_SYSTEM } from './ask.js';
 import type { ProviderPrompt } from './providers.js';
 import type { SummaryConfig, SummaryStatus } from '../shared/summaries.js';
 import type { ChangeSummary, CodeSymbol, FileModel } from '../shared/types.js';
@@ -22,9 +23,14 @@ const MAX_RESULT = 300;
 const MAX_RETRIES = 3;
 const PAUSE_MS = 60_000;
 const MAX_QUEUE = 200;
+const ASK_MAX_TOKENS = 1_000;
+const ASK_MAX_RESULT = 8_000;
+const ASK_TIMEOUT_MS = 90_000;
 
 interface Opts { home: string; fetchImpl?: typeof fetch; now?: () => number; concurrency?: number; timeoutMs?: number }
 interface Job { run: () => Promise<string | null>; resolve: (v: string | null) => void }
+/** Per-request limits: how long one attempt may take and how much of the reply is kept. */
+interface Limits { timeoutMs?: number; maxResult: number }
 
 export class Summarizer extends EventEmitter {
   private readonly fetchImpl: typeof fetch;
@@ -92,6 +98,21 @@ export class Summarizer extends EventEmitter {
     return this.submit({ system: CHANGE_SYSTEM, user, maxTokens: CHANGE_MAX_TOKENS });
   }
 
+  /**
+   * Answers a question about the project from `context` (see ask.ts). Shares the queue, cache and token cap
+   * with summaries; a failure comes back as a readable error instead of null.
+   */
+  async ask(question: string, context: string): Promise<{ answer: string } | { error: string }> {
+    if (this.stopped) return { error: 'LiveMap is shutting down' };
+    if (this.capHit) return { error: 'the monthly token cap is reached' };
+    if (this.now() < this.pausedUntil) return { error: `the provider refused the last request (${this.error ?? 'error'}); try again in a minute` };
+    const user = `${context}\n\n## Question\n${question}`;
+    const answer = await this.submit({ system: ASK_SYSTEM, user, maxTokens: ASK_MAX_TOKENS }, { timeoutMs: ASK_TIMEOUT_MS, maxResult: ASK_MAX_RESULT });
+    if (answer) return { answer };
+    if (this.capHit) return { error: 'the monthly token cap is reached' };
+    return { error: this.error ?? 'no answer' };
+  }
+
   stop(): void {
     this.stopped = true;
     for (const sl of this.sleeps) { clearTimeout(sl.t); sl.res(); }
@@ -107,7 +128,7 @@ export class Summarizer extends EventEmitter {
     return this.stopped || f.lang === 'secret' || !!(f.flags.secret || f.flags.binary || f.flags.tooLarge);
   }
 
-  private submit(p: ProviderPrompt): Promise<string | null> {
+  private submit(p: ProviderPrompt, lim: Limits = { maxResult: MAX_RESULT }): Promise<string | null> {
     if (this.stopped) return Promise.resolve(null);
     const key = crypto.createHash('sha256')
       .update(`${this.cfg.provider}|${this.cfg.model}|${PROMPT_VERSION}|${p.maxTokens}|${p.system}\n${p.user}`).digest('hex');
@@ -117,7 +138,7 @@ export class Summarizer extends EventEmitter {
     if (dup) return dup;
     const prom = new Promise<string | null>((resolve) => {
       if (this.queue.length >= MAX_QUEUE) this.queue.shift()?.resolve(null);
-      this.queue.push({ run: () => this.execute(key, p), resolve });
+      this.queue.push({ run: () => this.execute(key, p, lim), resolve });
       this.pump();
       this.emitStatus();
     }).finally(() => this.inflight.delete(key));
@@ -140,7 +161,7 @@ export class Summarizer extends EventEmitter {
     }
   }
 
-  private async execute(key: string, p: ProviderPrompt): Promise<string | null> {
+  private async execute(key: string, p: ProviderPrompt, lim: Limits): Promise<string | null> {
     const estimate = Math.ceil((p.system.length + p.user.length) / 4) + p.maxTokens;
     for (;;) {
       this.rollMonth();
@@ -160,12 +181,12 @@ export class Summarizer extends EventEmitter {
     try {
       for (let attempt = 0; ; attempt++) {
         try {
-          const r = await this.attempt(p);
+          const r = await this.attempt(p, lim.timeoutMs ?? this.timeoutMs);
           // Add to what the file holds now: another LiveMap process may have spent tokens during the request.
           this.used = Math.max(this.used, this.readUsage()) + r.inputTokens + r.outputTokens;
           this.writeUsage();
           this.error = undefined;
-          const text = r.text.trim().slice(0, MAX_RESULT);
+          const text = r.text.trim().slice(0, lim.maxResult);
           if (!text) return null;
           this.writeCache(key, text);
           return text;
@@ -188,12 +209,12 @@ export class Summarizer extends EventEmitter {
     }
   }
 
-  private async attempt(p: ProviderPrompt): ReturnType<typeof callProvider> {
+  private async attempt(p: ProviderPrompt, timeoutMs: number): ReturnType<typeof callProvider> {
     const ac = new AbortController();
     this.aborts.add(ac);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, rej) => {
-      timer = setTimeout(() => { ac.abort(); rej(new ProviderError(0, false, 'timeout')); }, this.timeoutMs);
+      timer = setTimeout(() => { ac.abort(); rej(new ProviderError(0, false, 'timeout')); }, timeoutMs);
     });
     try {
       return await Promise.race([callProvider(this.cfg, p, this.fetchImpl, ac.signal), timeout]);

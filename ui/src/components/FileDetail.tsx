@@ -11,6 +11,7 @@ import { Avatar } from './Avatar';
 import { KindBadge, LayerTile, layerVars } from './icons';
 import { MethodPill } from './MethodPill';
 import { authHeaders } from '../connection';
+import { askAbout } from './Ask';
 
 /* The inspector's file view. It only shows once a file is selected, so it loads after first paint (see Inspector). */
 
@@ -25,8 +26,9 @@ function FileChip({ path, note }: { path: string; note?: string }) {
   );
 }
 
-/** How long the summary shimmer waits for a `fileSummary` before giving up. */
-const PENDING_MS = 15_000;
+/** How long the summary shimmer waits for a `fileSummary` before giving up (a slow provider retries for a while). */
+const PENDING_MS = 60_000;
+
 /**
  * Asks the server for a file summary unless a request for it is unanswered (see `summaryRequests`); false then.
  * A cached summary applies at once and a pending one arrives as `fileSummary`; `done` runs when the request fails.
@@ -48,12 +50,14 @@ function requestSummary(path: string, done: () => void): boolean {
 }
 
 /**
- * "In plain English": the AI file summary, else the agent's own words for the latest change, else nothing.
- * Summaries render as text only.
+ * "In plain English": the AI file summary, else the agent's own words for the latest change. With AI on it
+ * always shows, so a failed summary says why (with a retry) instead of disappearing. Summaries render as text only.
  */
 function PlainEnglish({ path }: { path: string }) {
   const entry = useStore(s => s.summaries.files[path]);
-  const state = useStore(s => s.summaries.status.state);
+  const status = useStore(s => s.summaries.status);
+  const replay = useStore(s => s.replay);
+  const state = status.state;
   const on = state !== 'off';
   // At the cap or after an error a cached summary can still come back, but no new one is being written.
   const writing = state === 'ready' || state === 'working';
@@ -71,14 +75,31 @@ function PlainEnglish({ path }: { path: string }) {
     const t = setTimeout(rerender, left);
     return () => clearTimeout(t);
   }, [left > 0, since]);
+  const retry = () => {
+    summaryRequests.delete(path);
+    if (requestSummary(path, rerender)) rerender();
+  };
 
-  if (!entry && left <= 0 && !intent) return null;
+  const live = on && !rewound && !replay;
+  if (!entry && left <= 0 && !intent && !live) return null;
+  const why = state === 'error' ? `Could not write a summary: ${status.error ?? 'unknown error'}.`
+    : state === 'cap' ? 'No new summaries this month: the token cap is reached.'
+    : since === 0 && summaryRequests.has(path) ? 'Could not write a summary for this file.'
+    : 'No summary for this file yet.';
   return (
     <div className="ai fi">
       <small><span aria-hidden="true">✦ </span>In plain English</small>
       {entry ? <p>{entry.summary}</p>
         : left > 0 ? <div className="ai-wait" aria-busy="true" aria-label="Writing a summary"><i /><i /></div>
-        : <><span className="ai-src">In the agent's words</span><p>{intent}</p></>}
+        : intent ? <><span className="ai-src">In the agent's words</span><p>{intent}</p></>
+        : <p className="ai-why">{why}</p>}
+      {live && (
+        <div className="ai-acts">
+          {!entry && left <= 0 && state !== 'cap' && <button type="button" className="linkbtn" onClick={retry}>Try again</button>}
+          <button type="button" className="linkbtn" onClick={() => askAbout(path)}>Ask about this file</button>
+        </div>
+      )}
+      {live && !entry && left <= 0 && intent && state === 'error' && <p className="ai-why">{why}</p>}
     </div>
   );
 }

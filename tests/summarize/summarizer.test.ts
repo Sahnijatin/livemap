@@ -327,3 +327,22 @@ describe('Summarizer', () => {
     s.stop();
   });
 });
+
+describe('Summarizer.ask', () => {
+  it('answers with a larger budget, keeps the long answer and sends the question after the context', async () => {
+    const long = 'x'.repeat(2000);
+    const f = vi.fn(async () => reply(long));
+    const s = mkSum(f);
+    expect(await s.ask('Why?', 'CONTEXT')).toEqual({ answer: long });
+    const b = bodyOf(f);
+    expect(b.max_tokens).toBe(1000);
+    expect(b.messages[0].content).toBe('CONTEXT\n\n## Question\nWhy?');
+  });
+
+  it('returns the provider error instead of null', async () => {
+    const s = mkSum(vi.fn(async () => new Response('no', { status: 401 })));
+    expect(await s.ask('Why?', 'C')).toEqual({ error: '401 unauthorized' });
+    // Paused after a 401: the next question fails fast with the reason.
+    expect(await s.ask('Again?', 'C')).toMatchObject({ error: expect.stringContaining('401 unauthorized') });
+  });
+});

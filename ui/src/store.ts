@@ -11,8 +11,8 @@ import { loadLayout, saveLayout, type Panel, type PanelLayout } from './panelLay
 export const MAX_CHANGES = 2000;
 export const MAX_EVENTS = 2000;
 
-export type CenterTab = 'activity' | 'map' | 'schema' | 'api' | 'stack';
-export const CENTER_TABS: CenterTab[] = ['activity', 'map', 'schema', 'api', 'stack'];
+export type CenterTab = 'activity' | 'map' | 'schema' | 'api' | 'stack' | 'ask';
+export const CENTER_TABS: CenterTab[] = ['activity', 'map', 'schema', 'api', 'stack', 'ask'];
 const TAB_KEY = 'livemap-tab';
 
 /** The remembered center tab; `activity` when storage is empty, unavailable or throws. */

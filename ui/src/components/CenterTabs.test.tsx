@@ -51,12 +51,12 @@ afterEach(() => {
 });
 
 describe('CenterTabs', () => {
-  it('renders a tablist with Activity, Map, Schema, API and Stack; the Map badge counts code files', () => {
+  it('renders a tablist with Activity, Map, Schema, API, Stack and Ask; the Map badge counts code files', () => {
     mount();
     const tabs = [...host.querySelectorAll('[role=tablist] [role=tab]')].map(t => t.getAttribute('aria-label'));
-    expect(tabs).toEqual(['Activity', 'Map, 2', 'Schema, 2', 'API, 3', 'Stack']);
+    expect(tabs).toEqual(['Activity', 'Map, 2', 'Schema, 2', 'API, 3', 'Stack', 'Ask']);
     // A narrow center shows icons and counts only: each label stays as the tooltip.
-    expect([...host.querySelectorAll('[role=tablist] [role=tab]')].map(t => t.getAttribute('title'))).toEqual(['Activity', 'Map', 'Schema', 'API', 'Stack']);
+    expect([...host.querySelectorAll('[role=tablist] [role=tab]')].map(t => t.getAttribute('title'))).toEqual(['Activity', 'Map', 'Schema', 'API', 'Stack', 'Ask']);
     expect(tab('map').querySelector('.cnt')!.textContent).toBe('2');
     expect(tab('activity').getAttribute('aria-selected')).toBe('true');
     expect(host.querySelector('[role=tabpanel]')?.getAttribute('aria-labelledby')).toBe(tab('activity').id);
@@ -80,8 +80,8 @@ describe('CenterTabs', () => {
     expect(tab('activity').tabIndex).toBe(-1);
     act(() => { tab('map').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })); });
     act(() => { tab('activity').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })); });
-    expect(useStore.getState().tab).toBe('stack');
-    expect(document.activeElement).toBe(tab('stack'));
+    expect(useStore.getState().tab).toBe('ask');
+    expect(document.activeElement).toBe(tab('ask'));
   });
 
   it('badges show tables and routes + pages + screens; the schema badge bumps when the count increases', () => {

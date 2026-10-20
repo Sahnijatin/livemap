@@ -16,9 +16,10 @@ import { RECORDED_TYPES, type HistoryStore } from '../history/store.js';
 import type { AgentEvent, AgentSession, Attribution, ChangeSummary, CodeSymbol, ControlState, FileModel } from '../shared/types.js';
 import { offStatus, type FileSummary, type SummariesState, type SummaryStatus } from '../shared/summaries.js';
 import { changeQualifies } from '../summarize/summarizer.js';
+import { buildAskContext, MAX_QUESTION } from '../summarize/ask.js';
 import { LOCK_PATH } from '../lock.js';
 import { authenticate, hostAllowed, newToken, originAllowed } from './auth.js';
-import { handleControlApi, handleHook } from './agent-routes.js';
+import { handleControlApi, handleHook, MAX_API_BODY, readJsonBody } from './agent-routes.js';
 import { handleHistoryApi, sendJsonMaybeGzip } from './history-routes.js';
 import { serveStatic } from './static.js';
 
@@ -52,6 +53,8 @@ export interface SummaryEngine {
   status(): SummaryStatus;
   summarizeFile(file: FileModel, text: string): Promise<string | null>;
   summarizeChange(change: ChangeSummary, file: FileModel | null): Promise<string | null>;
+  /** Answers a question about the project from a context string (see src/summarize/ask.ts). */
+  ask?(question: string, context: string): Promise<{ answer: string } | { error: string }>;
   on(event: 'status', listener: (status: SummaryStatus) => void): unknown;
   off(event: 'status', listener: (status: SummaryStatus) => void): unknown;
 }
@@ -507,6 +510,32 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
   hub?.control.on('change', onControl);
   attributor?.on('late', onLate);
 
+  /**
+   * `POST /api/ask` {question, path?}: answers a question about the project with the summary provider, from the
+   * project map, the file's connections and the most relevant files' source (never secret, binary or too-large files).
+   */
+  const handleAsk = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
+    if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' }, { allow: 'POST' });
+    if (!originAllowed(req)) return json(res, 403, { error: 'forbidden origin' });
+    if (!/^application\/json\s*(;|$)/i.test(String(req.headers['content-type'] ?? ''))) return json(res, 415, { error: 'expected application/json' });
+    const body = await readJsonBody(req, MAX_API_BODY);
+    if (!body.ok) return json(res, body.status, { error: body.error });
+    const v = body.value as { question?: unknown; path?: unknown } | null;
+    const question = typeof v?.question === 'string' ? v.question.trim() : '';
+    if (!question || question.length > MAX_QUESTION) return json(res, 400, { error: `expected {question} of 1 to ${MAX_QUESTION} characters` });
+    if (!summarizer?.ask) return json(res, 503, { error: 'AI is off: enable summaries in ~/.livemap/config.json' });
+    if (!isReady) return json(res, 503, { error: 'still indexing' });
+    const focus = typeof v?.path === 'string' ? safeRelPath(v.path) ?? undefined : undefined;
+    const context = buildAskContext({
+      name, files: model.all(), usedBy, domain, changes, question, ...(focus ? { focus } : {}),
+      content: p => { const r = readText(p); return 'content' in r ? r.content : null; },
+    });
+    const r = await summarizer.ask(question, context);
+    if (closed) return;
+    if ('error' in r) return json(res, 502, { error: r.error });
+    return json(res, 200, { answer: r.answer });
+  };
+
   const handle = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
     if (!hostAllowed(req)) return json(res, 403, { error: 'forbidden host' });
     let url: URL;
@@ -526,6 +555,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     // none in its URL); the page then sends the token it kept in sessionStorage with every request.
     if (isApiPath(url.pathname) && !authenticate(req, url, token)) return json(res, 401, { error: 'unauthorized' });
     if (await handleControlApi(req, res, reply, url.pathname, hub, originAllowed(req))) return;
+    if (url.pathname === '/api/ask') return handleAsk(req, res);
     if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method not allowed' }, { allow: 'GET, HEAD' });
 
     // Only a real navigation spends a launch code: a HEAD, link check or browser prefetch/prerender

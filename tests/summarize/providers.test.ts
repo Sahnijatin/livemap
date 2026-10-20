@@ -27,7 +27,7 @@ describe('callProvider', () => {
     const { url, init } = call(f);
     expect(url).toBe('https://api.openai.com/v1/chat/completions');
     expect(init.headers).toMatchObject({ authorization: 'Bearer sk-oa' });
-    expect(JSON.parse(init.body as string)).toEqual({ model: 'gpt-6-luna', max_tokens: 50, messages: [{ role: 'system', content: 'SYS' }, { role: 'user', content: 'USR' }] });
+    expect(JSON.parse(init.body as string)).toEqual({ model: 'gpt-6-luna', max_completion_tokens: 50, messages: [{ role: 'system', content: 'SYS' }, { role: 'user', content: 'USR' }] });
   });
 
   it('ollama: url, stream false, body and parsing', async () => {
@@ -61,6 +61,19 @@ describe('callProvider', () => {
     const f = vi.fn(async () => { throw new TypeError('fetch failed'); });
     const err = await callProvider(anthropic, prompt, f as unknown as typeof fetch).catch((e) => e);
     expect(err).toMatchObject({ status: 0, retryable: true });
+  });
+
+  it('anthropic: skips a leading thinking block and joins the text blocks', async () => {
+    const f = mk(ok({ content: [{ type: 'thinking', thinking: 'hmm' }, { type: 'text', text: 'a' }, { type: 'text', text: 'b' }], usage: {} }));
+    expect((await callProvider(anthropic, prompt, f as unknown as typeof fetch)).text).toBe('ab');
+  });
+
+  it('an empty reply is a non-retryable error that names it, not a silent null', async () => {
+    for (const [cfg, body] of [[anthropic, { content: [{ type: 'text', text: '  ' }] }], [openai, { choices: [{ message: { content: '' } }] }]] as const) {
+      const err = await callProvider(cfg, prompt, mk(ok(body)) as unknown as typeof fetch).catch((e) => e);
+      expect(err).toBeInstanceOf(ProviderError);
+      expect(err).toMatchObject({ retryable: false, message: 'empty response from the model' });
+    }
   });
 
   it('an unparseable body is a non-retryable error', async () => {

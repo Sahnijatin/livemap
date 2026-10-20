@@ -261,10 +261,10 @@ describe('store tab', () => {
     expect(loadTab()).toBe('activity');
   });
 
-  it('accepts and persists the map tab; tabs are ordered activity, map, schema, api, stack', () => {
+  it('accepts and persists the map tab; tabs are ordered activity, map, schema, api, stack, ask', () => {
     const mem = new Map<string, string>();
     vi.stubGlobal('localStorage', { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v) });
-    expect(CENTER_TABS).toEqual(['activity', 'map', 'schema', 'api', 'stack']);
+    expect(CENTER_TABS).toEqual(['activity', 'map', 'schema', 'api', 'stack', 'ask']);
     useStore.getState().setTab('map');
     expect(useStore.getState().tab).toBe('map');
     expect(mem.get('livemap-tab')).toBe('map');

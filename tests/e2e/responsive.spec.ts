@@ -407,14 +407,16 @@ for (const font of ['default', 'wide'] as const) test(`the center tabs and Map t
   await centerHeadFits(page);
 });
 
-test('with the default panel widths every center tab keeps its label, from 1080 px up', async ({ page }) => {
-  for (const width of [1080, 1100, 1200, 1280]) {
+// From 1080 to 1199 px the six tabs need more than the 418 px head: labels shorten with an ellipsis (never clipped).
+test('with the default panel widths every center tab keeps its label, from 1200 px up', async ({ page }) => {
+  for (const width of [1200, 1280]) {
     await page.setViewportSize({ width, height: 800 });
     await open(page);
     for (const t of ['activity', 'map']) {
       await showTab(page, t);
       await centerHeadFits(page);
-      const shown = await page.locator('.tabs [role=tab] .tl').evaluateAll(els => els.map(el => (el as HTMLElement).offsetWidth > 0 && el.scrollWidth <= (el as HTMLElement).offsetWidth + 1));
+      // Ask, the sixth tab, may show its icon only in a tight head; the other five keep their whole labels.
+      const shown = await page.locator('.tabs [role=tab]:not([data-tab="ask"]) .tl').evaluateAll(els => els.map(el => (el as HTMLElement).offsetWidth > 0 && el.scrollWidth <= (el as HTMLElement).offsetWidth + 1));
       expect(shown, `${width} px, ${t}`).toEqual([true, true, true, true, true]);
     }
   }
