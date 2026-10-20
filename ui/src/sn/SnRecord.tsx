@@ -23,7 +23,6 @@ function Expandable({ text }: { text: string }) {
   );
 }
 
-/** The confidence level as a badge, its reason (or what the level means) on hover. */
 /**
  * The confidence level as a button: hover shows the reason (or what the level means), and a click or Enter shows it
  * under the badge, where the badge's `aria-describedby` points, so keyboards and screen readers reach it too.
