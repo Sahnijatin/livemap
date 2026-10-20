@@ -82,7 +82,7 @@ interface Out { files: Map<string, string>; records: Record<string, ManifestEntr
 
 /** Builds the mirror's files (scope-relative POSIX paths) and its manifest. */
 export function layoutMirror(input: MirrorInput): { files: Map<string, string>; manifest: Manifest } {
-  const ns = safeSegment(input.scope.scope);
+  const ns = safeSegment(input.scope.scope, 'scope');
   const out: Out = { files: new Map(), records: {} };
   const inv = new Map(input.inventory.map(r => [r.sys_id, r]));
   /** The full record, or the inventory row standing in for it. */
@@ -118,7 +118,7 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
   const widgetById = new Map<string, string>();
   for (const row of rows('sp_widget')) {
     const { r, partial } = rec(row);
-    const dir = `widget/${recordSegment(nameOf(r, 'id'), row.sys_id)}`;
+    const dir = `widget/${recordSegment(nameOf(r, 'id'), row.sys_id, '', 'id')}`;
     const m = put(`${dir}/meta.json`, meta(r, partial));
     if (!partial) {
       if (r.template) put(`${dir}/template.html`, r.template.endsWith('\n') ? r.template : `${r.template}\n`);
@@ -156,7 +156,7 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
   const instancesOf = children('sp_instance', 'sp_column');
   for (const row of rows('sp_page')) {
     const { r, partial } = rec(row);
-    const dir = `page/${recordSegment(nameOf(r, 'id'), row.sys_id)}`;
+    const dir = `page/${recordSegment(nameOf(r, 'id'), row.sys_id, '', 'id')}`;
     const m = put(`${dir}/meta.json`, meta(r, partial, { portals }));
     pagePath.set(row.sys_id, m);
     note(row, m, partial);
@@ -200,7 +200,7 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
   // Portals.
   for (const row of rows('sp_portal')) {
     const { r, partial } = rec(row);
-    const dir = `portal/${recordSegment(nameOf(r, 'url_suffix'), row.sys_id)}`;
+    const dir = `portal/${recordSegment(nameOf(r, 'url_suffix'), row.sys_id, '', 'url_suffix')}`;
     const home = r.homepage && pagePath.has(r.homepage) ? pagePath.get(r.homepage) : undefined;
     const m = put(`${dir}/meta.json`, meta(r, partial, home ? { homepage_path: home } : {}));
     put(`${dir}/theme.json`, json({ theme: r.theme || null }));
@@ -239,7 +239,7 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
         mandatory: truthy(r.mandatory) || undefined, read_only: truthy(r.read_only) || undefined,
         display: truthy(r.display) || undefined, active: r.active ? truthy(r.active) : undefined,
       }));
-    const p = put(`schema/${safeSegment(name)}.sntable.json`, json({
+    const p = put(`schema/${safeSegment(name, 'table')}.sntable.json`, json({
       table: name, label: o.label?.trim() || undefined, sys_id: t.objRow?.sys_id, extends: superName || undefined,
       defined_here: !!t.obj, partial: t.objRow ? (rec(t.objRow).partial || undefined) : undefined, columns,
       collection: t.columns.filter(c => !c.r.element).map(c => c.row.sys_id),
@@ -252,7 +252,7 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
   for (const row of rows('sys_script')) {
     const { r, partial } = rec(row);
     const actions = (['insert', 'update', 'delete', 'query'] as const).filter(a => truthy(r[`action_${a}`]));
-    const p = put(`business_rule/${safeSegment(r.collection || 'unknown')}/${recordSegment(nameOf(r), row.sys_id, '.js')}`, scriptFile({
+    const p = put(`business_rule/${safeSegment(r.collection || 'unknown', 'collection')}/${recordSegment(nameOf(r), row.sys_id, '.js')}`, scriptFile({
       class: 'sys_script', sys_id: row.sys_id, name: nameOf(r), table: r.collection, when: r.when, order: num(r.order),
       condition: r.condition || r.filter_condition, actions: actions.length ? actions : undefined, active: bool(r.active), advanced: bool(r.advanced), partial: partial || undefined,
     }, r.script));
@@ -261,7 +261,7 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
   }
   for (const row of rows('sys_script_client')) {
     const { r, partial } = rec(row);
-    const p = put(`client_script/${safeSegment(r.table || 'unknown')}/${recordSegment(nameOf(r), row.sys_id, '.js')}`, scriptFile({
+    const p = put(`client_script/${safeSegment(r.table || 'unknown', 'table')}/${recordSegment(nameOf(r), row.sys_id, '.js')}`, scriptFile({
       class: 'sys_script_client', sys_id: row.sys_id, name: nameOf(r), table: r.table, when: r.type, field: r.field_name || undefined,
       order: num(r.order), condition: r.condition, active: bool(r.active), ui_type: r.ui_type, partial: partial || undefined,
     }, r.script));
@@ -270,7 +270,7 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
   }
   for (const row of rows('sys_script_include')) {
     const { r, partial } = rec(row);
-    const p = put(`script_include/${recordSegment(nameOf(r, 'api_name'), row.sys_id, '.js')}`, scriptFile({
+    const p = put(`script_include/${recordSegment(nameOf(r, 'api_name'), row.sys_id, '.js', 'api_name')}`, scriptFile({
       class: 'sys_script_include', sys_id: row.sys_id, name: r.name || row.sys_name, api_name: r.api_name,
       client_callable: bool(r.client_callable), access: r.access, active: bool(r.active), partial: partial || undefined,
     }, r.script));
@@ -279,7 +279,7 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
   }
   for (const row of rows('sys_ui_action')) {
     const { r, partial } = rec(row);
-    const p = put(`ui_action/${safeSegment(r.table || 'global')}/${recordSegment(nameOf(r), row.sys_id, '.js')}`, scriptFile({
+    const p = put(`ui_action/${safeSegment(r.table || 'global', 'table')}/${recordSegment(nameOf(r), row.sys_id, '.js')}`, scriptFile({
       class: 'sys_ui_action', sys_id: row.sys_id, name: nameOf(r), table: r.table, action_name: r.action_name, order: num(r.order),
       condition: r.condition, client: bool(r.client), onclick: r.onclick, form_button: bool(r.form_button), list_button: bool(r.list_button),
       active: bool(r.active), partial: partial || undefined,
@@ -289,7 +289,7 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
   }
   for (const row of rows('sys_ui_policy')) {
     const { r, partial } = rec(row);
-    const p = put(`ui_policy/${safeSegment(r.table || 'unknown')}/${recordSegment(nameOf(r, 'short_description'), row.sys_id, '.json')}`, meta(r, partial));
+    const p = put(`ui_policy/${safeSegment(r.table || 'unknown', 'table')}/${recordSegment(nameOf(r, 'short_description'), row.sys_id, '.json', 'short_description')}`, meta(r, partial));
     note(row, p, partial);
     mark(row.sys_id);
   }
@@ -299,7 +299,7 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
   for (const row of rows('sys_security_acl')) {
     const { r, partial } = rec(row);
     const roles = (rolesOf.get(row.sys_id) ?? []).map(x => rec(x).r.sys_user_role).filter(Boolean);
-    const p = put(`acl/${safeSegment(r.operation || 'unknown')}/${recordSegment(nameOf(r), row.sys_id, '.json')}`, meta(r, partial, { script: r.script || undefined, roles }));
+    const p = put(`acl/${safeSegment(r.operation || 'unknown', 'operation')}/${recordSegment(nameOf(r), row.sys_id, '.json')}`, meta(r, partial, { script: r.script || undefined, roles }));
     note(row, p, partial);
     mark(row.sys_id);
     for (const x of rolesOf.get(row.sys_id) ?? []) { note(x, p, rec(x).partial); mark(x.sys_id); }
@@ -316,13 +316,13 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
   for (const row of rows('sys_ws_definition')) {
     const { r, partial } = rec(row);
     apiName.set(row.sys_id, nameOf(r, 'service_id'));
-    const p = put(`rest/${recordSegment(nameOf(r, 'service_id'), row.sys_id)}/meta.json`, meta(r, partial));
+    const p = put(`rest/${recordSegment(nameOf(r, 'service_id'), row.sys_id, '', 'service_id')}/meta.json`, meta(r, partial));
     note(row, p, partial);
     mark(row.sys_id);
   }
   for (const row of rows('sys_ws_operation')) {
     const { r, partial } = rec(row);
-    const api = safeSegment(apiName.get(r.web_service_definition) ?? 'unknown');
+    const api = safeSegment(apiName.get(r.web_service_definition) ?? 'unknown', 'web_service_definition');
     const seg = `${r.http_method || 'GET'}_${(r.relative_path || '').replace(/^\/+/, '') || 'root'}`;
     const p = put(`rest/${api}/${recordSegment(seg, row.sys_id, '.js')}`, scriptFile({
       class: 'sys_ws_operation', sys_id: row.sys_id, name: nameOf(r), method: r.http_method, path: r.operation_uri || r.relative_path,
@@ -360,9 +360,9 @@ export function layoutMirror(input: MirrorInput): { files: Map<string, string>; 
   // Everything else, and credential classes by name only.
   for (const row of input.inventory) {
     if (done.has(row.sys_id)) continue;
-    const cls = safeSegment(row.sys_class_name);
+    const cls = safeSegment(row.sys_class_name, 'sys_class_name');
     if (WITHHELD_CLASS.test(row.sys_class_name)) {
-      const p = put(`other/${cls}/${recordSegment(row.sys_name, row.sys_id, '.json')}`, json({ sys_id: row.sys_id, sys_class_name: row.sys_class_name, sys_name: row.sys_name, withheld: true }));
+      const p = put(`other/${cls}/${recordSegment(row.sys_name, row.sys_id, '.json', 'sys_name')}`, json({ sys_id: row.sys_id, sys_class_name: row.sys_class_name, sys_name: row.sys_name, withheld: true }));
       note(row, p, false, { withheld: true });
     } else {
       const { r, partial } = rec(row);

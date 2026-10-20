@@ -13,6 +13,8 @@ let watcher: Watcher | null;
 let changes: { change: ChangeSummary; touched: FileModel[]; t: number }[];
 let errors: Error[];
 
+/** Slower CI runners scale wall-clock budgets (LIVEMAP_TIME_SCALE, set by CI on macOS and Windows). */
+const TIME_SCALE = Number(process.env.LIVEMAP_TIME_SCALE) || 1;
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 async function waitFor(pred: () => boolean, ms = 3000): Promise<void> {
   const end = Date.now() + ms;
@@ -225,7 +227,8 @@ describe('Watcher', () => {
   it('re-resolves imports once per burst, not once per file, and reports the result', async () => {
     const N = 40;
     put('src/app.ts', Array.from({ length: N }, (_, i) => `import { n${i} } from './n${i}';`).join('\n') + '\n');
-    const w = await startWatcher();
+    // On a slow runner the 40 writes' events spread past the default 150 ms debounce and arrive as several bursts.
+    const w = await startWatcher({ debounceMs: 150 * TIME_SCALE });
     const touched: FileModel[] = [];
     w.on('touched', (files: FileModel[]) => touched.push(...files));
     const relink = vi.spyOn(model as unknown as { relink: (skip: string[]) => FileModel[] }, 'relink');
