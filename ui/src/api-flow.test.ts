@@ -3,7 +3,7 @@ import type { ApiRoute, DomainIndex } from '@shared/domain.js';
 import type { UsedByEntry } from '@shared/protocol.js';
 import type { FileModel } from '@shared/types.js';
 import { emptyDomain, file, sym } from './fixtures';
-import { buildFlows, flowGraph } from './api-flow';
+import { buildFlows, flowGraph, groupFlows, midTrunc, routeGroup } from './api-flow';
 
 const IDX = 'server/index.ts';
 const ORD = 'server/routes/orders.ts';
@@ -111,5 +111,51 @@ describe('buildFlows', () => {
     const { domain, usedBy } = project();
     const flows = buildFlows(domain, {}, usedBy);
     expect(flows[0]).toMatchObject({ handler: { name: 'getOrders', file: ORD }, services: [], tables: [] });
+  });
+});
+
+describe('routeGroup', () => {
+  it('groups by the first segment after api and version prefixes, stopping at params', () => {
+    expect(routeGroup('/api/users/:id')).toEqual(['/api/users', '/api']);
+    expect(routeGroup('/api/v2/orders')).toEqual(['/api/v2/orders', '/api/v2']);
+    expect(routeGroup('/v1/ml/predict')).toEqual(['/v1/ml', '/v1']);
+    expect(routeGroup('/health')).toEqual(['/health', '/']);
+    expect(routeGroup('/api/:tenant/x')).toEqual(['/api', '/api']);
+    expect(routeGroup('/')).toEqual(['/', '/']);
+  });
+});
+
+describe('groupFlows', () => {
+  const flow = (fullPath: string) => ({ route: { fullPath } as ApiRoute, handler: null, services: [], tables: [] });
+
+  it('keeps routes in order inside groups sorted by key, and folds single routes into the shorter prefix', () => {
+    const flows = ['/api/users', '/api/users-admin/x', '/api/users/:id', '/api/me', '/health', '/v1/ml/a', '/v1/ml/b'].map(flow);
+    const groups = groupFlows(flows);
+    expect(groups.map(g => [g.key, g.flows.map(f => f.route.fullPath)])).toEqual([
+      ['/', ['/health']],
+      ['/api', ['/api/users-admin/x', '/api/me']],
+      ['/api/users', ['/api/users', '/api/users/:id']],
+      ['/v1/ml', ['/v1/ml/a', '/v1/ml/b']],
+    ]);
+  });
+});
+
+describe('midTrunc', () => {
+  it('keeps short paths and cuts long ones in the middle, keeping the file name', () => {
+    expect(midTrunc('src/routes/users.ts', 30)).toBe('src/routes/users.ts');
+    const s = midTrunc('apps/api/src/modules/billing/routes/invoices.ts', 28);
+    expect(s).toHaveLength(28);
+    expect(s.startsWith('apps/')).toBe(true);
+    expect(s.endsWith('routes/invoices.ts')).toBe(true);
+    expect(s).toContain('…');
+  });
+  it('never returns more than n characters, even for tiny n', () => {
+    for (let n = 1; n <= 6; n++) {
+      const s = midTrunc('server/routes/users.ts', n);
+      expect(s.length).toBeLessThanOrEqual(n);
+      expect(s.endsWith('…')).toBe(true);
+    }
+    expect(midTrunc('server/routes/users.ts', 1)).toBe('…');
+    expect(midTrunc('server/routes/users.ts', 4)).toBe('ser…');
   });
 });

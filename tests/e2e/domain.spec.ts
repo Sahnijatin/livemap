@@ -143,6 +143,21 @@ test('domain views on a polyglot repo: stack, schema, api, live edits', async ({
   await expect.poll(() => page.locator('.ap-edges path.flow').count()).toBeGreaterThanOrEqual(3);
   await page.mouse.move(0, 0);
   await expect(getOrders).not.toHaveClass(/\bon\b/);
+  // Lines only for a traced route: none at rest, and a picked route keeps its flow drawn until Esc.
+  await expect(page.locator('.ap-edges path')).toHaveCount(0);
+  await getOrders.locator('.ap-pick').click();
+  await page.mouse.move(0, 0);
+  await expect(getOrders).toHaveClass(/\bpicked\b/);
+  await expect(table).toHaveClass(/\bon\b/);
+  await expect.poll(() => page.locator('.ap-edges path.flow').count()).toBeGreaterThanOrEqual(3);
+  await page.keyboard.press('Escape');
+  await expect(getOrders).not.toHaveClass(/\bpicked\b/);
+  await expect(page.locator('.ap-edges path')).toHaveCount(0);
+  // The route's file opens in the inspector.
+  await getOrders.locator('.ap-file').click();
+  await expect(page.getByRole('complementary', { name: 'Inspector' }).getByRole('heading', { name: 'orders.ts' })).toBeVisible();
+  await expect(getOrders).not.toHaveClass(/\bpicked\b/);
+  await expect(page.locator('.ap-gh').filter({ hasText: '/api/orders' })).toHaveAttribute('aria-expanded', 'true');
   const pages = page.locator('.ap-sec').filter({ has: page.getByRole('heading', { name: /^Pages · / }) });
   await expect(pages.locator('.pg-p')).toHaveText(['/', '/orders']);
 
@@ -202,7 +217,14 @@ test('domain views on a polyglot repo: stack, schema, api, live edits', async ({
         await tab(page, name).click();
         await expect(tab(page, name)).toHaveAttribute('aria-selected', 'true');
         if (name === 'Schema') await expect(ordersNode(page)).toBeVisible();
-        if (name === 'API') await expect(page.locator('.ap-route').first()).toBeVisible();
+        if (name === 'API') {
+          await expect(page.locator('.ap-route').first()).toBeVisible();
+          // The hint sits in the head and never overlaps a route row.
+          const hint = (await page.locator('.ap-hint').boundingBox())!;
+          for (const b of await page.locator('.ap-route').evaluateAll(els => els.map(e => e.getBoundingClientRect().toJSON()))) {
+            expect(hint.y + hint.height <= b.y || b.y + b.height <= hint.y || hint.x + hint.width <= b.x || b.x + b.width <= hint.x).toBe(true);
+          }
+        }
         if (name === 'Stack') await expect(stack).toBeVisible();
         await page.screenshot({ path: `test-results/domain-${name.toLowerCase()}-${width}-${scheme}.png`, animations: 'disabled' });
       }
