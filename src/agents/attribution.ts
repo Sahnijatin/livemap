@@ -84,7 +84,8 @@ export class Attributor extends EventEmitter {
   }
 
   private candidate(e: AgentEvent): boolean {
-    if (e.type === 'commit') return !!e.paths?.length;
+    // A merge's files come from the commits it brought in, which take the credit.
+    if (e.type === 'commit') return !e.merge && !!e.paths?.length;
     return isWriteTool(e) && !(e.tool?.id && this.hub.isBlocked(e.sessionId, e.tool.id));
   }
 

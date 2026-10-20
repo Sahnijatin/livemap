@@ -39,6 +39,13 @@ export function chipSessions(sessions: Record<string, AgentSession>, now: number
     .sort((a, b) => (a.status === b.status ? b.lastAt - a.lastAt : a.status === 'working' ? -1 : 1));
 }
 
+/** A merge commit: as the git watcher flagged it, or (recorded before the flag) known by git's default message. */
+export const isMerge = (e: AgentEvent): boolean =>
+  e.merge ?? /^Merge (pull request|branch|remote-tracking branch|tag|commit) /.test(e.text ?? '');
+
+/** A commit's first line. */
+export const commitSubject = (e: AgentEvent): string => (e.text ?? '').split('\n')[0];
+
 export type StepKind = 'tool' | 'write' | 'message' | 'prompt' | 'thinking' | 'idle' | 'none';
 export interface Step { kind: StepKind; line: string }
 

@@ -1,13 +1,15 @@
+import { useMemo } from 'react';
 import clsx from 'clsx';
+import type { AgentEvent } from '@shared/types.js';
 import { useStore } from '../store';
-import { activeSession, agentName, latestMessage } from '../agents';
+import { activeSession, agentName, ago, commitSubject, isMerge, latestMessage } from '../agents';
 import { layerOf } from '../layers';
 import { baseName, isRecent, useNow } from '../recent';
 import { removeFlag } from '../api';
 import { READ_ONLY_TIP } from '../history';
 import { COUNTER_LABELS, CountUp, liveFlags, useLiveState } from './Activity';
 import { FlagBox } from './FlagBox';
-import { FlagIcon, LayerTile } from './icons';
+import { FlagIcon, GitIcon, LayerTile } from './icons';
 
 function YourFlags() {
   const flags = useStore(s => s.control.flags);
@@ -37,6 +39,30 @@ function YourFlags() {
             )}
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/** The latest commits LiveMap saw (merges left out), so work done through git shows even without an agent. */
+function RecentCommits({ events, now }: { events: AgentEvent[]; now: number }) {
+  // By commit time: a pull brings in older commits after newer local ones.
+  const commits = useMemo(() => events.filter(e => e.type === 'commit' && !isMerge(e)).sort((a, b) => b.at - a.at).slice(0, 5), [events]);
+  if (!commits.length) return null;
+  return (
+    <div className="sec">
+      <h4>Recent commits</h4>
+      <div className="gitlist">
+        {commits.map(c => {
+          const n = c.paths?.length;
+          return (
+            <div className="gitrow fi" key={c.id} title={c.text}>
+              <span className="gic"><GitIcon /></span>
+              <b>{commitSubject(c) || 'Commit'}</b>
+              <small>{[c.sessionId, n !== undefined && `${n} file${n === 1 ? '' : 's'}`, ago(c.at, now)].filter(Boolean).join(' · ')}</small>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -78,6 +104,7 @@ export function LiveSession() {
       <div className="mstats">
         {COUNTER_LABELS.map(([k, l]) => <div className="mstat" key={k}><b><CountUp value={counts[k]} /></b><span>{l.charAt(0).toUpperCase() + l.slice(1)}</span></div>)}
       </div>
+      <RecentCommits events={events} now={now} />
       <div className="sec">
         <h4>Recently changed</h4>
         <div className="recent">
