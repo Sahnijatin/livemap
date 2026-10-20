@@ -68,10 +68,10 @@ Mirrors a ServiceNow application scope to files, then runs LiveMap on them. It r
 | `--instance NAME` | the instance nexus is set to | Sent to nexus as the `X-SN-Instance` header. |
 | `--nexus URL` | `http://127.0.0.1:3006/mcp` | nexus's MCP endpoint. LiveMap tries Streamable HTTP first, then SSE. |
 | `--skyforge-log FILE\|none` | `~/.skyforge/skyforge-mcp.log` | SkyForge's MCP log, used to attribute past changes to SkyForge tool calls. `none` skips it. |
-| `--log-window SECONDS` | `60` | How far apart a log line and a change can be and still match (1 to 3600). |
+| `--log-window SECONDS` | `60` | How long after a tool call ends a change can come and still match it (1 to 3600). A change may come at most 2 seconds before the call starts. |
 | `--port N` | `4317` | As for `livemap`. |
 | `--no-open` | the browser opens | As for `livemap`. |
-| `--no-history` | history is recorded | As for `livemap`. |
+| `--no-history` | history is imported and recorded | Skips the history import, and records nothing, as for `livemap`. |
 | `--mirror-only` | off | Writes the mirror and exits without starting the UI. |
 
 Before it pulls, LiveMap prints the instance, the nexus transport and the scope it resolved (name, namespace and sys_id). It then reads the scope's `sys_metadata` inventory and the full records of every class, 200 at a time, and prints how many records it pulled and how long it took.
@@ -86,17 +86,28 @@ A second `livemap sn` on the same folder updates the mirror in place: unchanged 
 
 #### History import
 
-After the mirror, LiveMap reads the scope's change history and writes it to `.livemap/sn/<scope>.history.json`, one dated event per saved version, oldest first, with the ServiceNow user who made it. It reads `sys_update_version`, and for records with no versions it falls back to `sys_update_xml`. Only times, names and authors are kept: update payloads are parsed for those and dropped, system property payloads are never read, and credential records are skipped.
+After the mirror, LiveMap reads the scope's change history and writes it to `.livemap/sn/<scope>.history.json`, one dated event per save, oldest first, with the ServiceNow user who made it.
 
-Each event is then matched to SkyForge's log (`--skyforge-log`):
+- **Sources.** It reads `sys_update_version` by the scope's application, and when the instance has no such rows, by every update name the scope uses. Records with no versions fall back to their `sys_update_xml` rows.
+- **Times.** An update_xml row is dated by the save time in its payload, since the row itself can be written again later. When it was written well after that save (an update set capture, for example), the timeline also gets a `captured` event at the row's time. The same save written twice is one event.
+- **What is kept.** Only times, names and authors. Payloads are parsed for those and dropped. Payloads of system properties and of classes with password fields are never read, and credential records are skipped.
+- **Time limit.** The import stops after 90 seconds with a warning and keeps what it read. A failure in the import is a warning too: the mirror and the UI go on without history.
+
+Each save is then matched to SkyForge's log (`--skyforge-log`):
 
 | Confidence | When |
 |---|---|
-| `log` | One tool call within the window names the record: its sys_id for an update or delete, or its table and name for a create. |
-| `likely` | Several calls name it, or calls only share its table and time. All candidates are kept. A table and time match is never `log`. |
+| `log` | One tool call names the record: its sys_id for an update or delete, or its table and name for a create. |
+| `likely` | Several calls name it, the one call that names it ran on an unknown instance, or calls only share its table and time. All candidates are kept. A table and time match is never `log`. |
 | `history` | No call matches. The event keeps its ServiceNow author. |
 
-The log has no session id and cuts arguments at about 100 characters, so names that SkyForge redacts (business rules, script includes) can only match on table and time. The command prints how many versions it imported, how many log lines it read, and how many events matched, were ambiguous or matched nothing.
+- **Window.** A call can match a save that comes up to 2 seconds before it starts and up to `--log-window` seconds after it ends.
+- **No other records.** A call that names another sys_id never matches, and a call matched at `log` is not a candidate for other saves.
+- **Instances.** The log covers every instance SkyForge connects to. Calls made while it was connected to another instance are left out. Calls before any `Connected to` line stay `likely`.
+- **Scripts.** Background scripts and scheduled script jobs can write any table, so they only ever make a save `likely`.
+- **Limits.** The log has no session id and cuts argument values at about 100 characters. A `✅` line means the call returned, not that the write succeeded.
+
+The command prints how many versions it imported, how many log lines it read, how many saves matched, were ambiguous or matched nothing, and any SkyForge tools it does not know (they are read as reads).
 
 ### `livemap mcp-proxy`
 

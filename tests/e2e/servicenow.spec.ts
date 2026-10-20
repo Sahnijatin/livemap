@@ -40,9 +40,10 @@ test.beforeAll(async () => {
   tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-sn-e2e-')));
   home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'livemap-sn-home-')));
   nexus = await startMockNexus();
-  // The fixture's SkyForge log lines, so the run never reads a real ~/.skyforge log.
+  // The fixture's SkyForge log lines after a connect line, so the run never reads a real ~/.skyforge log.
   const log = path.join(home, 'skyforge-mcp.log');
-  fs.writeFileSync(log, `${loadFixture().mcpLogExcerpt.lines.join('\n')}\n`);
+  const connect = '[2026-05-29T00:00:00.000Z] [INFO] [Auth] ✅ Connected to inmorphisdemo3.service-now.com';
+  fs.writeFileSync(log, `${[connect, ...loadFixture().mcpLogExcerpt.lines].join('\n')}\n`);
   url = await startSn(tmp, nexus.url, log);
 });
 
@@ -74,9 +75,10 @@ test('livemap sn: mirrors the BharatBank scope and shows it in the Map and Schem
   expect(out).toContain('Instance: inmorphisdemo3 (brazil patch1)');
   expect(out).toMatch(/Scope: Credit Card Offering \(x_snc_cc_offering, sys_id 5f0+1\)/);
   expect(out).toMatch(/Pulled 1,683 records in \d+ classes/);
-  expect(out).toMatch(/Versions imported: 183 \(0 from sys_update_version, 183 from sys_update_xml\) for 111 records/);
-  expect(out).toMatch(/SkyForge log: 400 lines parsed \(\d+ write calls\)/);
-  expect(out).toContain('Attribution: 30 matched, 12 ambiguous (12 on table and time only), 141 unmatched (16% matched; window 60 s).');
+  expect(out).toMatch(/Versions imported: 112 \(0 from sys_update_version, 112 from sys_update_xml, plus 167 recaptures\) for 111 records/);
+  expect(out).toMatch(/SkyForge log: 401 lines parsed \(146 write calls\) from /);
+  expect(out).toContain('Attribution: 18 matched, 3 ambiguous (3 on table and time only, 0 on an unknown instance), 91 unmatched (16% matched; window 60 s).');
+  expect(out).not.toContain('warning: history');
   expect(out).toContain('LiveMap is watching x_snc_cc_offering on inmorphisdemo3');
   await page.goto(url);
   await expect(page.getByText('x_snc_cc_offering on inmorphisdemo3').first()).toBeVisible();
