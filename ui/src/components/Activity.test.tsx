@@ -250,6 +250,33 @@ describe('Activity', () => {
     expect(row.querySelector('.fin')?.getAttribute('aria-label')).toBe('Finished');
   });
 
+  it('folds a merge commit into one compact line, and keeps real commits as cards', () => {
+    mountWith([
+      event({ id: 3021, at: T, type: 'commit', agent: 'git', sessionId: 'Ada', text: 'Add login form\n\nWith tests.', paths: ['a.ts'] }),
+      event({ id: 3022, at: T + 10, type: 'commit', agent: 'git', sessionId: 'Ada', text: 'Merge pull request #12 from acme/login\n\nAdd login form', merge: true, paths: ['a.ts'] }),
+      // Recorded before merges were flagged: known by its message.
+      event({ id: 3023, at: T + 20, type: 'commit', agent: 'git', sessionId: 'Ada', text: "Merge branch 'main' into feat/x" }),
+    ]);
+    const rows = [...host.querySelectorAll('.f-git')];
+    expect(rows).toHaveLength(3);
+    expect(rows[0].classList.contains('merge')).toBe(false);
+    expect(rows[0].querySelector('p')?.textContent).toBe('With tests.');
+    for (const m of rows.slice(1)) {
+      expect(m.classList.contains('merge')).toBe(true);
+      expect(m.querySelector('p')).toBeNull();
+    }
+    expect(rows[1].textContent).toContain('Merge pull request #12 from acme/login');
+  });
+
+  it('keeps a merge by another author under the commits it brought in, without a header of its own', () => {
+    mountWith([
+      event({ id: 3031, at: T, type: 'commit', agent: 'git', sessionId: 'Ben', text: 'Add login form' }),
+      event({ id: 3032, at: T + 10, type: 'commit', agent: 'git', sessionId: 'Ada', text: 'Merge pull request #12 from acme/login', merge: true }),
+    ]);
+    expect(host.querySelectorAll('.turn')).toHaveLength(1);
+    expect(host.querySelector('.turn-h')?.textContent).toContain('Ben');
+  });
+
   it('I3: an unhooked session is never shown paused', () => {
     mountWith([], [session({ id: 'u', hooks: false, status: 'working' })], true);
     expect(host.querySelector('.hero')?.className).not.toContain('paused');

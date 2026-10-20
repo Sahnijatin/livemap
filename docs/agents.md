@@ -42,7 +42,7 @@ Claude Code sessions show up even without hooks: LiveMap reads the transcripts o
 
 ## Cloud builders: git and `--pull`
 
-LiveMap checks the project's git `HEAD` every 3 seconds. Each new commit, from any agent or person, appears in the Activity feed with its message, its author and the files it changed.
+LiveMap checks the project's git `HEAD` every 3 seconds. Each new commit, from any agent or person, appears in the Activity feed with its message, its author and the files it changed. A merge commit shows as one quiet line under the commits it brought in. The inspector's Live session panel lists the five latest commits (merges left out), so work that arrives through git shows there even with no agent connected.
 
 Builders that work in the cloud and push to a remote (for example Emergent or Lovable) never touch your local files. Start LiveMap with `--pull` to bring their work in:
 

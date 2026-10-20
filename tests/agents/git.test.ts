@@ -172,6 +172,21 @@ describe('GitWatcher', () => {
     expect(got.find((e) => e.text?.startsWith('Merge'))!.paths).toEqual(['feature_file.txt']);
   });
 
+  it('marks merge commits (by parent count, whatever their message) and only them', async () => {
+    const d = initRepo();
+    commit(d, 'seed');
+    git(d, 'checkout', '-q', '-b', 'feat');
+    commit(d, 'feature file');
+    git(d, 'checkout', '-q', 'main');
+    commit(d, 'main file');
+    const { w, got } = watch(d);
+    await w.start();
+    git(d, 'merge', '-q', '--no-ff', '-m', 'Bring in the feature', 'feat');
+    await until(() => got.some((e) => e.text === 'Bring in the feature'));
+    expect(got.find((e) => e.text === 'Bring in the feature')!.merge).toBe(true);
+    expect(got.find((e) => e.text === 'feature file')!.merge).toBeUndefined();
+  });
+
   it('caps text at 2000 chars', async () => {
     const d = initRepo();
     commit(d, 'seed');

@@ -3,7 +3,7 @@ import clsx from 'clsx';
 import type { ApiRoute } from '@shared/domain.js';
 import type { AgentEvent, ChangeSummary, FileModel } from '@shared/types.js';
 import { useStore } from '../store';
-import { agentName } from '../agents';
+import { agentName, isMerge } from '../agents';
 import { changeFacts } from '../changes';
 import { layerOf } from '../layers';
 import { isNarrow } from '../media';
@@ -210,6 +210,8 @@ function Commit({ ev }: { ev: AgentEvent }) {
   const nl = text.indexOf('\n');
   const subject = nl < 0 ? text : text.slice(0, nl);
   const body = nl < 0 ? '' : text.slice(nl).trim();
+  // A merge only brings in work already shown: one quiet line.
+  if (isMerge(ev)) return <div className="fi f-git merge" title={text}><GitIcon /><span>{subject}</span></div>;
   return (
     <div className="fi f-git">
       <span className="gic"><GitIcon /></span>

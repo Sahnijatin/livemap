@@ -68,8 +68,11 @@ export interface AgentTool {
   id?: string; name: string; label: string; input?: unknown; output?: string; ok?: boolean; paths: string[];
   inner?: string; access?: ToolAccess; targets?: RecordTarget[];
 }
-/** `paths` and `seenAt` are set on git commit events: the root-relative files the commit changed and when LiveMap saw it. */
-export interface AgentEvent { id: number; agent: AgentKind; sessionId: string; at: number; type: AgentEventType; text?: string; tool?: AgentTool; status?: 'working' | 'idle'; subagent?: boolean; paths?: string[]; seenAt?: number }
+/**
+ * `paths` and `seenAt` are set on git commit events: the root-relative files the commit changed and when LiveMap saw it.
+ * `merge` marks a commit with more than one parent.
+ */
+export interface AgentEvent { id: number; agent: AgentKind; sessionId: string; at: number; type: AgentEventType; text?: string; tool?: AgentTool; status?: 'working' | 'idle'; subagent?: boolean; paths?: string[]; seenAt?: number; merge?: boolean }
 /** An event as emitted by a normalizer; the hub assigns `id`. */
 export type RawAgentEvent = Omit<AgentEvent, 'id'>;
 export interface AgentSession { id: string; agent: AgentKind; title: string; cwd: string; startedAt: number; lastAt: number; status: 'working' | 'idle'; transcriptPath?: string; hooks: boolean }

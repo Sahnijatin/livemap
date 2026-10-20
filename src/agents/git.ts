@@ -171,16 +171,16 @@ export class GitWatcher extends EventEmitter {
         } catch { /* not a descendant: re-baseline silently */ }
       }
       if (!range) { this.head = next; return; }
-      const out = await this.run(this.root, ['log', '--reverse', `--max-count=${MAX_COMMITS}`, '--no-show-signature', `--format=%H${FIELD}%ct${FIELD}%an${FIELD}%s${FIELD}%b${RECORD}`, range]);
+      const out = await this.run(this.root, ['log', '--reverse', `--max-count=${MAX_COMMITS}`, '--no-show-signature', `--format=%H${FIELD}%ct${FIELD}%an${FIELD}%P${FIELD}%s${FIELD}%b${RECORD}`, range]);
       const seenAt = Date.now();
       const events: RawAgentEvent[] = [];
       const pathsOf = await this.rangePaths(range);
       for (const rec of out.split(RECORD)) {
         if (!rec.trim()) continue;
-        const [sha, at, author, subject, body = ''] = rec.replace(/^\n/, '').split(FIELD);
+        const [sha, at, author, parents, subject, body = ''] = rec.replace(/^\n/, '').split(FIELD);
         const text = `${subject}\n\n${body}`.trim().slice(0, MAX_TEXT);
         const paths = pathsOf?.get(sha);
-        events.push({ agent: 'git', sessionId: author, at: Number(at) * 1000, seenAt, type: 'commit', text, ...(paths ? { paths } : {}) });
+        events.push({ agent: 'git', sessionId: author, at: Number(at) * 1000, seenAt, type: 'commit', text, ...(paths ? { paths } : {}), ...(parents.includes(' ') ? { merge: true } : {}) });
       }
       this.head = next;
       if (events.length && !this.stopped) this.emit('events', events);

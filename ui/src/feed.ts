@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentKind, ChangeSummary } from '@shared/types.js';
+import { isMerge } from './agents';
 
 /** One row of the Activity feed: an agent event (a tool start carries its end) or a file change. */
 export type FeedItem =
@@ -41,7 +42,9 @@ export function groupFeed(items: FeedItem[]): FeedGroup[] {
   const groups: FeedGroup[] = [];
   let cur: FeedGroup | null = null;
   for (const it of items) {
-    if (!cur || cur.sid !== it.sid) {
+    // A merge closes the run of commits it brought in, whoever merged it.
+    const merge = cur?.agent === 'git' && it.t === 'event' && it.agent === 'git' && isMerge(it.ev);
+    if (!cur || (cur.sid !== it.sid && !merge)) {
       cur = { key: `${it.sid ?? '-'}:${it.key}`, sid: it.sid, agent: it.agent, items: [] };
       groups.push(cur);
     }
