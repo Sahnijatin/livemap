@@ -6,6 +6,7 @@ import type { ApiRoute, DomainIndex, Table } from '@shared/domain.js';
 import type { UsedByEntry } from '@shared/protocol.js';
 import type { FileModel } from '@shared/types.js';
 import { useStore } from '../store';
+import { useSlideOvers } from '../panels';
 import { emptyDomain, file, sym } from '../fixtures';
 
 vi.mock('../highlight', () => ({ MAX_HIGHLIGHT_LINES: 5000, highlight: async () => null }));
@@ -88,6 +89,20 @@ const routeCard = (method: string, path: string) => cards('route').find(c => c.q
 const card = (kind: string, text: string) => cards(kind).find(c => c.querySelector('.ap-t')?.textContent === text)!;
 const enter = (el: Element) => act(() => { el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body })); });
 const leave = (el: Element) => act(() => { el.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body })); });
+const pick = (el: Element) => act(() => el.querySelector<HTMLButtonElement>('.ap-pick')!.click());
+/** Presses a key on an element; returns whether the view left the event alone (not default-prevented). */
+const key = (el: Element, k: string): boolean => {
+  let free = true;
+  act(() => { free = el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })); });
+  return free;
+};
+const filter = () => host.querySelector<HTMLInputElement>('input[aria-label="Filter routes"]')!;
+const type = (v: string) => act(() => {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(filter(), v);
+  filter().dispatchEvent(new Event('input', { bubbles: true }));
+});
+const edges = () => host.querySelectorAll('svg.ap-edges path.e').length;
+const groups = () => [...host.querySelectorAll<HTMLElement>('.ap-gh')];
 
 beforeEach(() => {
   useStore.getState().reset();
@@ -109,16 +124,192 @@ describe('ApiView', () => {
     const get = routeCard('GET', '/api/orders');
     expect(get).toBeTruthy();
     expect(get.querySelector('.mth')?.classList.contains('m-GET')).toBe(true);
-    expect(get.tagName).toBe('BUTTON');
+    expect(get.querySelector('.ap-pick')?.tagName).toBe('BUTTON');
   });
 
-  it('draws one card per handler, service file and table, with SVG connectors between them', () => {
+  it('draws one card per handler, service file and table, and no connectors until a route is traced', () => {
     mount();
-    expect(cards('handler').map(c => c.querySelector('.ap-t')?.textContent)).toEqual(['getOrders', 'createOrder', 'listUsers']);
+    expect(cards('handler').map(c => c.querySelector('.ap-t')?.textContent)).toEqual(['listUsers', 'getOrders', 'createOrder']);
     expect(cards('service').map(c => c.querySelector('.ap-t')?.textContent)).toEqual(['orderService.ts']);
     expect(cards('table').map(c => c.querySelector('.ap-t')?.textContent)).toEqual(['orders']);
-    // 3 route→handler, 2 handler→service, 1 service→table.
-    expect(host.querySelectorAll('svg.ap-edges path.e').length).toBe(6);
+    expect(edges()).toBe(0);
+    // route→handler, handler→service, service→table of that one route.
+    enter(routeCard('GET', '/api/orders'));
+    expect(edges()).toBe(3);
+    enter(card('service', 'orderService.ts'));
+    expect(edges()).toBe(0);
+  });
+
+  it('clicking a route picks it: its flow stays lit and drawn until another pick or Esc', () => {
+    mount();
+    const get = routeCard('GET', '/api/orders');
+    enter(get);
+    pick(get);
+    leave(get);
+    expect(get.classList.contains('picked')).toBe(true);
+    expect(card('table', 'orders').classList.contains('on')).toBe(true);
+    expect(edges()).toBe(3);
+    // Hover previews another route, then the pick comes back.
+    const users = routeCard('GET', '/api/users');
+    enter(users);
+    expect(card('handler', 'listUsers').classList.contains('on')).toBe(true);
+    expect(edges()).toBe(1);
+    leave(users);
+    expect(card('handler', 'getOrders').classList.contains('on')).toBe(true);
+    pick(users);
+    expect(get.classList.contains('picked')).toBe(false);
+    expect(users.classList.contains('picked')).toBe(true);
+    key(host.querySelector('.apiv')!, 'Escape');
+    expect(host.querySelectorAll('.ap.on, .ap.dim, .ap.picked').length).toBe(0);
+    expect(edges()).toBe(0);
+  });
+
+  it('un-picking clears the trace even while the row keeps focus or hover', () => {
+    mount();
+    // Keyboard: Tab to the row (focus), Enter (click), Esc.
+    const get = routeCard('GET', '/api/orders');
+    const btn = get.querySelector<HTMLButtonElement>('.ap-pick')!;
+    act(() => btn.focus());
+    act(() => btn.click());
+    expect(get.classList.contains('picked')).toBe(true);
+    expect(key(btn, 'Escape')).toBe(false);
+    expect(host.querySelectorAll('.ap.on, .ap.dim, .ap.picked').length).toBe(0);
+    expect(edges()).toBe(0);
+    act(() => btn.blur());
+    // Mouse: hover, click, click again.
+    enter(get);
+    pick(get);
+    pick(get);
+    expect(host.querySelectorAll('.ap.on, .ap.dim, .ap.picked').length).toBe(0);
+    expect(edges()).toBe(0);
+    // The next hover draws again.
+    leave(get);
+    enter(get);
+    expect(edges()).toBe(3);
+  });
+
+  it('a pick hidden by a collapse is dropped, and Esc then falls through', () => {
+    mount();
+    pick(routeCard('GET', '/api/orders'));
+    const g = groups().find(x => x.querySelector('.ap-gk')?.textContent === '/api/orders')!;
+    act(() => g.click());
+    act(() => g.click());
+    expect(routeCard('GET', '/api/orders').classList.contains('picked')).toBe(false);
+    expect(host.querySelectorAll('.ap.on, .ap.dim').length).toBe(0);
+    expect(key(host.querySelector('.apiv')!, 'Escape')).toBe(true);
+  });
+
+  it('a pick hidden by the search is dropped too', () => {
+    mount();
+    pick(routeCard('GET', '/api/users'));
+    type('orders');
+    type('');
+    expect(host.querySelectorAll('.ap.picked').length).toBe(0);
+  });
+
+  it('Esc anywhere in the view clears a search first, then the pick', () => {
+    mount();
+    const get = routeCard('GET', '/api/orders');
+    pick(get);
+    type('orders');
+    const btn = get.querySelector<HTMLButtonElement>('.ap-pick')!;
+    expect(key(btn, 'Escape')).toBe(false);
+    expect(filter().value).toBe('');
+    expect(get.classList.contains('picked')).toBe(true);
+    expect(key(btn, 'Escape')).toBe(false);
+    expect(get.classList.contains('picked')).toBe(false);
+    expect(key(btn, 'Escape')).toBe(true);
+  });
+
+  it('a focused row keeps focus when an earlier group empties', () => {
+    mount();
+    const btn = routeCard('GET', '/api/orders').querySelector<HTMLButtonElement>('.ap-pick')!;
+    act(() => btn.focus());
+    // The /api group (the users route) empties; /api/orders follows it.
+    type('orders');
+    expect(groups().map(x => x.querySelector('.ap-gk')?.textContent)).toEqual(['/api/orders']);
+    expect(btn.isConnected).toBe(true);
+    expect(document.activeElement).toBe(btn);
+  });
+
+  it('arrow keys walk from the search box through group headers, route rows and their files, Enter picks', () => {
+    mount();
+    // Groups: /api (the lone users route folds into it), then /api/orders.
+    key(filter(), 'ArrowDown');
+    expect(document.activeElement).toBe(groups()[0]);
+    key(document.activeElement!, 'ArrowDown');
+    const users = document.activeElement as HTMLElement;
+    expect(users.closest('.ap-route')).toBe(routeCard('GET', '/api/users'));
+    key(users, 'ArrowDown');
+    expect(document.activeElement).toBe(routeCard('GET', '/api/users').querySelector('.ap-file'));
+    key(document.activeElement!, 'ArrowDown');
+    expect(document.activeElement).toBe(groups()[1]);
+    key(document.activeElement!, 'ArrowUp');
+    key(document.activeElement!, 'ArrowUp');
+    expect(document.activeElement).toBe(users);
+    act(() => users.click());
+    expect(routeCard('GET', '/api/users').classList.contains('picked')).toBe(true);
+  });
+
+  it('each route row shows its handler file, and clicking it opens the file without picking', () => {
+    const d = domain([api('GET', '/api/reports/monthly', 'getOrders', 30, 'server/modules/billing/reports/routes/monthly-reports.ts')]);
+    mount(d);
+    const f = routeCard('GET', '/api/users').querySelector<HTMLButtonElement>('.ap-file')!;
+    expect(f.textContent).toBe(USR);
+    expect(f.title).toBe('');
+    expect(f.closest<HTMLElement>('.ap-route')!.title).toContain(`${USR}:9`);
+    const long = routeCard('GET', '/api/reports/monthly').querySelector<HTMLButtonElement>('.ap-file')!;
+    expect(long.textContent).toContain('…');
+    expect(long.closest<HTMLElement>('.ap-route')!.title).toContain('server/modules/billing/reports/routes/monthly-reports.ts');
+    act(() => f.click());
+    expect(useStore.getState().reveal).toMatchObject({ path: USR, line: 9 });
+    expect(host.querySelectorAll('.ap.picked').length).toBe(0);
+  });
+
+  it('groups routes by path prefix with counts, and a group collapses', () => {
+    const d = domain([api('DELETE', '/api/users/:id', 'listUsers', 12, USR), api('GET', '/health', 'getOrders', 40)]);
+    mount(d);
+    expect(groups().map(g => [g.querySelector('.ap-gk')?.textContent, g.querySelector('.ap-gn')?.textContent])).toEqual([
+      ['/', '1'], ['/api/orders', '2'], ['/api/users', '2'],
+    ]);
+    const users = groups()[2];
+    expect(users.getAttribute('aria-expanded')).toBe('true');
+    act(() => users.click());
+    expect(users.getAttribute('aria-expanded')).toBe('false');
+    expect(routeCard('GET', '/api/users')).toBeUndefined();
+    expect(cards('handler').map(c => c.querySelector('.ap-t')?.textContent)).not.toContain('listUsers');
+    act(() => users.click());
+    expect(routeCard('GET', '/api/users')).toBeTruthy();
+  });
+
+  it('the search matches one field at a time: method, path or file', () => {
+    mount();
+    type('get /api/users');
+    expect(cards('route')).toHaveLength(0);
+    type('GET');
+    expect(cards('route')).toHaveLength(2);
+  });
+
+  it('pages and screens filter by method, path or file too', () => {
+    mount();
+    const sec = (h: string) => [...host.querySelectorAll<HTMLElement>('.ap-sec')].find(x => x.querySelector('h4')?.textContent?.startsWith(h));
+    type('app/about');
+    expect(sec('Pages')?.textContent).toContain('/about');
+    expect(sec('Screens')).toBeUndefined();
+    type('screen');
+    expect(sec('Screens')?.textContent).toContain('Settings');
+    // The framework is not one of the fields.
+    type('react-navigation');
+    expect(sec('Screens')).toBeUndefined();
+  });
+
+  it('the search matches the handler file, and Esc clears it', () => {
+    mount();
+    type('routes/users');
+    expect(cards('route').map(c => c.querySelector('.ap-t')?.textContent)).toEqual(['/api/users']);
+    key(filter(), 'Escape');
+    expect(filter().value).toBe('');
+    expect(cards('route')).toHaveLength(3);
   });
 
   it('hovering a route lights its handler, service and table and dims the rest', () => {
@@ -136,6 +327,67 @@ describe('ApiView', () => {
     expect(host.querySelectorAll('.ap.on, .ap.dim').length).toBe(0);
   });
 
+  it('while a route is picked, hovering another kind of card keeps the pick; hovering a route previews it', () => {
+    mount();
+    const get = routeCard('GET', '/api/orders');
+    pick(get);
+    enter(card('service', 'orderService.ts'));
+    expect(get.classList.contains('on')).toBe(true);
+    expect(routeCard('POST', '/api/orders').classList.contains('dim')).toBe(true);
+    expect(edges()).toBe(3);
+    leave(card('service', 'orderService.ts'));
+    enter(routeCard('GET', '/api/users'));
+    expect(get.classList.contains('dim')).toBe(true);
+    expect(edges()).toBe(1);
+  });
+
+  it('Esc with focus on the page body clears a pick, ahead of the panels', () => {
+    mount();
+    const get = routeCard('GET', '/api/orders');
+    pick(get);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    expect(document.activeElement).toBe(document.body);
+    expect(key(document.body, 'Escape')).toBe(false);
+    expect(get.classList.contains('picked')).toBe(false);
+    // Nothing left to clear: Esc goes on to the panels.
+    expect(key(document.body, 'Escape')).toBe(true);
+  });
+
+  it('Esc from the body yields to an open slide-over panel: the panel closes, the pick stays', () => {
+    const Slides = () => { useSlideOvers(); return null; };
+    hello();
+    act(() => root.render(<><Slides /><ApiView /></>));
+    const get = routeCard('GET', '/api/orders');
+    pick(get);
+    act(() => useStore.getState().setPanel('inspector'));
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    key(document.body, 'Escape');
+    expect(useStore.getState().panel).toBeNull();
+    expect(get.classList.contains('picked')).toBe(true);
+  });
+
+  it('Esc from the body still clears a pick while the inspector peeks', () => {
+    mount();
+    const get = routeCard('GET', '/api/orders');
+    pick(get);
+    act(() => useStore.getState().select(ORD));
+    expect(useStore.getState().peek).toBe(ORD);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    expect(key(document.body, 'Escape')).toBe(false);
+    expect(get.classList.contains('picked')).toBe(false);
+  });
+
+  it('Esc in another input outside the view leaves the pick alone', () => {
+    mount();
+    pick(routeCard('GET', '/api/orders'));
+    const other = document.createElement('input');
+    document.body.appendChild(other);
+    act(() => other.focus());
+    expect(key(other, 'Escape')).toBe(true);
+    expect(routeCard('GET', '/api/orders').classList.contains('picked')).toBe(true);
+    other.remove();
+  });
+
   it('hovering a shared card lights every flow through it', () => {
     mount();
     enter(card('service', 'orderService.ts'));
@@ -146,7 +398,7 @@ describe('ApiView', () => {
 
   it('focusing a route traces it like hover', () => {
     mount();
-    const users = routeCard('GET', '/api/users');
+    const users = routeCard('GET', '/api/users').querySelector<HTMLButtonElement>('.ap-pick')!;
     act(() => users.focus());
     expect(card('handler', 'listUsers').classList.contains('on')).toBe(true);
     expect(card('table', 'orders').classList.contains('dim')).toBe(true);
@@ -157,11 +409,7 @@ describe('ApiView', () => {
   it('hovering then filtering the hovered card away clears the trace', () => {
     mount();
     enter(routeCard('GET', '/api/users'));
-    const input = host.querySelector<HTMLInputElement>('input[aria-label="Filter routes"]')!;
-    act(() => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'orders');
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    type('orders');
     expect(host.querySelectorAll('.ap.on, .ap.dim').length).toBe(0);
   });
 
@@ -174,13 +422,7 @@ describe('ApiView', () => {
 
   it('the filter narrows the routes by path or method', () => {
     mount();
-    const input = host.querySelector<HTMLInputElement>('input[aria-label="Filter routes"]')!;
-    const type = (v: string) => act(() => {
-      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
-      set.call(input, v);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    type('users');
+    type('/api/users');
     expect(cards('route').map(c => c.querySelector('.ap-t')?.textContent)).toEqual(['/api/users']);
     expect(cards('service')).toHaveLength(0);
     type('post');
@@ -192,7 +434,7 @@ describe('ApiView', () => {
 
   it('clicking a card selects its file and line', () => {
     mount();
-    act(() => routeCard('GET', '/api/orders').click());
+    act(() => routeCard('GET', '/api/orders').querySelector<HTMLButtonElement>('.ap-file')!.click());
     expect(useStore.getState().reveal).toMatchObject({ path: ORD, line: 18 });
     act(() => card('handler', 'createOrder').click());
     expect(useStore.getState().reveal).toMatchObject({ path: ORD, line: 10 });
@@ -229,9 +471,10 @@ describe('ApiView', () => {
     expect(useStore.getState().reveal).toMatchObject({ path: 'app/screens.tsx', line: 7 });
   });
 
-  it('shows the hint', () => {
+  it('shows the hint in the head, not over the rows', () => {
     mount();
-    expect(host.querySelector('.cv-hint')?.textContent).toBe('Hover a route to trace the request through the code. Links between files are approximate.');
+    expect(host.querySelector('.cv-hint')).toBeNull();
+    expect(host.querySelector('.ap-bar .ap-hint')?.textContent).toBe('Hover or select a route to trace it. Links are approximate.');
   });
 
   it(`over ${CAP} routes draws the first ${CAP} by path and offers "Show all"`, () => {
@@ -244,6 +487,73 @@ describe('ApiView', () => {
     expect(btn).toBeTruthy();
     act(() => btn.click());
     expect(cards('route')).toHaveLength(CAP + 1);
+  });
+
+  it(`group counts are the real size, and collapsed groups do not use up the ${CAP} cap`, () => {
+    const a = Array.from({ length: CAP + 1 }, (_, i) => api('GET', `/api/a/r${String(i).padStart(4, '0')}`, 'getOrders', 18));
+    const b = Array.from({ length: 3 }, (_, i) => api('GET', `/api/b/r${i}`, 'getOrders', 18));
+    const d = domain();
+    d.routes = [...a, ...b];
+    mount(d);
+    const head = (k: string) => groups().find(x => x.querySelector('.ap-gk')?.textContent === k)!;
+    expect(head('/api/a').querySelector('.ap-gn')?.textContent).toBe(`${CAP} of ${(CAP + 1).toLocaleString()}`);
+    // Past the cap no group is drawn, header included; the cap bar stands for them.
+    expect(head('/api/b')).toBeUndefined();
+    expect(cards('route')).toHaveLength(CAP);
+    expect(host.textContent).toContain(`Show all ${(CAP + 4).toLocaleString()}`);
+    act(() => head('/api/a').click());
+    expect(cards('route').map(c => c.querySelector('.ap-t')?.textContent)).toEqual(['/api/b/r0', '/api/b/r1', '/api/b/r2']);
+    expect(head('/api/b').querySelector('.ap-gn')?.textContent).toBe('3');
+    expect(host.querySelector('.ap-cap')).toBeNull();
+  });
+
+  it(`shows the cap bar when exactly ${CAP} open routes leave a collapsed group past the cap`, () => {
+    const mk = (g: string, n: number) => Array.from({ length: n }, (_, i) => api('GET', `/api/${g}/r${String(i).padStart(4, '0')}`, 'getOrders', 18));
+    const d = domain();
+    d.routes = [...mk('a', CAP), ...mk('b', 3)];
+    mount(d);
+    const head = (k: string) => groups().find(x => x.querySelector('.ap-gk')?.textContent === k)!;
+    act(() => head('/api/a').click());
+    act(() => head('/api/b').click());
+    act(() => head('/api/a').click());
+    expect(cards('route')).toHaveLength(CAP);
+    expect(head('/api/b')).toBeUndefined();
+    const bar = host.querySelector('.ap-cap')!;
+    expect(bar).toBeTruthy();
+    act(() => bar.querySelector('button')!.click());
+    expect(head('/api/b').getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('900 routes: groups past the cap stay out even when collapsed', () => {
+    const mk = (g: string, n: number) => Array.from({ length: n }, (_, i) => api('GET', `/api/${g}/r${String(i).padStart(4, '0')}`, 'getOrders', 18));
+    const d = domain();
+    d.routes = [...mk('a', 700), ...mk('b', 100), ...mk('c', 100)];
+    mount(d);
+    const head = (k: string) => groups().find(x => x.querySelector('.ap-gk')?.textContent === k)!;
+    const keys = () => groups().map(x => x.querySelector('.ap-gk')?.textContent);
+    expect(keys()).toEqual(['/api/a']);
+    expect(host.textContent).toContain('Show all 900');
+    act(() => head('/api/a').click());
+    expect(keys()).toEqual(['/api/a', '/api/b', '/api/c']);
+    expect(head('/api/a').querySelector('.ap-gn')?.textContent).toBe('700');
+    expect(cards('route')).toHaveLength(200);
+    act(() => head('/api/c').click());
+    act(() => head('/api/a').click());
+    // /api/a fills the cap again; /api/b and the collapsed /api/c lie past it.
+    expect(keys()).toEqual(['/api/a']);
+    expect(cards('route')).toHaveLength(CAP);
+    expect(host.textContent).toContain('Show all 800');
+  });
+
+  it('forgets a collapsed group whose routes all left', () => {
+    mount();
+    const g = () => groups().find(x => x.querySelector('.ap-gk')?.textContent === '/api/orders');
+    act(() => g()!.click());
+    const d = domain();
+    act(() => useStore.getState().apply({ type: 'domain', domain: { ...d, routes: d.routes.filter(r => !r.fullPath.startsWith('/api/orders')) } }));
+    expect(g()).toBeUndefined();
+    act(() => useStore.getState().apply({ type: 'domain', domain: domain() }));
+    expect(g()!.getAttribute('aria-expanded')).toBe('true');
   });
 
   it('shows the empty state with the supported frameworks', () => {
@@ -263,9 +573,12 @@ describe('ApiView', () => {
     cw.mockRestore();
     expect(host.querySelector('.apiv')?.classList.contains('stacked')).toBe(true);
     expect(host.querySelector('svg.ap-edges')).toBeNull();
-    expect(host.querySelector('.cv-hint')?.textContent).toBe('Tap a card to open it. Links between files are approximate.');
+    expect(host.querySelector('.ap-hint')?.textContent).toBe('Tap a route to see its flow. Links are approximate.');
     const chain = routeCard('GET', '/api/orders').closest('.ap-chain')!;
+    expect([...chain.querySelectorAll<HTMLElement>('.ap')].map(c => c.dataset.kind)).toEqual(['route']);
+    pick(routeCard('GET', '/api/orders'));
     expect([...chain.querySelectorAll<HTMLElement>('.ap')].map(c => c.dataset.kind)).toEqual(['route', 'handler', 'service', 'table']);
+    expect(host.querySelectorAll('.ap-links')).toHaveLength(1);
   });
 });
 
@@ -316,9 +629,21 @@ describe('ApiView palette trace (routeTrace)', () => {
     expect(card('handler', 'listUsers').classList.contains('on')).toBe(true);
     expect(routeCard('GET', '/api/orders').classList.contains('dim')).toBe(true);
     expect(scrolled).toContain(users);
-    // Hovering something else takes over the trace.
+    expect(users.classList.contains('picked')).toBe(true);
+    // Hovering something else takes over the trace until the pointer leaves.
     enter(routeCard('GET', '/api/orders'));
     expect(users.classList.contains('dim')).toBe(true);
+    leave(routeCard('GET', '/api/orders'));
+    expect(users.classList.contains('on')).toBe(true);
+  });
+
+  it('expands a collapsed group to show the traced route', () => {
+    mount();
+    const g = groups().find(x => x.querySelector('.ap-gk')?.textContent === '/api/orders')!;
+    act(() => g.click());
+    expect(routeCard('POST', '/api/orders')).toBeUndefined();
+    act(() => useStore.getState().traceRoute(`POST /api/orders ${ORD}:19`));
+    expect(routeCard('POST', '/api/orders').classList.contains('picked')).toBe(true);
   });
 
   it('clears a filter that hides the route, and turns on "Show all" for one beyond the cap', () => {
@@ -326,11 +651,8 @@ describe('ApiView palette trace (routeTrace)', () => {
     const d = domain();
     d.routes = many;
     mount(d);
-    const input = host.querySelector<HTMLInputElement>('input[aria-label="Filter routes"]')!;
-    act(() => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'r0001');
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    const input = filter();
+    type('r0001');
     const last = many[CAP];
     act(() => useStore.getState().traceRoute(last.id));
     expect(input.value).toBe('');

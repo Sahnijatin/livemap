@@ -146,9 +146,10 @@ export function flowGraph(flows: Flow[], dataRefs: DomainIndex['dataRefs']): Flo
 
 /**
  * Vertical positions: routes one per row; every other card sits at the average height of the cards linking into it,
- * pushed down so cards in a lane never overlap. Returns y per key and the total height.
+ * pushed down so cards in a lane never overlap. `routeY` overrides the route rows (to leave room for group headers).
+ * Returns y per key and the total height.
  */
-export function placeLanes(g: FlowGraph, pitch: number): { y: Map<string, number>; height: number } {
+export function placeLanes(g: FlowGraph, pitch: number, routeY?: Map<string, number>): { y: Map<string, number>; height: number } {
   const y = new Map<string, number>();
   const into = new Map<string, string[]>();
   for (const e of g.edges) {
@@ -158,7 +159,7 @@ export function placeLanes(g: FlowGraph, pitch: number): { y: Map<string, number
   let bottom = 0;
   g.lanes.forEach((lane, li) => {
     const want = lane.map((n, i) => {
-      if (li === 0) return { n, at: i * pitch, i };
+      if (li === 0) return { n, at: routeY?.get(n.key) ?? i * pitch, i };
       const src = (into.get(n.key) ?? []).map(k => y.get(k)).filter((v): v is number => v !== undefined);
       return { n, at: src.length ? src.reduce((a, b) => a + b, 0) / src.length : 0, i };
     }).sort((a, b) => a.at - b.at || a.i - b.i);
@@ -171,4 +172,45 @@ export function placeLanes(g: FlowGraph, pitch: number): { y: Map<string, number
     }
   });
   return { y, height: bottom };
+}
+
+/** Leading segments that say nothing about what a route is for. */
+const PREFIX = /^(api|v\d+(\.\d+)?)$/i;
+const PARAM = /^[:{[<*]/;
+
+/**
+ * A route's group: the prefix segments (`api`, `v1`) plus the first named segment after them, and the shorter
+ * fallback (the prefix alone) used when that group would hold a single route.
+ */
+export function routeGroup(fullPath: string): [string, string] {
+  const segs = fullPath.split('/').filter(Boolean);
+  let i = 0;
+  while (i < segs.length && PREFIX.test(segs[i])) i++;
+  const prefix = `/${segs.slice(0, i).join('/')}`;
+  return i < segs.length && !PARAM.test(segs[i]) ? [`/${segs.slice(0, i + 1).join('/')}`, prefix] : [prefix, prefix];
+}
+
+export interface FlowGroup { key: string; flows: Flow[] }
+
+/** Flows by group, groups sorted by key, flows kept in their given order. */
+export function groupFlows(flows: Flow[]): FlowGroup[] {
+  const keys = flows.map(f => routeGroup(f.route.fullPath));
+  const size = new Map<string, number>();
+  for (const [k] of keys) size.set(k, (size.get(k) ?? 0) + 1);
+  const out = new Map<string, Flow[]>();
+  flows.forEach((f, i) => {
+    const [k, short] = keys[i];
+    const g = size.get(k)! > 1 ? k : short;
+    const l = out.get(g);
+    if (l) l.push(f); else out.set(g, [f]);
+  });
+  return [...out].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([key, list]) => ({ key, flows: list }));
+}
+
+/** `s` cut to `n` characters by an ellipsis in the middle, keeping more of the end (the file name); below 8, just the start. */
+export function midTrunc(s: string, n: number): string {
+  if (s.length <= n) return s;
+  if (n < 8) return `${s.slice(0, n - 1)}…`;
+  const head = Math.max(4, Math.floor((n - 1) * 0.3));
+  return `${s.slice(0, head)}…${s.slice(s.length - (n - 1 - head))}`;
 }
