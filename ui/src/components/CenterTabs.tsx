@@ -159,6 +159,8 @@ export function CenterTabs() {
         </div>
         {tab === 'map' && <div className="c-tools" ref={setTools} />}
       </div>
+      {/* The ServiceNow filter bar (ui/src/sn), for `livemap sn` projects. */}
+      <div id="sn-filters" />
       <div className="c-body" role="tabpanel" id="center-panel" aria-labelledby={`tab-${tab}`}>
         <RewoundBanner />
         {/* Activity stays mounted so its scroll position and expanded rows survive a tab switch. */}

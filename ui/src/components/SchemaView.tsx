@@ -515,15 +515,21 @@ function Canvas({ tables, base, run }: { tables: Table[]; base: DomainBase; run:
 
 /** The Schema tab: every table as a card, with links from foreign key rows to the tables they reference. */
 export function SchemaView({ run = workerRun }: { run?: ElkRun }) {
-  const tables = useStore(s => s.domain.tables);
+  const all = useStore(s => s.domain.tables);
+  const vf = useStore(s => s.viewFilter);
+  // With filters on, a table shows when one of its source files passes.
+  const tables = useMemo(() => (vf ? all.filter(t => t.sources.some(x => vf.path(x.file))) : all), [all, vf]);
   const base = useStore(s => s.domainBase);
   if (!tables.length) {
     return (
       <div className="viewph">
         <div className="feed-empty fi">
           <span className="fe-ic"><SchemaIcon /></span>
-          <b>No tables yet.</b>
-          <p>LiveMap reads Prisma, Drizzle, TypeORM, Mongoose, SQLAlchemy, SQLModel, Django, Room, SwiftData and SQL migrations.</p>
+          {all.length ? (
+            <><b>No tables match the filters.</b><p>Change or clear the filters to see more.</p></>
+          ) : (
+            <><b>No tables yet.</b><p>LiveMap reads Prisma, Drizzle, TypeORM, Mongoose, SQLAlchemy, SQLModel, Django, Room, SwiftData and SQL migrations.</p></>
+          )}
         </div>
       </div>
     );

@@ -22,6 +22,7 @@ import { authenticate, hostAllowed, newToken, originAllowed } from './auth.js';
 import { handleControlApi, handleHook, MAX_API_BODY, readJsonBody } from './agent-routes.js';
 import { handleHistoryApi, sendJsonMaybeGzip } from './history-routes.js';
 import { serveStatic } from './static.js';
+import { readSnIndex } from './sn-index.js';
 
 export interface ServerOptions {
   /** The project name the UI shows; the root folder's name by default. */
@@ -590,6 +591,12 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
       const r = readText(url.searchParams.get('path'));
       if (!('content' in r)) return json(res, r.status, { error: r.error });
       return json(res, 200, { path: r.file.path, content: r.content });
+    }
+    if (url.pathname === '/api/sn') {
+      // A `livemap sn` mirror's records (scope, update set, last update); 404 for any other project.
+      const index = await readSnIndex(model.root);
+      if (!index) return json(res, 404, { error: 'not a ServiceNow mirror' });
+      return sendJsonMaybeGzip(req, res, reply, index, BASE_HEADERS);
     }
     if (url.pathname === '/api/summary') {
       // The same checks as /api/file, so a secret, binary or too-large file is never sent.

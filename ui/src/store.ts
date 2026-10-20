@@ -89,6 +89,8 @@ function pushHistory(history: string[], path: string): string[] {
   if (history[0] === path) return history;
   return [path, ...history.filter(p => p !== path)].slice(0, HISTORY_MAX);
 }
+/** `key` names the choices behind the filter, so a view can tell new choices from the same ones applied to new data. */
+export interface ViewFilter { key: string; path: (path: string) => boolean; change: (c: ChangeSummary) => boolean; event: (e: AgentEvent) => boolean }
 export type ConnectionState = 'connecting' | 'open' | 'closed' | 'unauthorized';
 
 /** Summaries with their per-file record keyed safely (see dict); none means the empty state. */
@@ -166,6 +168,11 @@ export interface StoreState {
   /** Requests for the active view to bring something into view (seq makes repeats fire). */
   mapFocus: { path: string; seq: number } | null;
   tableFocus: { key: string; seq: number } | null;
+  /**
+   * What the views show while filters are on (the ServiceNow filter bar sets it with `useStore.setState`): files and
+   * changes that pass `path` and `change`, agent events that pass `event`. Null shows everything.
+   */
+  viewFilter: ViewFilter | null;
   routeTrace: { id: string; seq: number } | null;
   /** The ⌘K palette is open. */
   paletteOpen: boolean;
@@ -249,6 +256,7 @@ const initial = {
   history: [] as string[],
   mapFocus: null,
   tableFocus: null,
+  viewFilter: null,
   routeTrace: null,
   paletteOpen: false,
   historyStatus: NO_HISTORY,

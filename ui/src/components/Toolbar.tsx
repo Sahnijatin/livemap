@@ -207,6 +207,8 @@ export function Toolbar() {
       <span className="sep" aria-hidden="true" />
       <ProjectChip />
       <StatusChip />
+      {/* The ServiceNow unattributed badge (ui/src/sn), for `livemap sn` projects. */}
+      <span id="sn-badge" />
       <AgentChips />
       <span className="grow"><NowLine /></span>
       <SearchButton />

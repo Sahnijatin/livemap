@@ -118,8 +118,9 @@ export function Activity({ active = true }: { active?: boolean }) {
   const changes = useStore(s => s.changes);
   const sessions = useStore(s => s.sessions);
   const liveAfterId = useStore(s => s.liveAfterId);
+  const vf = useStore(s => s.viewFilter);
 
-  const items = useMemo(() => buildFeed(events, changes), [events, changes]);
+  const items = useMemo(() => (vf ? buildFeed(events.filter(vf.event), changes.filter(vf.change)) : buildFeed(events, changes)), [events, changes, vf]);
   const [limit, setLimit] = useState(FEED_PAGE);
   const hidden = Math.max(0, items.length - limit);
   // Group the whole feed so group keys stay anchored to each run's own first item, then trim.

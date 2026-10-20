@@ -12,6 +12,7 @@ import { KindBadge, LayerTile, layerVars } from './icons';
 import { MethodPill } from './MethodPill';
 import { authHeaders } from '../connection';
 import { askAbout } from './Ask';
+import { SnRecordCard } from '../sn/SnRecord';
 
 /* The inspector's file view. It only shows once a file is selected, so it loads after first paint (see Inspector). */
 
@@ -106,9 +107,16 @@ function PlainEnglish({ path }: { path: string }) {
 
 const MAX_WHY = 12;
 
+/** The changes the views show: all of them, or those the filter bar lets through. */
+function useShownChanges(): ChangeSummary[] {
+  const changes = useStore(s => s.changes);
+  const vf = useStore(s => s.viewFilter);
+  return useMemo(() => (vf ? changes.filter(vf.change) : changes), [changes, vf]);
+}
+
 /** This file's changes, newest first, each with the intent of the agent step that made it. */
 function WhyItChanged({ path }: { path: string }) {
-  const changes = useStore(s => s.changes);
+  const changes = useShownChanges();
   const list = useMemo(() => {
     const out: ChangeSummary[] = [];
     for (let i = changes.length - 1; i >= 0 && out.length < MAX_WHY; i--) if (changes[i].path === path) out.push(changes[i]);
@@ -212,7 +220,8 @@ function DomainSections({ file }: { file: FileModel }) {
 
 export function FileDetail({ file }: { file: FileModel }) {
   const files = useStore(s => s.files);
-  const changes = useStore(s => s.changes);
+  // The diff shows the latest change the filters let through.
+  const changes = useShownChanges();
   const usedByIndex = useStore(s => s.usedBy);
   const { revealLine } = useStore.getState();
   const layer = layerOf(file.path, file);
@@ -251,6 +260,8 @@ export function FileDetail({ file }: { file: FileModel }) {
           </div>
         </div>
       </div>
+
+      <SnRecordCard path={file.path} />
 
       <PlainEnglish path={file.path} />
 

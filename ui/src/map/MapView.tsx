@@ -6,7 +6,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { MotionConfig } from 'framer-motion';
-import type { ChangeSummary } from '@shared/types.js';
+import type { ChangeSummary, FileModel } from '@shared/types.js';
 import { useStore } from '../store';
 import { isNarrow } from '../media';
 import { useLiveRecent } from '../recent';
@@ -92,6 +92,18 @@ function withPins(g: MapGraph, p: Positions, pins: Pins): Positions {
 type Camera = { kind: 'first' } | { kind: 'overview' } | { kind: 'folder'; id: string } | { kind: 'file'; id: string; at: number };
 
 /** Zoom buttons; a zoom is a user camera move (it pauses Follow). */
+/** The project's files, less those the filter bar hides. */
+function useVisibleFiles(): Record<string, FileModel> {
+  const all = useStore(s => s.files);
+  const vf = useStore(s => s.viewFilter);
+  return useMemo(() => {
+    if (!vf) return all;
+    const out: Record<string, FileModel> = Object.create(null);
+    for (const p in all) if (vf.path(p)) out[p] = all[p];
+    return out;
+  }, [all, vf]);
+}
+
 function ZoomControls({ fitAll, onZoom }: { fitAll: () => void; onZoom: () => void }) {
   const rf = useReactFlow();
   return (
@@ -156,7 +168,7 @@ function OverviewLayer({ graph, nodes }: { graph: MapGraph; nodes: MapFlowNode[]
 }
 
 function Canvas({ run, tools }: { run: ElkRun; tools: HTMLElement | null }) {
-  const files = useStore(s => s.files);
+  const files = useVisibleFiles();
   const recent = useLiveRecent(useStore(s => s.recent));
   const allChanges = useStore(s => s.changes);
   const flags = useStore(s => s.control.flags);
@@ -237,6 +249,14 @@ function Canvas({ run, tools }: { run: ElkRun; tools: HTMLElement | null }) {
     paused: followPaused, userMoved: followUserMoved, moved: followMoved, hold: followHold, release: followRelease, nudge: followNudge,
   } = useFollowCamera(graph, boxes, target, camera.current?.kind === 'first');
   const overviewNext = useCallback(() => { camera.current = { kind: 'overview' }; followHold(); }, [followHold]);
+  // New filter choices show the whole (filtered) map once laid out.
+  const filterKey = useStore(s => s.viewFilter?.key ?? '');
+  const shownKey = useRef(filterKey);
+  useEffect(() => {
+    if (filterKey === shownKey.current) return;
+    shownKey.current = filterKey;
+    overviewNext();
+  }, [filterKey, overviewNext]);
   /** The user moved the camera: Follow pauses, and a palette focus still waiting for its layout is dropped. */
   const userMoved = useCallback(() => {
     if (camera.current?.kind === 'file') camera.current = null;
@@ -521,7 +541,8 @@ function Canvas({ run, tools }: { run: ElkRun; tools: HTMLElement | null }) {
 
 /** The Map tab: every code file as a card in its folder's region, live, at three levels of detail. */
 export function MapView({ run = workerRun, tools = null }: { run?: ElkRun; tools?: HTMLElement | null }) {
-  const files = useStore(s => s.files);
+  const files = useVisibleFiles();
+  const filtered = useStore(s => s.viewFilter !== null);
   const count = useMemo(() => codeFileCount(files), [files]);
   if (!count) {
     return (
@@ -530,8 +551,7 @@ export function MapView({ run = workerRun, tools = null }: { run?: ElkRun; tools
           <span className="fe-ic">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2" /><rect x="14" y="14" width="7" height="7" rx="2" /><path d="M10 6.5h4a3 3 0 0 1 3 3V14" /></svg>
           </span>
-          <b>No code files yet.</b>
-          <p>The map fills in as files appear.</p>
+          {filtered ? <><b>No files match the filters.</b><p>Change or clear the filters to see more.</p></> : <><b>No code files yet.</b><p>The map fills in as files appear.</p></>}
         </div>
       </div>
     );

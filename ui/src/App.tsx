@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { Suspense, lazy, useEffect } from 'react';
 import clsx from 'clsx';
 import { isGated, useStore } from './store';
 import { Toolbar } from './components/Toolbar';
@@ -12,6 +12,9 @@ import { MotionRoot } from './motion';
 import { closePanel, useSlideOvers } from './panels';
 import { Dock } from './components/Dock';
 import { PanelHandle } from './components/PanelHandle';
+
+// ServiceNow filters, badge and diagnostics: loaded after the first hello, and only of use to `livemap sn` projects.
+const SnHost = lazy(() => import('./sn/SnHost'));
 
 export function App() {
   const panel = useStore(s => s.panel);
@@ -41,6 +44,7 @@ export function App() {
         {/* Inside .app: a fixed .app is its own stacking context, so the slide-over panels sit above this. */}
         <div className={clsx('scrim only-narrow-scrim', panel && 'open')} onClick={closePanel} aria-hidden="true" />
       </Dock>
+      {root && import.meta.env.MODE !== 'export' && <Suspense fallback={null}><SnHost /></Suspense>}
       <Toast />
       <PaletteHost />
       <Gate />
