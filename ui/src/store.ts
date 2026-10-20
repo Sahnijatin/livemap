@@ -170,9 +170,9 @@ export interface StoreState {
   tableFocus: { key: string; seq: number } | null;
   /**
    * What the views show while filters are on (the ServiceNow filter bar sets it with `useStore.setState`): files and
-   * changes that pass `path` and `change`, agent events that pass `event`. Null shows everything.
+   * changes that pass `path` and `change`, agent events that pass `event`. Unset or null shows everything.
    */
-  viewFilter: ViewFilter | null;
+  viewFilter?: ViewFilter | null;
   routeTrace: { id: string; seq: number } | null;
   /** The ⌘K palette is open. */
   paletteOpen: boolean;
@@ -256,7 +256,6 @@ const initial = {
   history: [] as string[],
   mapFocus: null,
   tableFocus: null,
-  viewFilter: null,
   routeTrace: null,
   paletteOpen: false,
   historyStatus: NO_HISTORY,

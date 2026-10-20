@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useReducer } from 'react';
 import type { ChangeSummary, FileModel } from '@shared/types.js';
 import { summaryRequests, useStore } from '../store';
 import { LAYERS, layerOf } from '../layers';
@@ -12,7 +12,9 @@ import { KindBadge, LayerTile, layerVars } from './icons';
 import { MethodPill } from './MethodPill';
 import { authHeaders } from '../connection';
 import { askAbout } from './Ask';
-import { SnRecordCard } from '../sn/SnRecord';
+
+// The ServiceNow record card: its own chunk, loaded from this one, so its files never join the main chunk's preload list.
+const SnRecordCard = lazy(() => import('../sn/SnRecord').then(m => ({ default: m.SnRecordCard })));
 
 /* The inspector's file view. It only shows once a file is selected, so it loads after first paint (see Inspector). */
 
@@ -261,7 +263,7 @@ export function FileDetail({ file }: { file: FileModel }) {
         </div>
       </div>
 
-      <SnRecordCard path={file.path} />
+      <Suspense fallback={null}><SnRecordCard path={file.path} /></Suspense>
 
       <PlainEnglish path={file.path} />
 

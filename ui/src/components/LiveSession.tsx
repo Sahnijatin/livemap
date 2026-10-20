@@ -127,7 +127,6 @@ export function LiveSession() {
         </div>
       )}
       <div className="muted" style={{ fontSize: 12 }}>Select any file to see what is inside it, what it connects to, and why it changed.</div>
-      <span id="notices" />
     </>
   );
 }

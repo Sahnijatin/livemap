@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
+import { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import clsx from 'clsx';
 import type { Ticks } from '@shared/history.js';
 import { liveGeneration, useStore } from '../store';
@@ -44,6 +44,10 @@ function bucketOf(t: Ticks, seq: number): number {
  * run separators and a draggable thumb, and the LIVE or REWOUND state. Dragging, the arrow keys, Home
  * and End rewind the whole UI; releasing at the right end or End returns to live.
  */
+// ServiceNow filters, badge, diagnostics and the notices link: their own chunk, loaded from this one (itself lazy,
+// right after first paint) so the main chunk carries none of it. A replay has no server to ask.
+const SnHost = lazy(() => import('../sn/SnHost'));
+
 export function Timeline() {
   const status = useStore(s => s.historyStatus);
   const rewound = useStore(s => s.rewound);
@@ -220,6 +224,8 @@ export function Timeline() {
 
   return (
     <div className={clsx('timeline', !status.enabled && 'off', past && 'past')} role="group" aria-label="Session timeline">
+      {/* Renders only portals (into the toolbar, the center and the inspector), never inside the timeline. */}
+      {!replay && import.meta.env.MODE !== 'export' && <Suspense fallback={null}><SnHost /></Suspense>}
       <button
         type="button"
         className="play"

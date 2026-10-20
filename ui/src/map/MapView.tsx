@@ -542,7 +542,7 @@ function Canvas({ run, tools }: { run: ElkRun; tools: HTMLElement | null }) {
 /** The Map tab: every code file as a card in its folder's region, live, at three levels of detail. */
 export function MapView({ run = workerRun, tools = null }: { run?: ElkRun; tools?: HTMLElement | null }) {
   const files = useVisibleFiles();
-  const filtered = useStore(s => s.viewFilter !== null);
+  const filtered = useStore(s => !!s.viewFilter);
   const count = useMemo(() => codeFileCount(files), [files]);
   if (!count) {
     return (

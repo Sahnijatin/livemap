@@ -121,4 +121,4 @@ The mirror folder is readable only by you. When the folder is inside a git repos
 - Look at **Unknown tools**. If the agent's write tools are listed there, LiveMap cannot tell they are writes yet.
 - Changes made in the ServiceNow UI by a person are unattributed by design.
 
-**Third-party notices.** The licenses of the open source packages LiveMap uses are linked from the inspector's Live session view (**Third-party notices**).
+**Third-party notices.** The licenses of the open source packages LiveMap uses are linked at the bottom of the inspector (**Third-party notices**).

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { classifyTool } from '@shared/tools.js';
 import type { AgentEvent } from '@shared/types.js';
@@ -9,8 +9,8 @@ import { activeCount, filtersUrl, readFilters, viewFilter, type Filters } from '
 
 /*
  * The ServiceNow parts of the page, for a `livemap sn` project only: the unattributed badge in the toolbar, the filter
- * bar over the views, and the diagnostics panel. Loaded lazily after the first hello for every live project; without
- * a ServiceNow mirror it renders only the third-party notices link.
+ * bar over the views, and the diagnostics panel. Loaded lazily (from the timeline's chunk) for every live project;
+ * without a ServiceNow mirror it renders only the third-party notices footer under the inspector.
  */
 
 /** The mirror's records are read again this long after the last change (a burst of saves reads them once). */
@@ -29,9 +29,21 @@ export function unknownTools(events: AgentEvent[]): [string, number][] {
   return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
-function Slot({ id, children }: { id: string; children: React.ReactNode }) {
-  const el = document.getElementById(id);
-  return el ? createPortal(children, el) : null;
+/**
+ * An element this module adds to the page, so the main chunk carries no placeholder for it: created when `on`,
+ * put in place by `place`, and removed again on unmount.
+ */
+function useAdded(tag: 'span' | 'div', id: string, on: boolean, place: (el: HTMLElement) => void): HTMLElement | null {
+  const [el, setEl] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (!on) return;
+    const e = document.createElement(tag);
+    e.id = id;
+    place(e);
+    setEl(e);
+    return () => { e.remove(); setEl(null); };
+  }, [on]);
+  return el;
 }
 
 function Select({ label, value, options, onChange }: { label: string; value?: string; options: [string, string][]; onChange: (v?: string) => void }) {
@@ -77,6 +89,11 @@ export default function SnHost() {
   const [filters, setFilters] = useState<Filters>(() => readFilters(window.location.search));
   const [diag, setDiag] = useState(false);
   const [ok, setOk] = useState(false);
+  // The badge sits in the toolbar before its flexible gap; the filter bar between the view tabs and the views.
+  const badgeEl = useAdded('span', 'sn-badge', ok, e => document.querySelector('.toolbar > .grow')?.before(e));
+  const barEl = useAdded('div', 'sn-filters', ok, e => document.querySelector('main.center > .c-head')?.after(e));
+  // The third-party notices link, as a footer under the inspector, in every live project (this module loads for all).
+  const noticesEl = useAdded('div', 'notices', true, e => document.querySelector('aside.insp')?.append(e));
 
   // Read the records once per project, and again after changes settle (a save can move a record or its update set).
   useEffect(() => {
@@ -117,14 +134,13 @@ export default function SnHost() {
     .sort((a, b) => b.lastAt - a.lastAt)
     .map(s => [s.id, `${agentName(s.agent)}: ${s.title || s.id}`]), [sessions]);
 
-  // The third-party notices link, in the Live session view of every live project (this module loads for all of them).
-  const notices = <Slot id="notices"><a className="notices" href="/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer">Third-party notices</a></Slot>;
+  const notices = noticesEl && createPortal(<a className="notices" href="/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer">Third-party notices</a>, noticesEl);
   if (!ok || !index) return notices;
   const n = activeCount(filters);
   return (
     <>
       {notices}
-      <Slot id="sn-badge">
+      {badgeEl && createPortal(
         <button
           type="button"
           className={`sn-badge${filters.conf === 'none' ? ' on' : ''}`}
@@ -133,9 +149,10 @@ export default function SnHost() {
           onClick={() => update(filters.conf === 'none' ? { ...filters, conf: undefined } : { ...filters, conf: 'none', who: undefined })}
         >
           <b>{unattributed.toLocaleString()}</b> unattributed
-        </button>
-      </Slot>
-      <Slot id="sn-filters">
+        </button>,
+        badgeEl,
+      )}
+      {barEl && createPortal(
         <div className="sn-bar" role="group" aria-label="Filters">
           <Select label="Scope" value={filters.scope} options={scopes} onChange={set('scope')} />
           <Select label="Update set" value={filters.set} options={sets} onChange={set('set')} />
@@ -148,8 +165,9 @@ export default function SnHost() {
             Unknown tools <b>{unknown.toLocaleString()}</b>
           </button>
           {diag && <Diagnostics onClose={() => setDiag(false)} />}
-        </div>
-      </Slot>
+        </div>,
+        barEl,
+      )}
     </>
   );
 }

@@ -944,7 +944,6 @@
   .map-note { min-width:0; font-size:12.5px; line-height:16px; color:var(--ink2); animation:fin .45s var(--ease) both; }
   .zoomctl .zfit { width:40px; font-size:12px; font-weight:600; }
   /* ServiceNow (ui/src/sn): the unattributed badge, the filter bar, diagnostics and the inspector's record card. */
-  #sn-badge:empty, #sn-filters:empty { display:none; }
   .sn-badge { display:flex; align-items:center; gap:5px; height:28px; padding:0 10px; border-radius:999px; border:1px solid var(--hair2); background:var(--card); color:var(--ink2); font-size:12px; cursor:pointer; white-space:nowrap; }
   .sn-badge b { color:var(--orange); font-variant-numeric:tabular-nums; }
   .sn-badge.on { border-color:var(--orange); background:var(--orange-t); color:var(--ink); }
@@ -981,7 +980,8 @@
   .sn-uses .chip small { flex-shrink:0; color:var(--ink3); font:11px var(--sans); }
   .sn-none { margin-top:8px; font-size:12px; }
   .sn-open { display:inline-block; margin-top:10px; font-size:12.5px; font-weight:600; color:var(--blue); }
-  .notices { display:inline-block; margin-top:10px; font-size:12px; color:var(--ink3); }
+  #notices { flex-shrink:0; padding:7px 16px 9px; border-top:1px solid var(--hair); }
+  .notices { font-size:11.5px; color:var(--ink3); }
   /* Wraps instead of overflowing when the text is wider (other fonts) or the center is narrow. */
   .c-tools { margin-left:auto; display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:8px; min-width:0; max-width:100%; }
   .c-tools:empty { display:none; }
