@@ -332,7 +332,7 @@ describe('MapView', () => {
     const many = Array.from({ length: LARGE_PROJECT + 1 }, (_, i) => file(`d${i % 5}/f${i}.ts`, [sym(`f${i}`)]));
     hello(many);
     await mount();
-    expect(host.textContent).toContain('Large project: showing folders. Open a folder to see its files.');
+    expect(host.textContent).toContain('Large project: showing folders. Open one to see its files.');
     expect(useStore.getState().mapLevel).toBe('folders');
     expect(host.querySelectorAll('.folder').length).toBe(5);
   });
@@ -341,6 +341,65 @@ describe('MapView', () => {
     hello(baseFiles());
     await mount();
     expect(host.textContent).not.toContain('Large project');
+  });
+
+  it('the large-project notice fits each level: never "showing folders" at the files or functions level', async () => {
+    const many = Array.from({ length: LARGE_PROJECT + 1 }, (_, i) => file(`d${i % 5}/f${i}.ts`, [sym(`f${i}`)]));
+    hello(many);
+    await mount();
+    const note = () => host.querySelector('.map-note')?.textContent ?? null;
+    act(() => useStore.getState().setMapLevel('files'));
+    await settle();
+    expect(note()).toBe('Large project: open a folder to see its files.');
+    act(() => useStore.getState().setMapLevel('functions'));
+    await settle();
+    expect(note()).toBe('Large project: open a folder to see its functions.');
+    act(() => useStore.getState().expandMapFolder('dir:d1'));
+    await settle();
+    expect(note()).toBe('4 folders are closed.');
+    for (const d of ['dir:d0', 'dir:d2', 'dir:d3', 'dir:d4']) act(() => useStore.getState().expandMapFolder(d));
+    await settle();
+    expect(note()).toBeNull();
+    act(() => useStore.getState().setMapLevel('folders'));
+    await settle();
+    expect(note()).toBe('Large project: showing folders. Open one to see its files.');
+  });
+
+  it('the notice and the zoom buttons sit in a bar below the canvas, not over it', async () => {
+    const many = Array.from({ length: LARGE_PROJECT + 1 }, (_, i) => file(`d${i % 5}/f${i}.ts`, [sym(`f${i}`)]));
+    hello(many);
+    await mount();
+    const bar = host.querySelector('.mapv > .mv-foot')!;
+    expect(bar.previousElementSibling?.classList.contains('mv-canvas')).toBe(true);
+    expect(bar.querySelector('.map-note')).not.toBeNull();
+    expect(bar.querySelector('.zoomctl')).not.toBeNull();
+    // The hint stays beside the note, shortened (a phone hides it by CSS).
+    expect(bar.querySelector('.cv-hint')?.textContent).toBe('Drag to pan · ⌘ + scroll to zoom');
+  });
+
+  it('cuts long folder names in the middle and keeps the full path in the title', async () => {
+    const long = '.agents/skills/supabase-row-level-security';
+    hello([...baseFiles(), imp(`${long}/check.ts`, [])]);
+    act(() => useStore.getState().setMapLevel('folders'));
+    await mount();
+    const fl = host.querySelector<HTMLElement>(`.folder[data-folder="dir:${long}"] .fl`)!;
+    expect(fl.title).toBe(long);
+    expect([...fl.querySelectorAll('.fn > span')].map(s => s.textContent)).toEqual(['.agents/skills/supabase-row-', 'level-security/']);
+    act(() => useStore.getState().setMapLevel('files'));
+    await settle();
+    const gl = host.querySelector<HTMLElement>(`.mglabel[data-folder="dir:${long}"] .gl`)!;
+    expect(gl.title).toBe(long);
+    expect(gl.querySelector('.fn')!.textContent).toMatch(/level-security\/$/);
+  });
+
+  it('when the start cannot keep 3 characters, a card shows "…" and the end only', async () => {
+    const path = 'packages/notification-hub';
+    hello([...baseFiles(), imp(`${path}/a.ts`, [])]);
+    act(() => useStore.getState().setMapLevel('folders'));
+    await mount();
+    const fn = host.querySelector<HTMLElement>(`.folder[data-folder="dir:${path}"] .fl .fn`)!;
+    expect(fn.classList.contains('end')).toBe(true);
+    expect(fn.textContent).toBe('\u2026notification-hub/');
   });
 });
 
@@ -362,6 +421,20 @@ describe('level of detail (#15)', () => {
     expect(far()).toBe(true);
     act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Zoom in"]')!.click());
     expect(far()).toBe(false);
+  });
+
+  it('zoomed out, folders get overview labels that keep their screen size', async () => {
+    hello(baseFiles());
+    await mount();
+    const labels = () => [...host.querySelectorAll<HTMLElement>('.ovl')];
+    expect(labels()).toHaveLength(0);
+    for (let i = 0; i < 20 && viewport().zoom >= 0.3; i++) zoomOut();
+    await settle();
+    expect(labels().map(l => l.textContent).sort()).toEqual(['src/api/', 'src/web/']);
+    // Scaled by about 1 / zoom, so the label reads at its normal size on screen.
+    const scale = Number(/scale\(([\d.e-]+)\)/.exec(labels()[0].style.transform)![1]);
+    expect(scale * viewport().zoom).toBeGreaterThan(0.85);
+    expect(scale * viewport().zoom).toBeLessThan(1.15);
   });
 });
 
