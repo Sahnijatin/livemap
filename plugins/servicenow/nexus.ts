@@ -47,6 +47,17 @@ export class NexusToolError extends Error {
   }
 }
 
+/** A call or query ran out of the time its caller gave it. */
+export class NexusDeadlineError extends Error {
+  constructor(readonly tool: string) {
+    super(`${tool}: out of time`);
+    this.name = 'NexusDeadlineError';
+  }
+}
+
+/** A point in time (epoch ms by `now`, default Date.now) after which no call starts or keeps waiting. */
+export interface Deadline { at: number; now?: () => number }
+
 export interface QueryOptions {
   query?: string;
   fields?: string[];
@@ -55,6 +66,8 @@ export interface QueryOptions {
   orderBy?: string;
   /** Stop after this many records (default: all). */
   max?: number;
+  /** Checked before each page; each page's timeout is capped at the time left. */
+  deadline?: Deadline;
 }
 
 /** A record as LiveMap uses it: every field a string, after `flattenRecord`. */
@@ -183,20 +196,24 @@ export class NexusClient {
    * Calls one allowlisted tool and returns its parsed JSON. Transport failures are retried with backoff
    * (reconnecting); a tool's own error is not. After the last failed attempt the client is offline.
    */
-  async call(tool: string, args: Obj = {}): Promise<unknown> {
+  async call(tool: string, args: Obj = {}, deadline?: Deadline): Promise<unknown> {
     assertReadOnly(tool, args);
+    const left = () => (deadline ? deadline.at - (deadline.now ?? Date.now)() : Infinity);
     let last: unknown;
     for (let attempt = 0; attempt < this.attempts; attempt++) {
       if (attempt > 0) await this.sleep(this.backoffMs * 2 ** (attempt - 1));
+      if (left() <= 0) throw new NexusDeadlineError(tool);
       try {
         await this.connect();
-        const res = await this.client!.callTool({ name: tool, arguments: args }, undefined, { timeout: this.timeoutMs });
+        const res = await this.client!.callTool({ name: tool, arguments: args }, undefined, { timeout: Math.max(1, Math.min(this.timeoutMs, left())) });
         this.state = 'online';
         return unwrapResult(tool, res);
       } catch (e) {
         if (e instanceof NexusToolError || e instanceof NotAllowedError) throw e;
         last = e;
         await this.close();
+        // A call cut short by the caller's deadline is not retried, and does not make nexus offline.
+        if (left() <= 0) throw new NexusDeadlineError(tool);
       }
     }
     this.state = 'offline';
@@ -207,14 +224,14 @@ export class NexusClient {
    * Runs an allowlisted tool through `tool_execute`. When nexus has not enabled the tool yet, it is found with
    * `tool_search` (which enables it) and the call is tried once more.
    */
-  async execute(tool: string, args: Obj = {}): Promise<unknown> {
+  async execute(tool: string, args: Obj = {}, deadline?: Deadline): Promise<unknown> {
     try {
-      return await this.call(GATEWAY, { tool, args });
+      return await this.call(GATEWAY, { tool, args }, deadline);
     } catch (e) {
       if (!(e instanceof NexusToolError) || this.enabled.has(tool) || !NOT_ENABLED.test(e.message)) throw e;
       this.enabled.add(tool);
-      await this.call('tool_search', { query: tool, limit: 5 });
-      return this.call(GATEWAY, { tool, args });
+      await this.call('tool_search', { query: tool, limit: 5 }, deadline);
+      return this.call(GATEWAY, { tool, args }, deadline);
     }
   }
 
@@ -239,7 +256,8 @@ export class NexusClient {
       if (opts.query) args.query = opts.query;
       if (opts.fields?.length) args.fields = opts.fields;
       if (opts.orderBy) args.order_by = opts.orderBy;
-      const body = await this.call('sn_query_table', args);
+      if (opts.deadline && opts.deadline.at - (opts.deadline.now ?? Date.now)() <= 0) throw new NexusDeadlineError('sn_query_table');
+      const body = await this.call('sn_query_table', args, opts.deadline);
       const data = (isObj(body) && isObj(body.data) ? body.data : body) as QueryPage;
       // Flattened here, at the boundary, so nothing past the client sees a reference object.
       const records = Array.isArray(data?.records) ? data.records.map(flattenRecord) : [];

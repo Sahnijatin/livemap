@@ -15,7 +15,7 @@ How to run LiveMap and what each part of the UI does. For agent setup see [agent
 livemap [dir=.] [--port N] [--no-open] [--pull[=SEC]] [--no-history] [--summaries]
 livemap init [dir=.] [--agents claude,codex,cursor] [--remove]
 livemap export [dir=.] [--session ID] [--no-code] [--out FILE]
-livemap sn [dir=.] --scope NAMESPACE|SYS_ID [--instance NAME] [--nexus URL] [--port N] [--no-open] [--no-history] [--mirror-only]
+livemap sn [dir=.] --scope NAMESPACE|SYS_ID [--instance NAME] [--nexus URL] [--skyforge-log FILE|none] [--log-window SECONDS] [--port N] [--no-open] [--no-history] [--mirror-only]
 livemap mcp-proxy --upstream URL [--header NAME=VALUE]... [--timeout SEC] | --upstream-cmd "COMMAND"
 ```
 
@@ -67,9 +67,11 @@ Mirrors a ServiceNow application scope to files, then runs LiveMap on them. It r
 | `--scope NAMESPACE\|SYS_ID` | required | The scope to mirror: its namespace (`x_snc_cc_offering`) or the sys_id of its `sys_scope` record. |
 | `--instance NAME` | the instance nexus is set to | Sent to nexus as the `X-SN-Instance` header. |
 | `--nexus URL` | `http://127.0.0.1:3006/mcp` | nexus's MCP endpoint. LiveMap tries Streamable HTTP first, then SSE. |
+| `--skyforge-log FILE\|none` | `~/.skyforge/skyforge-mcp.log` | SkyForge's MCP log, used to attribute past changes to SkyForge tool calls. `none` skips it. |
+| `--log-window SECONDS` | `60` | How long after a tool call ends a change can come and still match it (1 to 3600). A change may come at most 2 seconds before the call starts. |
 | `--port N` | `4317` | As for `livemap`. |
 | `--no-open` | the browser opens | As for `livemap`. |
-| `--no-history` | history is recorded | As for `livemap`. |
+| `--no-history` | history is imported and recorded | Skips the history import, and records nothing, as for `livemap`. |
 | `--mirror-only` | off | Writes the mirror and exits without starting the UI. |
 
 Before it pulls, LiveMap prints the instance, the nexus transport and the scope it resolved (name, namespace and sys_id). It then reads the scope's `sys_metadata` inventory and the full records of every class, 200 at a time, and prints how many records it pulled and how long it took.
@@ -81,6 +83,33 @@ On the map, a portal links to its home page, a page to its layout, a layout to t
 Credential records (`sys_auth_profile*`, `oauth_entity*`, `discovery_credentials`) are listed by name only, fields named like passwords, secrets, tokens or keys are never written, and system properties are read without their values. The `.livemap` folder is readable only by you. When `dir` is inside a git repository, LiveMap adds `.livemap/` to its `.gitignore`; elsewhere it leaves `.gitignore` alone.
 
 A second `livemap sn` on the same folder updates the mirror in place: unchanged files are not rewritten, and files of records that are gone or renamed are removed.
+
+#### History import
+
+After the mirror, LiveMap reads the scope's change history and writes it to `.livemap/sn/<scope>.history.json`, one dated event per save, oldest first, with the ServiceNow user who made it.
+
+- **Sources.** It reads `sys_update_version` by the scope's application, then by update name for the scope's update_xml names that got no versions that way. When the instance has no versions by application, it looks up every update name the scope uses. Records with no versions fall back to their `sys_update_xml` rows.
+- **Times.** An update_xml row is dated by the save time in its payload, since the row itself can be written again later. When it was written well after that save (an update set capture, for example), the timeline also gets a `captured` event at the row's time. The same save written twice is one event.
+- **What is kept.** Only times, names and authors. Payloads are parsed for those and dropped. Payloads of system properties and of classes with password fields are never read, and credential records are skipped.
+- **Time limit.** The import stops after 90 seconds, even partway through a query, with a warning and keeps what it read. A failure in the import is a warning too: the mirror and the UI go on without history.
+
+Each save is then matched to SkyForge's log (`--skyforge-log`):
+
+| Confidence | When |
+|---|---|
+| `log` | One tool call names the record: its sys_id for an update or delete, or its table and name for a create. |
+| `likely` | Several calls name it, the one call that names it ran on an unknown instance, or calls only share its table and time. All candidates are kept. A table and time match is never `log`. |
+
+A table and time match (or a background script) counts only when the save's author is the ServiceNow user SkyForge works as. LiveMap asks nexus for that user (`sn_session_context`, within the import's time limit). When nexus cannot say, it uses a `servicenow_username=` the log gave while it was on the same instance; the log can name other users on other instances. When it knows neither, such matches are marked `author not checked`. Saves by other users match only calls that name them. This check cannot tell people apart when everyone, SkyForge included, signs in as one shared account such as `admin`; give SkyForge its own ServiceNow user to get the most from it.
+| `history` | No call matches. The event keeps its ServiceNow author. |
+
+- **Window.** A call can match a save that comes up to 2 seconds before it starts and up to `--log-window` seconds after it ends.
+- **No other records.** A call that names another sys_id never matches, and a call matched at `log` is not a candidate for other saves.
+- **Instances.** The log covers every instance SkyForge connects to. Calls made while it was connected to another instance are left out. Calls stay `likely` when the instance is unknown: before any `Connected to` line, after one for a host that is not `*.service-now.com`, or within 10 minutes of a connect to another instance, since several SkyForge processes can write one log.
+- **Scripts.** Background scripts and scheduled script jobs can write any table, so they only ever make a save `likely`.
+- **Limits.** The log has no session id and cuts argument values at about 100 characters. A `✅` line means the call returned, not that the write succeeded.
+
+The command prints how many versions it imported, how many log lines it read, how many saves matched, were ambiguous or matched nothing, and any SkyForge tools it does not know (they are read as reads).
 
 ### `livemap mcp-proxy`
 

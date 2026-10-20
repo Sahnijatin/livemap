@@ -34,7 +34,20 @@ export function loadFixture(): Fixture {
 }
 
 /** Every record of a table as the instance would hold it: the recorded ones, plus inventory for the rest. */
-function tableRows(fx: Fixture, table: string, unrecorded: 'inventory' | 'empty'): Rec[] {
+/** One `sys_update_version` row per fixture update_xml row, as the instance would hold it (no payload). */
+function versionRows(fx: Fixture, extra: Rec[] = [], application: boolean | 'some' = false): Rec[] {
+  const names = [...new Set([...fx.sys_update_xml, ...extra].map(r => r.name))];
+  return [...fx.sys_update_xml, ...extra].map((r, i) => {
+    const inner = /<sys_updated_on>([^<]+)<\/sys_updated_on>/.exec(r.payload)?.[1];
+    return {
+      sys_id: `7a${String(i + 1).padStart(30, '0')}`, name: r.name, type: r.type, record_name: r.target_name, action: r.action,
+      sys_created_by: r.sys_created_by, sys_created_on: r.action === 'DELETE' || !inner ? r.sys_updated_on : inner, state: 'current',
+      ...(application === true || (application === 'some' && names.indexOf(r.name) % 2 === 0) ? { application: fx.scope.sys_id } : {}),
+    };
+  });
+}
+
+function tableRows(fx: Fixture, table: string, unrecorded: 'inventory' | 'empty', versions: boolean | 'application' | 'some-application' = false, extraXml: Rec[] = []): Rec[] {
   const inv = fx.tables.sys_metadata;
   const inventory = (): Rec[] => inv.rows.map(r => {
     const o: Rec = { sys_scope: fx.scope.sys_id };
@@ -43,7 +56,9 @@ function tableRows(fx: Fixture, table: string, unrecorded: 'inventory' | 'empty'
   });
   if (table === 'sys_metadata') return inventory();
   if (table === 'sys_scope' || table === 'sys_app') return [{ sys_id: fx.scope.sys_id, scope: fx.scope.scope, name: fx.scope.name, version: fx.scope.version, sys_class_name: 'sys_app' }];
-  if (table === 'sys_update_xml') return fx.sys_update_xml;
+  // Every recorded row belongs to the scope; the fixture leaves out the `application` field.
+  if (table === 'sys_update_xml') return [...fx.sys_update_xml, ...extraXml].map(r => ({ ...r, application: fx.scope.sys_id }));
+  if (table === 'sys_update_version') return versions ? versionRows(fx, extraXml, versions === 'application' ? true : versions === 'some-application' ? 'some' : false) : [];
   const recorded = (fx.tables as Record<string, unknown>)[table];
   if (Array.isArray(recorded)) return recorded as Rec[];
   // A class the fixture has no full records for: the instance would return its records, so serve the
@@ -89,6 +104,16 @@ export interface MockNexusOptions {
   alwaysMore?: boolean;
   /** Plain strings for reference fields, as the fixture stores them (the default is real nexus: `{link, value}`). */
   flatReferences?: boolean;
+  /**
+   * Serve `sys_update_version` rows built from the fixture's update_xml rows (the default: none, as recorded).
+   * `application` also gives them the scope's `application`, as newer releases do; `some-application` gives it
+   * to the rows of every other update name only.
+   */
+  versions?: boolean | 'application' | 'some-application';
+  /** What `sn_session_context` answers (default: user admin). */
+  sessionContext?: unknown;
+  /** Extra `sys_update_xml` rows for the scope, after the fixture's. */
+  extraUpdateXml?: Rec[];
 }
 
 /** Fields real nexus returns as references, besides any other field holding a sys_id. */
@@ -133,7 +158,7 @@ export async function startMockNexus(opts: MockNexusOptions = {}): Promise<MockN
   const query = (a: Record<string, unknown>) => {
     const table = String(a.table ?? '');
     if (opts.failTables?.includes(table)) return { success: false, error: `Insufficient rights to query ${table}` };
-    let rows = tableRows(fx, table, opts.unrecorded ?? 'inventory').filter(r => matches(r, a.query as string | undefined));
+    let rows = tableRows(fx, table, opts.unrecorded ?? 'inventory', opts.versions, opts.extraUpdateXml).filter(r => matches(r, a.query as string | undefined));
     const order = typeof a.order_by === 'string' ? a.order_by : undefined;
     if (order) {
       const desc = order.startsWith('-');
@@ -155,7 +180,7 @@ export async function startMockNexus(opts: MockNexusOptions = {}): Promise<MockN
     switch (tool) {
       case 'sn_query_table': return query(a);
       case 'sn_get_instance_info': return { success: true, data: { ...fx.instance } };
-      case 'sn_session_context': return { success: true, data: { user_name: 'admin', roles: ['admin'] } };
+      case 'sn_session_context': return opts.sessionContext ?? { success: true, data: { user_name: 'admin', roles: ['admin'] } };
       case 'sn_get_table_metadata': return { success: true, data: { table: a.table } };
       case 'tool_search': {
         const q = String(a.query ?? '');
