@@ -82,7 +82,7 @@ const rowKey = (r: SnRecord): string => `${r.sys_id}|${r.sys_updated_on ?? ''}|$
 const keyTime = (key: string): number => snTime(key.split('|')[1]);
 
 /** Cursors for a first run: the latest time the pull saw, in each source, and every row it saw near it. */
-export function initialState(scope: string, updateXml: SnRecord[], inventory: InventoryRow[], overlapMs = DEFAULT_OVERLAP_MS): PollState {
+export function initialState(scope: string, updateXml: SnRecord[], inventory: InventoryRow[], overlapMs = DEFAULT_OVERLAP_MS, full?: Map<string, SnRecord>): PollState {
   const xml = maxTime(updateXml.map(r => r.sys_updated_on));
   const meta = maxTime(inventory.map(r => r.sys_updated_on));
   const all = maxTime([xml, meta]);
@@ -91,7 +91,12 @@ export function initialState(scope: string, updateXml: SnRecord[], inventory: In
   return {
     version: 1, scope,
     cursors: { ...(xml ? { updateXml: xml } : {}), ...(meta ? { metadata: meta } : {}), ...(all ? { deleted: all } : {}) },
-    seen: { updateXml: near(updateXml, xml), metadata: near(inventory as unknown as SnRecord[], meta), deleted: [] },
+    // Inventory rows carry no mod count; the pulled record (the same row, by its own class) does.
+    seen: {
+      updateXml: near(updateXml, xml),
+      metadata: near(inventory.map(r => ({ ...r, sys_mod_count: full?.get(r.sys_id)?.sys_mod_count ?? '' })) as unknown as SnRecord[], meta),
+      deleted: [],
+    },
   };
 }
 
@@ -172,10 +177,18 @@ export class ScopePoller {
     this.opts.onStatus?.({ name: `${this.ctx.scope.scope} on ${this.ctx.instance}`, state, since: this.now(), ...(detail ? { detail } : {}) });
   }
 
-  /** The query's lower bound: the cursor minus the overlap, or nothing on a first run. */
+  /**
+   * The query's lower bound: the cursor minus the overlap, or nothing on a first run. Once the instance's
+   * clock (this machine's, less the learned skew) is past the cursor plus the overlap, no late row can still
+   * land below the cursor, so the floor moves up to it and idle polls stop reading the last minute again.
+   */
   private floor(source: Source): number {
     const c = this.state.cursors[source];
-    return c ? snTime(c) - (this.opts.overlapMs ?? DEFAULT_OVERLAP_MS) : -Infinity;
+    if (!c) return -Infinity;
+    const at = snTime(c);
+    const overlap = this.opts.overlapMs ?? DEFAULT_OVERLAP_MS;
+    const instanceNow = this.now() - (this.state.skewMs ?? MIN_SKEW_MS);
+    return instanceNow > at + overlap ? at : at - overlap;
   }
 
   /**
@@ -192,9 +205,10 @@ export class ScopePoller {
   private advance(source: Source, rows: SnRecord[]): void {
     const latest = maxTime([this.state.cursors[source], ...rows.map(r => r.sys_updated_on)]);
     if (!latest) return;
-    const floor = snTime(latest) - (this.opts.overlapMs ?? DEFAULT_OVERLAP_MS);
+    this.state = { ...this.state, cursors: { ...this.state.cursors, [source]: latest } };
+    const floor = this.floor(source);
     const keys = [...new Set([...(this.state.seen?.[source] ?? []), ...rows.map(rowKey)])].filter(k => keyTime(k) >= floor);
-    this.state = { ...this.state, cursors: { ...this.state.cursors, [source]: latest }, seen: { ...this.state.seen, [source]: keys } };
+    this.state = { ...this.state, seen: { ...this.state.seen, [source]: keys } };
   }
 
   /** One poll. Throws NexusOfflineError when nexus does not answer; the mirror is then left as it was. */
@@ -216,8 +230,11 @@ export class ScopePoller {
     };
     this.polls++;
 
-    const xml = this.fresh('updateXml', await q('sys_update_xml', `application=${scopeId}${since('updateXml')}`, CHANGE_FIELDS));
+    // sys_metadata first: one transaction commits a record and its update_xml row, so a save seen here has its
+    // row in the read that follows. Read the other way round, a save committing in between would look like a
+    // change made outside update sets.
     const meta = this.fresh('metadata', await q('sys_metadata', `sys_scope=${scopeId}${since('metadata')}`, [...INVENTORY_FIELDS, 'sys_mod_count']));
+    const xml = this.fresh('updateXml', await q('sys_update_xml', `application=${scopeId}${since('updateXml')}`, CHANGE_FIELDS));
     let deletedRows: SnRecord[] = [];
     if (!this.deletesOff && this.polls % DELETES_EVERY === 1) {
       try {

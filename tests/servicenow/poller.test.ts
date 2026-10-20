@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, afterAll, afterEach, beforeAll, beforeEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,29 +34,59 @@ const xmlRow = (n: number, table: string, sysId: string, on: string, over: Recor
   update_set: SET, sys_created_by: 'admin', sys_updated_by: 'dev.one', sys_updated_on: on, payload: '', ...over,
 });
 
-/** Pulls the scope, writes the mirror with its change facts, and makes a poller on a second ("live") client. */
+/** The fixture's scope pulled once, and its mirror written once: each test gets a copy of both. */
+let base: { dir: string } & Pulled;
+type Pulled = Awaited<ReturnType<typeof pull>>;
+
+/** Pulls the scope and writes its mirror (with its change facts) under `into`. */
+async function pull(m: MockNexus, into: string) {
+  const c = new NexusClient({ url: m.url, instance: 'inmorphisdemo3', backoffMs: 1 });
+  try {
+    const scope = await resolveScope(c, 'x_snc_cc_offering');
+    const pulled = await pullScope(c, scope);
+    const rows = await readChangeRows(c, scope);
+    const names = await updateSetNames(c, rows);
+    const facts = changeFacts(rows, updateNameIndex(pulled.full), names);
+    const { files, manifest } = layoutMirror({ instance: 'inmorphisdemo3', scope, ...pulled, rootAbs: snRoot(into), facts });
+    writeMirror(snRoot(into), files, manifest);
+    return { scope, pulled, rows, names, facts };
+  } finally { await c.close(); }
+}
+
+beforeAll(async () => {
+  const m = await startMockNexus();
+  m.live.rows.sys_update_set = [{ sys_id: SET, name: 'Card refresh' }, { sys_id: SET2, name: 'Fixes' }];
+  const into = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lm-snp-base-')));
+  try { base = { dir: into, ...(await pull(m, into)) }; } finally { await m.close(); }
+});
+afterAll(() => { if (base) rmTree(base.dir); });
+
+/**
+ * A copy of the pulled mirror, with a poller on a second ("live") client of a fresh mock. With update_xml rows of
+ * its own, the scope is pulled and written again, since those rows change what the pull writes.
+ */
 async function setup(extraUpdateXml: Record<string, string>[] = [], mockOpts: Parameters<typeof startMockNexus>[0] = {}) {
   const m = await startMockNexus({ extraUpdateXml, ...mockOpts });
   open.push(m);
   m.live.rows.sys_update_set = [{ sys_id: SET, name: 'Card refresh' }, { sys_id: SET2, name: 'Fixes' }];
-  const c = new NexusClient({ url: m.url, instance: 'inmorphisdemo3', backoffMs: 1 });
-  open.push(c);
-  const scope = await resolveScope(c, 'x_snc_cc_offering');
-  const pulled = await pullScope(c, scope);
-  const rows = await readChangeRows(c, scope);
-  const names = await updateSetNames(c, rows);
-  const facts = changeFacts(rows, updateNameIndex(pulled.full), names);
   const root = snRoot(dir);
-  const { files, manifest } = layoutMirror({ instance: 'inmorphisdemo3', scope, ...pulled, rootAbs: root, facts });
-  writeMirror(root, files, manifest);
+  let got: Pulled;
+  if (extraUpdateXml.length) got = await pull(m, dir);
+  else {
+    linkTree(snRoot(base.dir), root);
+    got = structuredClone({ scope: base.scope, pulled: base.pulled, rows: base.rows, names: base.names, facts: base.facts });
+  }
+  const { scope, pulled, rows, names, facts } = got;
   const live = new NexusClient({ url: m.url, instance: 'inmorphisdemo3', attempts: 1, backoffMs: 1 });
   open.push(live);
   const statuses: SourceStatus[] = [];
   const skews: number[] = [];
   const warnings: string[] = [];
   const firstPoll: string[] = [];
-  const poller = new ScopePoller(live, { instance: 'inmorphisdemo3', scope, inventory: pulled.inventory, full: pulled.full, facts, setNames: names }, initialState(scope.scope, rows, pulled.inventory), {
-    root, intervalMs: 30, onStatus: s => statuses.push(s), onSkew: ms => skews.push(ms), warn: w => warnings.push(w), onFirstPoll: l => firstPoll.push(...l),
+  // Instance time, as the poller sees it: just after the saves these tests make.
+  const clock = { t: Date.parse('2026-10-20T12:00:30Z') };
+  const poller = new ScopePoller(live, { instance: 'inmorphisdemo3', scope, inventory: pulled.inventory, full: pulled.full, facts, setNames: names }, initialState(scope.scope, rows, pulled.inventory, undefined, pulled.full), {
+    root, intervalMs: 30, onStatus: s => statuses.push(s), onSkew: ms => skews.push(ms), warn: w => warnings.push(w), onFirstPoll: l => firstPoll.push(...l), now: () => clock.t,
   });
   open.push({ close: async () => poller.stop() });
   const fileOf = (sysId: string) => readManifest(root, scope.scope)!.records[sysId]?.path;
@@ -68,7 +98,7 @@ async function setup(extraUpdateXml: Record<string, string>[] = [], mockOpts: Pa
     m.live.rows.sys_metadata = [...(m.live.rows.sys_metadata ?? []).filter(r => r.sys_id !== rec.sys_id),
       { sys_id: rec.sys_id, sys_class_name: table, sys_name: rec.sys_name, sys_updated_on: on, sys_updated_by: 'dev.one', sys_scope: scope.sys_id, sys_mod_count: mod }];
   };
-  return { m, scope, pulled, root, poller, statuses, skews, fileOf, read, facts, warnings, firstPoll, save };
+  return { m, scope, pulled, root, poller, statuses, skews, fileOf, read, facts, warnings, firstPoll, save, clock };
 }
 
 describe('change facts in the mirror', () => {
@@ -112,9 +142,12 @@ describe('live polling', { timeout: 15_000 * TIME_SCALE }, () => {
     m.calls.length = 0;
     const first = await poller.tick(); // the first poll also reads deletes
     expect(first).toMatchObject({ changed: [], deleted: [], queries: 3, written: null });
-    // It says what it asked: from a minute before each cursor, ordered by time then sys_id.
+    // It says what it asked, sys_metadata first, ordered by time then sys_id (verified live, as is the UTC
+    // reading of the literal). The pull's last change is long past, so no late row can still come: the floor
+    // is the cursor itself.
     expect(firstPoll).toHaveLength(3);
-    expect(firstPoll[0]).toMatch(/^sys_update_xml: application=\w+\^sys_updated_on>=2026-07-16 16:57:14\^ORDERBYsys_updated_on\^ORDERBYsys_id -> \d+ rows$/);
+    expect(firstPoll[0]).toMatch(/^sys_metadata: sys_scope=\w+\^sys_updated_on>=\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\^ORDERBYsys_updated_on\^ORDERBYsys_id -> \d+ rows$/);
+    expect(firstPoll[1]).toMatch(/^sys_update_xml: application=\w+\^sys_updated_on>=2026-07-16 16:58:14\^ORDERBYsys_updated_on\^ORDERBYsys_id -> 5 rows$/); // the cursor second, already applied
     const idle = await poller.tick();
     expect(idle).toMatchObject({ changed: [], deleted: [], queries: 2, written: null });
     expect(new Set(m.calls.map(c => c.inner ?? c.tool))).toEqual(new Set(['sn_query_table']));
@@ -139,6 +172,47 @@ describe('live polling', { timeout: 15_000 * TIME_SCALE }, () => {
     m.live.rows.sys_update_xml.push(xmlRow(11, 'sp_widget', widget.sys_id, '2026-10-20 12:00:05', { update_set: SET2 }));
     expect((await poller.tick()).changed).toEqual([widget.sys_id]);
     expect(JSON.parse(read(fileOf(widget.sys_id)!)).sys_update_set).toEqual({ value: SET2, display_value: 'Fixes' });
+  });
+
+  it('reads from a minute before the cursor until the instance clock is past that minute', async () => {
+    const { m, poller, save, clock } = await setup();
+    save(90, 'sys_script', rule, '2026-10-20 12:00:05');
+    await poller.tick();
+    const xmlQueries = () => m.calls.map(c => (c.args.args ?? c.args) as { table?: string; query?: string }).filter(a => a.table === 'sys_update_xml').map(a => a.query);
+    m.calls.length = 0;
+    await poller.tick();
+    expect(xmlQueries().at(-1)).toContain('sys_updated_on>=2026-10-20 11:59:05^');
+    clock.t = Date.parse('2026-10-20T12:01:30Z'); // a minute past the cursor, plus the 5 s skew margin
+    await poller.tick();
+    expect(xmlQueries().at(-1)).toContain('sys_updated_on>=2026-10-20 12:00:05^');
+    expect((await poller.tick()).changed).toEqual([]);
+    // A burst: a new save moves the cursor, and while the instance clock is within a minute of it, every poll
+    // reads from a minute back again.
+    save(91, 'sp_widget', widget, '2026-10-20 12:01:25');
+    expect((await poller.tick()).changed).toEqual([widget.sys_id]);
+    for (let i = 0; i < 2; i++) {
+      await poller.tick();
+      expect(xmlQueries().at(-1)).toContain('sys_updated_on>=2026-10-20 12:00:25^');
+    }
+  });
+
+  it('reads sys_metadata before sys_update_xml, so a save committing between the two keeps its update set', async () => {
+    const { m, poller, fileOf, read, save } = await setup();
+    // The save commits between the two reads, whichever comes second. Read the other way round, the poll sees
+    // the sys_metadata row without its update_xml row, and the save looks made outside update sets.
+    const asked: string[] = [];
+    m.live.onQuery = table => {
+      if ((table !== 'sys_metadata' && table !== 'sys_update_xml') || asked.includes(table)) return;
+      asked.push(table);
+      if (asked.length === 2) save(95, 'sys_script', rule, '2026-10-20 12:00:20', { script: '// between the reads' });
+    };
+    await poller.tick();
+    // The row is seen; the record (already mirrored) is read in full with its update set.
+    expect(readHeader(read(fileOf(rule.sys_id)!))).toMatchObject({ updateSet: SET, updateSetName: 'Card refresh' });
+    m.live.onQuery = undefined;
+    // The next poll sees the sys_metadata row too, and the update set stays.
+    await poller.tick();
+    expect(readHeader(read(fileOf(rule.sys_id)!))).toMatchObject({ updateSet: SET, updatedOn: '2026-10-20 12:00:20' });
   });
 
   it('applies a record saved twice in one second, though its update_xml row is rewritten in place', async () => {
@@ -356,9 +430,54 @@ describe('reading the SkyForge log as it grows', () => {
     // Rotated: read again from the top.
     fs.writeFileSync(f, `${write('13:00:00')}\n`);
     expect((await tail.update())?.calls.map(c => [c.line, c.host])).toEqual([[1, undefined]]);
+    // Rotated to a new file that is already longer than the offset: the new identity resets it all the same.
+    const moved = `${f}.1`;
+    fs.renameSync(f, moved);
+    fs.writeFileSync(f, `${write('14:00:00')}\n${write('14:00:01')}\n${write('14:00:02')}\n`);
+    expect((await tail.update())?.calls.map(c => c.line)).toEqual([1, 2, 3]);
+    // Bytes, not characters: a multi-byte character before the line end keeps the offset right.
+    fs.appendFileSync(f, `${write('14:00:03')}, name=Café\n`);
+    fs.appendFileSync(f, `${write('14:00:04')}\n`);
+    expect((await tail.update())?.calls.map(c => c.line)).toEqual([1, 2, 3, 4, 5]);
     expect(await new LogTail(path.join(dir, 'missing.log')).update()).toBeNull();
   });
 });
+
+describe('the poll state file', () => {
+  it('takes over a state.json from an earlier build once, then removes it', () => {
+    const root = snRoot(dir);
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, 'state.json'), JSON.stringify({ version: 1, scope: 'x_app', cursors: { updateXml: '2026-10-20 12:00:00' }, skewMs: 7000 }));
+    expect(readPollState(root, 'x_app')).toMatchObject({ scope: 'x_app', cursors: { updateXml: '2026-10-20 12:00:00' }, skewMs: 7000 });
+    expect(fs.existsSync(path.join(root, 'state.json'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'x_app.state.json'))).toBe(true);
+    expect(readPollState(root, 'x_app')?.skewMs).toBe(7000);
+  });
+
+  it("removes a state.json from an earlier build that names another scope, and takes nothing from it", () => {
+    const root = snRoot(dir);
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, 'state.json'), JSON.stringify({ version: 1, scope: 'x_app', cursors: { updateXml: '2026-10-20 12:00:00' } }));
+    expect(readPollState(root, 'x_other')).toBeNull();
+    expect(fs.existsSync(path.join(root, 'state.json'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'x_other.state.json'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'x_app.state.json'))).toBe(false);
+  });
+});
+
+/**
+ * Gives `to` the files of `from` as hard links, which is several times faster than copying the mirror's 1,500
+ * small files. Safe here: the writer replaces a file by renaming a new one over it, never writing into it, so a
+ * test's writes never reach the shared copy.
+ */
+function linkTree(from: string, to: string): void {
+  fs.mkdirSync(to, { recursive: true });
+  for (const e of fs.readdirSync(from, { withFileTypes: true })) {
+    const [a, b] = [path.join(from, e.name), path.join(to, e.name)];
+    if (e.isDirectory()) linkTree(a, b);
+    else try { fs.linkSync(a, b); } catch { fs.copyFileSync(a, b); }
+  }
+}
 
 async function until(ok: () => boolean, ms = 5000): Promise<void> {
   const end = Date.now() + ms;

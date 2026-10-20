@@ -435,32 +435,39 @@ export async function readLogFile(file: string, range?: { from: number; to: numb
 
 /**
  * SkyForge's log, read as it grows: the first read takes the whole file, later reads only the bytes added since,
- * up to the last complete line. The reader keeps its state (instance, users, open calls, line numbers) between
- * reads. A file that got shorter was rotated or truncated: it is read again from the start.
+ * up to the last complete line. Reads stream in chunks, so a large log is never one string. The reader keeps its
+ * state (instance, users, open calls, line numbers) between reads. A file that got shorter, or is another file
+ * now (a new inode or birth time: rotated), is read again from the start.
  */
 export class LogTail {
   private reader = new LogReader();
   private offset = 0;
+  private identity = '';
   constructor(private readonly file: string) {}
 
   /** Reads what was added; returns the scan so far, or null when the file does not exist. */
   async update(): Promise<LogScan | null> {
-    let size: number;
-    try { size = fs.statSync(this.file).size; } catch { return null; }
-    if (size < this.offset) { this.reader = new LogReader(); this.offset = 0; }
-    if (size > this.offset) {
-      const text = await new Promise<string>((resolve, reject) => {
-        const chunks: Buffer[] = [];
-        fs.createReadStream(this.file, { start: this.offset, end: size - 1 }).on('data', c => chunks.push(c as Buffer)).on('end', () => resolve(Buffer.concat(chunks).toString('utf8'))).on('error', reject);
-      });
-      const last = text.lastIndexOf('\n');
-      if (last >= 0) {
-        const done = text.slice(0, last);
-        this.offset += Buffer.byteLength(text.slice(0, last + 1));
-        for (const line of done.split('\n')) this.reader.add(line.replace(/\r$/, ''));
-      }
-    }
+    let st: fs.Stats;
+    try { st = fs.statSync(this.file); } catch { return null; }
+    const identity = `${st.ino}:${st.birthtimeMs}`;
+    if (st.size < this.offset || (this.identity && identity !== this.identity)) { this.reader = new LogReader(); this.offset = 0; }
+    this.identity = identity;
+    if (st.size > this.offset) await this.readFrom(this.offset, st.size);
     return this.reader.result();
+  }
+
+  /** Feeds every complete line in [start, end) to the reader; the offset moves past the last newline byte. */
+  private async readFrom(start: number, end: number): Promise<void> {
+    let carry: Buffer = Buffer.alloc(0);
+    const stream = fs.createReadStream(this.file, { start, end: end - 1 });
+    for await (const chunk of stream) {
+      const buf: Buffer = carry.length ? Buffer.concat([carry, chunk as Buffer]) : (chunk as Buffer);
+      const nl = buf.lastIndexOf(0x0a);
+      if (nl < 0) { carry = buf; continue; }
+      for (const line of buf.subarray(0, nl).toString('utf8').split('\n')) this.reader.add(line.replace(/\r$/, ''));
+      this.offset += nl + 1;
+      carry = buf.subarray(nl + 1);
+    }
   }
 }
 

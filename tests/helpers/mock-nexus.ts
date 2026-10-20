@@ -147,7 +147,7 @@ export interface MockNexus {
    * Changes made while the mock runs, as a live poll sees them: rows per table, read on every query, that add
    * to the fixture's or replace a row with the same sys_id. `down` makes every request fail with 503.
    */
-  live: { rows: Record<string, Rec[]>; down: boolean };
+  live: { rows: Record<string, Rec[]>; down: boolean; onQuery?: (table: string) => void };
   close(): Promise<void>;
 }
 
@@ -175,6 +175,7 @@ export async function startMockNexus(opts: MockNexusOptions = {}): Promise<MockN
   const query = (a: Record<string, unknown>) => {
     const table = String(a.table ?? '');
     if (opts.failTables?.includes(table)) return { success: false, error: `Insufficient rights to query ${table}` };
+    live.onQuery?.(table); // a test can commit rows between two queries
     let rows = rowsOf(table).filter(r => matches(r, a.query as string | undefined));
     const order = typeof a.order_by === 'string' ? a.order_by : undefined;
     if (order) {
