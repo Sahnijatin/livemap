@@ -84,4 +84,4 @@ Because of that condition, LiveMap is not open source as the OSI defines it. Thi
 
 The Map and Schema views are drawn with [React Flow](https://reactflow.dev) (MIT license) and laid out with [ELK](https://eclipse.dev/elk/) through elkjs (EPL-2.0 license). Motion uses [Framer Motion](https://github.com/motiondivision/motion) (framer-motion, MIT license), and the ⌘K palette uses [cmdk](https://github.com/pacocoursey/cmdk) (MIT license).
 
-The build writes `THIRD_PARTY_NOTICES.md` to `dist/` and `dist/ui/`. It lists every package LiveMap includes or installs, with its license text, and the source of elkjs (https://github.com/kieler/elkjs).
+The build writes `THIRD_PARTY_NOTICES.md` to `dist/`, `dist/ui/` and `dist/ui-export/`. It lists every package and parser grammar LiveMap includes or installs, with its license text, and the source of elkjs (https://github.com/kieler/elkjs). An exported replay carries a short license comment with the same elkjs link.

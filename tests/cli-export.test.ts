@@ -64,6 +64,8 @@ describe('livemap export', () => {
     expect(html).toMatch(/^<!doctype html>/i);
     expect(html).toContain('id="livemap-data"');
     expect(html).not.toContain(root);
+    // The replay travels alone, so it carries the license comment with the elkjs source.
+    expect(html).toContain('elkjs (EPL-2.0, source: https://github.com/kieler/elkjs)');
   });
 
   it('says "1 file" for one file', async () => {
