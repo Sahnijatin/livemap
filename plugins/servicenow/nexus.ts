@@ -224,14 +224,14 @@ export class NexusClient {
    * Runs an allowlisted tool through `tool_execute`. When nexus has not enabled the tool yet, it is found with
    * `tool_search` (which enables it) and the call is tried once more.
    */
-  async execute(tool: string, args: Obj = {}): Promise<unknown> {
+  async execute(tool: string, args: Obj = {}, deadline?: Deadline): Promise<unknown> {
     try {
-      return await this.call(GATEWAY, { tool, args });
+      return await this.call(GATEWAY, { tool, args }, deadline);
     } catch (e) {
       if (!(e instanceof NexusToolError) || this.enabled.has(tool) || !NOT_ENABLED.test(e.message)) throw e;
       this.enabled.add(tool);
-      await this.call('tool_search', { query: tool, limit: 5 });
-      return this.call(GATEWAY, { tool, args });
+      await this.call('tool_search', { query: tool, limit: 5 }, deadline);
+      return this.call(GATEWAY, { tool, args }, deadline);
     }
   }
 

@@ -88,7 +88,7 @@ A second `livemap sn` on the same folder updates the mirror in place: unchanged 
 
 After the mirror, LiveMap reads the scope's change history and writes it to `.livemap/sn/<scope>.history.json`, one dated event per save, oldest first, with the ServiceNow user who made it.
 
-- **Sources.** It reads `sys_update_version` by the scope's application, and when the instance has no such rows, by every update name the scope uses. Records with no versions fall back to their `sys_update_xml` rows.
+- **Sources.** It reads `sys_update_version` by the scope's application, then by update name for the scope's update_xml names that got no versions that way. When the instance has no versions by application, it looks up every update name the scope uses. Records with no versions fall back to their `sys_update_xml` rows.
 - **Times.** An update_xml row is dated by the save time in its payload, since the row itself can be written again later. When it was written well after that save (an update set capture, for example), the timeline also gets a `captured` event at the row's time. The same save written twice is one event.
 - **What is kept.** Only times, names and authors. Payloads are parsed for those and dropped. Payloads of system properties and of classes with password fields are never read, and credential records are skipped.
 - **Time limit.** The import stops after 90 seconds, even partway through a query, with a warning and keeps what it read. A failure in the import is a warning too: the mirror and the UI go on without history.
@@ -100,7 +100,7 @@ Each save is then matched to SkyForge's log (`--skyforge-log`):
 | `log` | One tool call names the record: its sys_id for an update or delete, or its table and name for a create. |
 | `likely` | Several calls name it, the one call that names it ran on an unknown instance, or calls only share its table and time. All candidates are kept. A table and time match is never `log`. |
 
-A table and time match (or a background script) counts only when the save's author is the ServiceNow user SkyForge works as. LiveMap learns that user from `servicenow_username=` in the log, else from nexus (`sn_session_context`). When it knows neither, such matches are marked `author not checked`. Saves by other users match only calls that name them. This check cannot tell people apart when everyone, SkyForge included, signs in as one shared account such as `admin`; give SkyForge its own ServiceNow user to get the most from it.
+A table and time match (or a background script) counts only when the save's author is the ServiceNow user SkyForge works as. LiveMap asks nexus for that user (`sn_session_context`, within the import's time limit). When nexus cannot say, it uses a `servicenow_username=` the log gave while it was on the same instance; the log can name other users on other instances. When it knows neither, such matches are marked `author not checked`. Saves by other users match only calls that name them. This check cannot tell people apart when everyone, SkyForge included, signs in as one shared account such as `admin`; give SkyForge its own ServiceNow user to get the most from it.
 | `history` | No call matches. The event keeps its ServiceNow author. |
 
 - **Window.** A call can match a save that comes up to 2 seconds before it starts and up to `--log-window` seconds after it ends.

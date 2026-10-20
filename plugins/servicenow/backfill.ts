@@ -4,7 +4,7 @@
  * name), and system properties are read without their values. A class whose query fails keeps its
  * inventory fields only, marked partial, and the pull goes on.
  */
-import { NexusToolError, type NexusClient, type SnRecord } from './nexus.js';
+import { NexusToolError, type Deadline, type NexusClient, type SnRecord } from './nexus.js';
 import { WITHHELD_CLASS, type InventoryRow, type ScopeInfo } from './mirror.js';
 
 export const INVENTORY_FIELDS = ['sys_id', 'sys_class_name', 'sys_name', 'sys_created_on', 'sys_updated_on', 'sys_updated_by'];
@@ -98,9 +98,9 @@ export async function pullScope(client: NexusClient, scope: ScopeInfo, opts: Pul
  * The ServiceNow user nexus works as, from `sn_session_context` (lowercased); null when it cannot say. Any
  * failure reads as unknown: history attribution then marks table and time matches `author not checked`.
  */
-export async function sessionUser(client: NexusClient): Promise<string | null> {
+export async function sessionUser(client: NexusClient, deadline?: Deadline): Promise<string | null> {
   try {
-    const body = await client.execute('sn_session_context') as Record<string, unknown> | null;
+    const body = await client.execute('sn_session_context', {}, deadline) as Record<string, unknown> | null;
     const d = (body && typeof body === 'object' && body.data && typeof body.data === 'object' ? body.data : body ?? {}) as Record<string, unknown>;
     const s = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim().toLowerCase() : undefined);
     const u = d.user && typeof d.user === 'object' ? d.user as Record<string, unknown> : {};

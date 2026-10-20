@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import type { NexusClient, SnRecord } from './nexus.js';
 import type { InventoryRow, Manifest, ScopeInfo } from './mirror.js';
-import { importHistory, type HistoryEvent, type HistoryOptions, type HistoryResult } from './history.js';
+import { sessionUser } from './backfill.js';
+import { DEFAULT_HISTORY_BUDGET_MS, importHistory, type HistoryEvent, type HistoryOptions, type HistoryResult } from './history.js';
 import { DEFAULT_LOG_WINDOW_MS, instanceName, matchHistory, readLogFile, type LogScan, type MatchCounts } from './skyforge-log.js';
 
 export interface TimelineOptions {
@@ -16,7 +17,10 @@ export interface TimelineOptions {
   /** Full records from the pull, by sys_id. */
   full?: Map<string, SnRecord>;
   history?: Omit<HistoryOptions, 'full'>;
-  /** The ServiceNow user SkyForge works as, when known (see `sessionUser`). */
+  /**
+   * The ServiceNow user nexus works as. Left out, it is asked of nexus (`sn_session_context`) when there is a
+   * log to match, within the history's time budget.
+   */
   agentUser?: string | null;
 }
 
@@ -34,7 +38,10 @@ export interface TimelineDoc {
     /** Write calls made while the log was connected to another instance, or to none it named. */
     otherInstance: number; unknownInstance: number;
     /** The agent's ServiceNow user, and where it came from. */
-    agentUser: string | null; agentUserFrom: 'log' | 'session' | null } | null;
+    /** The agent's ServiceNow user the matching used, and where it came from. */
+    agentUser: string | null; agentUserFrom: 'log' | 'session' | null;
+    /** Every agent user seen on this instance: nexus's first, then the log's. */
+    agentUsers: string[] } | null;
   counts: MatchCounts;
   events: TimelineEvent[];
 }
@@ -48,7 +55,12 @@ export function homeRelative(file: string): string {
 }
 
 export async function buildTimeline(client: NexusClient, scope: ScopeInfo, inventory: InventoryRow[], manifest: Manifest, opts: TimelineOptions): Promise<TimelineResult> {
-  const history = await importHistory(client, scope, inventory, { ...opts.history, full: opts.full });
+  // One budget for the whole step: the nexus user lookup and the import share it.
+  const now = opts.history?.now ?? Date.now;
+  const budget = opts.history?.budgetMs ?? DEFAULT_HISTORY_BUDGET_MS;
+  const start = now();
+  const agentUser = opts.agentUser !== undefined ? opts.agentUser : opts.logFile ? await sessionUser(client, { at: start + budget, now }) : null;
+  const history = await importHistory(client, scope, inventory, { ...opts.history, full: opts.full, budgetMs: Math.max(0, budget - (now() - start)) });
   const windowMs = opts.windowMs ?? DEFAULT_LOG_WINDOW_MS;
   const events: TimelineEvent[] = history.events.map(e => {
     const path = e.sysId ? manifest.records[e.sysId]?.path : undefined;
@@ -65,8 +77,8 @@ export async function buildTimeline(client: NexusClient, scope: ScopeInfo, inven
   const calls = log?.calls ?? [];
   const otherInstance = calls.filter(c => c.host && instance && c.host !== instance).length;
   const unknownInstance = calls.filter(c => !c.host || !instance).length;
-  const agentUser = opts.agentUser ?? null;
-  const fromLog = calls.find(c => c.user)?.user ?? null;
+  const logUsers = (instance && log?.agentUsers[instance]) || [];
+  const fromLog = logUsers[0] ?? null;
   const counts = matchHistory(events, calls, { windowMs, instance: manifest.instance || null, agentUser });
   const doc: TimelineDoc = {
     instance: manifest.instance,
@@ -77,7 +89,8 @@ export async function buildTimeline(client: NexusClient, scope: ScopeInfo, inven
     },
     log: opts.logFile
       ? { file: homeRelative(opts.logFile), found: log !== null, lines: log?.lines ?? 0, parsed: log?.parsed ?? 0, calls: calls.length, windowMs, otherInstance, unknownInstance,
-        agentUser: fromLog ?? agentUser, agentUserFrom: fromLog ? 'log' : agentUser ? 'session' : null }
+        agentUser: agentUser ?? fromLog, agentUserFrom: agentUser ? 'session' : fromLog ? 'log' : null,
+        agentUsers: [...new Set([...(agentUser ? [agentUser] : []), ...logUsers])] }
       : null,
     counts,
     events,

@@ -46,7 +46,8 @@ export interface LogCall {
   /** The instance the log last connected to before this call; unset when unknown or when another instance
    *  connected in the 10 minutes before it (several SkyForge processes write the same file). */
   host?: string;
-  /** The ServiceNow user SkyForge last said it works as (`servicenow_username=`), lowercased. */
+  /** The ServiceNow user SkyForge said it works as (`servicenow_username=`) on this call's instance, lowercased.
+   *  Set only when that was said while the log was on the same known instance. */
   user?: string;
 }
 
@@ -156,19 +157,20 @@ const MANAGED: Record<string, { tables: string[]; runs?: true }> = {
   sn_property_manager: { tables: ['sys_properties'] },
   sn_rest_message_manage: { tables: ['sys_rest_message', 'sys_rest_message_fn'] },
   sn_scheduled_job_manage: { tables: ['sysauto_script'], runs: true },
-  sn_scripted_rest_api: { tables: ['sys_ws_definition', 'sys_ws_operation'] },
   sn_uib_page_manage: { tables: ['sys_ux_screen'] },
-  sn_manage_workspace_list_config: { tables: [] },
   sn_manage_workspace_navigation: { tables: [] },
+  sn_configure_macroponent: { tables: [] },
   sn_plugin_manage: { tables: [], runs: true },
 };
-/** Writes with no action argument: their kind, and the tables they write (none: any table). */
+/** Writes with no action argument: their kind, and the tables they write (none: any table). A read action, if
+ *  one is given after all, still makes the call a read. */
 const DIRECT: Record<string, { kind: LogCall['kind']; tables: string[] }> = {
   sn_decision_create: { kind: 'create', tables: ['sys_decision'] },
   sn_par_create_dashboard: { kind: 'create', tables: [] },
   sn_par_update_dashboard: { kind: 'update', tables: [] },
   sn_wire_dashboard_home: { kind: 'update', tables: [] },
-  sn_configure_macroponent: { kind: 'update', tables: [] },
+  sn_scripted_rest_api: { kind: 'update', tables: ['sys_ws_definition', 'sys_ws_operation'] },
+  sn_manage_workspace_list_config: { kind: 'update', tables: [] },
   sn_assign_tool_to_agent: { kind: 'update', tables: [] },
   sn_bulk_update: { kind: 'update', tables: [] },
   sn_cleanup_workspace_t2e: { kind: 'script', tables: [] },
@@ -278,9 +280,12 @@ export function toCall(line: number, at: number, outer: string, args: Record<str
     if (kind === 'run') call = spec.runs ? make('script', [], { anyTable: true }) : make('update', spec.tables, spec.tables.length ? {} : { anyTable: true });
     else if (kind) call = make(kind, spec.tables, spec.tables.length ? {} : { anyTable: true });
   } else if (DIRECT[tool]) {
+    const acted = action ? actionKind(action) : null;
+    if (action && !acted) return null;
     const spec = DIRECT[tool];
-    const tables = spec.tables.length ? spec.tables : tableArg && spec.kind !== 'script' ? [tableArg] : [];
-    call = make(spec.kind, tables, tables.length ? {} : { anyTable: true });
+    const kind = acted && acted !== 'run' ? acted : spec.kind;
+    const tables = spec.tables.length ? spec.tables : tableArg && kind !== 'script' ? [tableArg] : [];
+    call = make(kind, tables, tables.length ? {} : { anyTable: true });
   } else if (/^sn_update_set_/.test(tool)) {
     return null;
   } else if (/^sn_create_/.test(tool)) {
@@ -305,6 +310,8 @@ export interface LogScan {
   unknownTools: Record<string, number>;
   /** Instance hosts the log connected to. */
   hosts: string[];
+  /** Every ServiceNow user SkyForge said it works as, per instance. */
+  agentUsers: Record<string, string[]>;
 }
 
 /** Reads log lines (a whole file's text, or lines one by one) into write calls, completions paired. */
@@ -317,7 +324,9 @@ export class LogReader {
   /** The host of the last connect line (null: one LiveMap cannot name), and when each host last connected. */
   private host: string | null = null;
   private readonly connected = new Map<string, number>();
-  private user: string | undefined;
+  /** The ServiceNow user SkyForge said it works as, per instance it said so on. */
+  private readonly users = new Map<string, string>();
+  private readonly seen = new Map<string, Set<string>>();
   /** Starts per tool still waiting for a completion line. */
   private open = new Map<string, LogCall[]>();
   constructor(private readonly range?: { from: number; to: number }) {}
@@ -334,7 +343,12 @@ export class LogReader {
       const args = parseArgs(m[4]);
       // The ServiceNow user SkyForge works as, from scope and update set calls.
       const user = full(args.servicenow_username)?.toLowerCase();
-      if (user) this.user = user;
+      const here = this.hostAt(at);
+      if (user && here) {
+        this.users.set(here, user);
+        if (!this.seen.has(here)) this.seen.set(here, new Set());
+        this.seen.get(here)!.add(user);
+      }
       if (this.range && (at < this.range.from || at > this.range.to)) return;
       const call = toCall(line, at, m[3], args);
       if (!call) {
@@ -344,7 +358,8 @@ export class LogReader {
       }
       const host = this.hostAt(at);
       if (host) call.host = host;
-      if (this.user) call.user = this.user;
+      const agent = host ? this.users.get(host) : undefined;
+      if (agent) call.user = agent;
       this.calls.push(call);
       const list = this.open.get(call.tool) ?? [];
       list.push(call);
@@ -393,7 +408,12 @@ export class LogReader {
     return this.host;
   }
 
-  result(): LogScan { return { lines: this.lines, parsed: this.parsed, calls: this.calls, unknownTools: this.unknownTools, hosts: [...this.hosts].sort() }; }
+  result(): LogScan {
+    return {
+      lines: this.lines, parsed: this.parsed, calls: this.calls, unknownTools: this.unknownTools, hosts: [...this.hosts].sort(),
+      agentUsers: Object.fromEntries([...this.seen].map(([h, u]) => [h, [...u].sort()])),
+    };
+  }
 }
 
 export function parseLog(text: string, range?: { from: number; to: number }): LogScan {
@@ -432,7 +452,7 @@ export interface MatchOptions {
   windowMs?: number;
   /** The mirrored instance. Calls on another instance are dropped; calls on an unknown one stay `likely`. */
   instance: string | null;
-  /** The ServiceNow user SkyForge works as (from `sn_session_context`), when the log does not say. */
+  /** The ServiceNow user nexus works as on this instance (`sn_session_context`). It wins over the log's. */
   agentUser?: string | null;
 }
 
@@ -454,7 +474,7 @@ const KINDS: Record<HistoryEvent['kind'], LogCall['kind'][]> = {
  * - One naming candidate on a known instance: `log`, and that call is used up for table and time matches.
  *   Several, or one on an unknown instance: `likely`, with all of them. Candidates that name nothing (table
  *   and time only, or any table): `likely`, with all of them, never `log`, and only when the save's author is
- *   the agent's ServiceNow user (the call's `user`, else `agentUser`). With no known user they still count, as
+ *   the agent's ServiceNow user (`agentUser`, else the call's `user`). With no known user they still count, as
  *   `author not checked`. None: the event stays `history`.
  */
 export function matchHistory(events: HistoryEvent[], calls: LogCall[], opts: MatchOptions): MatchCounts {
@@ -477,7 +497,7 @@ export function matchHistory(events: HistoryEvent[], calls: LogCall[], opts: Mat
     const author = e.author.toLowerCase();
     /** A call that does not name the record is a candidate only when the save's author is the agent's user. */
     const loose = (c: LogCall) => {
-      const user = c.user ?? agentUser;
+      const user = agentUser ?? c.user;
       if (!user) unchecked = true;
       else if (user !== author) return;
       near.push(c);
@@ -519,7 +539,7 @@ export function matchHistory(events: HistoryEvent[], calls: LogCall[], opts: Mat
       e.confidence = 'likely';
       e.log = rest.map(ref);
       // A candidate whose user is unknown: the save may be anyone's.
-      const anyUnchecked = unchecked && rest.some(c => !(c.user ?? agentUser));
+      const anyUnchecked = unchecked && rest.some(c => !(agentUser ?? c.user));
       if (anyUnchecked) e.reason = 'author not checked';
       outcome = anyUnchecked ? 'authorUnchecked' : 'timeOnly';
     } else {

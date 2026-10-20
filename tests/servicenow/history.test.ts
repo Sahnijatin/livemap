@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pullScope, resolveScope } from '../../plugins/servicenow/backfill.js';
+import { pullScope, resolveScope, sessionUser } from '../../plugins/servicenow/backfill.js';
 import { importHistory, parsePayload, snTime, type HistoryEvent } from '../../plugins/servicenow/history.js';
 import { layoutMirror } from '../../plugins/servicenow/mirror.js';
 import { NexusClient, NexusDeadlineError } from '../../plugins/servicenow/nexus.js';
@@ -83,8 +83,8 @@ describe('history import from the BharatBank fixture', () => {
     m.calls.length = 0;
     const h = await importHistory(c, scope, pulled.inventory, { full: pulled.full });
     expect(h).toMatchObject({ versions: 183, versionsBy: 'application', fromUpdateXml: 0, xmlEvents: 0, captured: 0 });
-    // Skipping the name sweep is said out loud.
-    expect(h.warnings).toEqual([expect.stringMatching(/update name lookup is skipped/)]);
+    // Every update name had its versions, so nothing more was looked up and there is nothing to warn about.
+    expect(h.warnings).toEqual([]);
     // Each version row is its own save, even two of one record in the same second.
     expect(saves(h.events)).toHaveLength(183);
     expect(h.events.every(e => e.source === 'version')).toBe(true);
@@ -97,6 +97,19 @@ describe('history import from the BharatBank fixture', () => {
     expect(field.keys).toEqual(expect.arrayContaining(['bureau pull date', 'bureau_pull_date']));
     // Three queries in all: the probe, the versions, the update_xml rows.
     expect(h.queries).toBe(3);
+  });
+
+  it('looks up by name only the update names whose versions carry no application', async () => {
+    const { m, c } = await setup({ versions: 'some-application' });
+    const { scope, pulled } = await pull(c);
+    m.calls.length = 0;
+    const h = await importHistory(c, scope, pulled.inventory);
+    expect(h).toMatchObject({ versions: 183, versionsBy: 'application', fromUpdateXml: 0 });
+    expect(h.warnings).toEqual([expect.stringMatching(/^\d+ version rows carry no application and were found by update name$/)]);
+    // Only update_xml names went into the name lookup, never the whole inventory.
+    const asked = queriesOf(m, 'sys_update_version').filter(x => String(x.args.query).startsWith('nameIN'))
+      .flatMap(x => String(x.args.query).slice(6).split(','));
+    expect(asked.every(n => fx.sys_update_xml.some(r => r.name === n))).toBe(true);
   });
 
   it('falls back to update names when versions carry no application', async () => {
@@ -339,12 +352,15 @@ describe('SkyForge log parsing', () => {
     ['tool=sn_catalog_item_manager, action=update, sys_id=' + id, { kind: 'update', tables: ['sc_cat_item'], sysId: id }],
     ['tool=sn_catalog_item_manager, action=get, sys_id=' + id, null],
     ['tool=sn_cleanup_workspace_t2e, workspace=cards', { kind: 'script', anyTable: true }],
-    ['tool=sn_configure_macroponent, macroponent=card', { kind: 'update', anyTable: true }],
+    ['tool=sn_configure_macroponent, action=read, macroponent=card', null],
+    ['tool=sn_configure_macroponent, macroponent=card', null],
+    ['tool=sn_configure_macroponent, action=update, macroponent=card', { kind: 'update', anyTable: true }],
     ['tool=sn_decision_create, name=Card limits', { kind: 'create', tables: ['sys_decision'], names: ['card limits'] }],
     ['tool=sn_email_notification_manage, action=create, name=Approved', { kind: 'create', tables: ['sysevent_email_action'] }],
     ['tool=sn_email_notification_manage, action=delete, sys_id=' + id, { kind: 'delete', tables: ['sysevent_email_action'], sysId: id }],
     ['tool=sn_email_notification_manage, action=list', null],
     ['tool=sn_invoke_ai_agent, agent=triage', { kind: 'script', anyTable: true }],
+    ['tool=sn_manage_workspace_list_config, list=cards, columns=number', { kind: 'update', anyTable: true }],
     ['tool=sn_manage_workspace_list_config, action=update, list=cards', { kind: 'update', anyTable: true }],
     ['tool=sn_manage_workspace_list_config, action=get', null],
     ['tool=sn_manage_workspace_navigation, action=set_landing_page, workspace=cards', { kind: 'update', anyTable: true }],
@@ -358,7 +374,9 @@ describe('SkyForge log parsing', () => {
     ['tool=sn_scheduled_job_manage, action=create, name=Nightly', { kind: 'create', tables: ['sysauto_script'] }],
     ['tool=sn_scheduled_job_manage, action=run_now, sys_id=' + id, { kind: 'script', anyTable: true }],
     ['tool=sn_scheduled_job_manage, action=list', null],
+    ['tool=sn_scripted_rest_api, name=Cards API, base_path=/cards', { kind: 'update', tables: ['sys_ws_definition', 'sys_ws_operation'] }],
     ['tool=sn_scripted_rest_api, action=create, name=Cards API', { kind: 'create', tables: ['sys_ws_definition', 'sys_ws_operation'] }],
+    ['tool=sn_scripted_rest_api, action=list', null],
     ['tool=sn_uib_page_manage, action=create, name=Home', { kind: 'create', tables: ['sys_ux_screen'] }],
     ['tool=sn_uib_page_manage, action=list', null],
     ['tool=sn_wire_dashboard_home, dashboard_id=' + id, { kind: 'update', anyTable: true }],
@@ -428,7 +446,26 @@ describe('SkyForge log parsing', () => {
       '[2026-06-03T16:00:01.000Z] [INFO] [Tool] tool_execute | tool=sn_switch_application_scope, scope=x_app, servicenow_username=Agent.User',
       `[2026-06-03T16:00:02.000Z] [INFO] [Tool] tool_execute | tool=sn_record_manage, table=t, action=update, sys_id=${id}`,
     ].join('\n'));
-    expect(scan.calls.map(c => c.user)).toEqual([undefined, 'agent.user']);
+    expect(scan.calls.map(c => c.user)).toEqual([undefined, undefined]);
+  });
+  it('keeps each agent user to the instance it was named on', () => {
+    const t = (min: number) => new Date(Date.parse('2026-06-03T16:00:00Z') + min * 60_000).toISOString();
+    const write = (min: number) => `[${t(min)}] [INFO] [Tool] tool_execute | tool=sn_record_manage, table=t, action=update, sys_id=${id}`;
+    const scan = parseLog([
+      `[${t(0)}] [INFO] [Auth] ✅ Connected to acme.service-now.com`,
+      `[${t(1)}] [INFO] [Tool] tool_execute | tool=sn_switch_application_scope, scope=x_app, servicenow_username=Agent.User`,
+      write(2),
+      `[${t(20)}] [INFO] [Auth] ✅ Connected to other.service-now.com`,
+      `[${t(21)}] [INFO] [Tool] tool_execute | tool=sn_update_set_manage, action=switch, servicenow_username=other.bot`,
+      write(22),
+      `[${t(40)}] [INFO] [Auth] ✅ Connected to acme.service-now.com`,
+      write(41),
+      `[${t(42)}] [INFO] [Tool] tool_execute | tool=sn_switch_application_scope, scope=x_app, servicenow_username=second.bot`,
+      write(43),
+    ].join('\n'));
+    // Back on acme, its own user applies again, never the other instance's; a newer user replaces it.
+    expect(scan.calls.map(c => [c.host, c.user])).toEqual([['acme', 'agent.user'], ['other', 'other.bot'], ['acme', 'agent.user'], ['acme', 'second.bot']]);
+    expect(scan.agentUsers).toEqual({ acme: ['agent.user', 'second.bot'], other: ['other.bot'] });
   });
   it('reads every line of the fixture log', () => {
     const scan = parseLog(fx.mcpLogExcerpt.lines.join('\n'));
@@ -530,9 +567,10 @@ describe('matching history to the log', () => {
     const anyone = ev({ sysId: id, author: 'jane.dev', at: at0 + 20_000 });
     expect(matchHistory([anyone], [{ ...script, user: undefined }], I)).toMatchObject({ timeOnly: 0, authorUnchecked: 1 });
     expect(anyone).toMatchObject({ confidence: 'likely', reason: 'author not checked' });
-    // The nexus session's user stands in when the log does not say.
+    // The nexus session's user stands in when the log does not say, and wins when the log names someone else.
     const again = ev({ sysId: id, author: 'jane.dev', at: at0 + 20_000 });
     expect(matchHistory([again], [{ ...script, user: undefined }], { ...I, agentUser: 'admin' }).unmatched).toBe(1);
+    expect(matchHistory([again], [{ ...script, user: 'jane.dev' }], { ...I, agentUser: 'admin' }).unmatched).toBe(1);
   });
 
   it('uses an asymmetric window: about 2 s before the call starts, the window after it ends', () => {
@@ -620,6 +658,27 @@ describe('matching history to the log', () => {
     expect(t.log).toBeNull();
     expect(t.doc.log).toMatchObject({ found: false, lines: 0 });
     expect(t.doc.counts).toMatchObject({ matched: 0, unmatched: t.doc.counts.events });
+  });
+
+  it('asks nexus for its user within the budget, and reads several answer shapes', async () => {
+    expect(await sessionUser((await setup()).c)).toBe('admin');
+    expect(await sessionUser((await setup({ sessionContext: { success: true, data: { user: { user_name: 'Agent.Bot' } } } })).c)).toBe('agent.bot');
+    expect(await sessionUser((await setup({ sessionContext: { success: false, error: 'no session' } })).c)).toBeNull();
+    // Out of time: no call is made.
+    const { m, c } = await setup();
+    expect(await sessionUser(c, { at: 0, now: () => 1 })).toBeNull();
+    expect(m.calls.filter(x => (x.inner ?? x.tool) === 'sn_session_context')).toHaveLength(0);
+  });
+
+  it('uses the nexus user for matching and lists every agent user in the summary', async () => {
+    const { m, c } = await setup({ sessionContext: { success: true, data: { user_name: 'admin' } } });
+    const { scope, pulled, manifest } = await pull(c);
+    const f = path.join(dir, 'users.log');
+    fs.writeFileSync(f, [AUTH_LINE, '[2026-05-29T00:00:01.000Z] [INFO] [Tool] tool_execute | tool=sn_switch_application_scope, scope=x, servicenow_username=agent.two', ...fx.mcpLogExcerpt.lines].join('\n'));
+    const t = await buildTimeline(c, scope, pulled.inventory, manifest, { logFile: f, full: pulled.full });
+    expect(m.calls.some(x => (x.inner ?? x.tool) === 'sn_session_context')).toBe(true);
+    expect(t.doc.log).toMatchObject({ agentUser: 'admin', agentUserFrom: 'session', agentUsers: ['admin', 'agent.two'] });
+    expect(t.doc.counts).toEqual(FIXTURE_COUNTS);
   });
 
   it('stores the log path relative to the home folder', () => {

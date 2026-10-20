@@ -218,7 +218,6 @@ export async function importHistory(client: NexusClient, scope: ScopeInfo, inven
     if (probe.length && probe[0].application === scope.sys_id) {
       // Set first, so a budget stop mid-read still says where the partial versions came from.
       versionsBy = 'application';
-      warnings.push('sys_update_version has rows for this application, so the update name lookup is skipped; records whose versions carry no application fall back to sys_update_xml');
       for (const r of await q('sys_update_version', `application=${scope.sys_id}`, [...VERSION_FIELDS, 'application'])) {
         if (r.application === scope.sys_id && !withheld(tableOfUpdate(r.name, byUpdate), r.name)) versions.push(r);
       }
@@ -231,18 +230,24 @@ export async function importHistory(client: NexusClient, scope: ScopeInfo, inven
     xml = (await q('sys_update_xml', `application=${scope.sys_id}`, XML_FIELDS)).filter(r => !withheld(tableOfUpdate(r.name, byUpdate), r.name));
   });
 
-  // 3. No versions by application: look them up by every update name the scope uses.
-  if (!versionsBy && !partial) {
+  // 3. Versions by update name: every name the scope uses when none came by application, else only the
+  //    update_xml names the application read missed (versions written before the record joined the scope).
+  if (!partial) {
     const names = new Set<string>(xml.map(r => r.name));
-    for (const [u, r] of byUpdate) if (!WITHHELD_CLASS.test(r.sys_class_name)) names.add(u);
+    if (versionsBy) for (const v of versions) names.delete(v.name);
+    else for (const [u, r] of byUpdate) if (!WITHHELD_CLASS.test(r.sys_class_name)) names.add(u);
+    const before = versions.length;
     await tolerant('sys_update_version', async () => {
       for (const part of chunks([...names].sort(), chunk)) {
         for (const r of await q('sys_update_version', `nameIN${part.join(',')}`, VERSION_FIELDS)) {
           if (!withheld(tableOfUpdate(r.name, byUpdate), r.name)) versions.push(r);
         }
-        if (versions.length) versionsBy = 'name';
+        if (versions.length && !versionsBy) versionsBy = 'name';
       }
     });
+    if (versionsBy === 'application' && versions.length > before) {
+      warnings.push(`${versions.length - before} version rows carry no application and were found by update name`);
+    }
   }
   const versionNames = new Set(versions.map(v => v.name));
 
