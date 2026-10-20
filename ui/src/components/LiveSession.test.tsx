@@ -75,6 +75,14 @@ describe('LiveSession flags', () => {
     expect([...host.querySelectorAll('.gitrow b')].map(b => b.textContent)).toEqual(['Newer', 'Older']);
   });
 
+  it('orders commits made in the same second newest first, by the order LiveMap read them', () => {
+    const at = Math.floor(Date.now() / 1000) * 1000 - 5000;
+    const c = (id: number, text: string) => ({ id, agent: 'git' as const, sessionId: 'dev.user1', at, type: 'commit' as const, text, merge: false });
+    useStore.getState().apply({ type: 'agentEvents', events: [c(1, 'Add refund endpoint'), c(2, 'Feature work')] });
+    act(() => root.render(<LiveSession />));
+    expect([...host.querySelectorAll('.gitrow b')].map(b => b.textContent)).toEqual(['Feature work', 'Add refund endpoint']);
+  });
+
   it('shows no commits section without commits', () => {
     act(() => root.render(<LiveSession />));
     expect(host.querySelector('.gitlist')).toBeNull();

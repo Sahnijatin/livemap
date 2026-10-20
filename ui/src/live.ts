@@ -1,6 +1,5 @@
 import { useMemo } from 'react';
 import type { AgentEvent, AgentSession, AgentTool, ChangeSummary } from '@shared/types.js';
-import { classifyTool } from '@shared/tools.js';
 import { useStore } from './store';
 import { useNow } from './recent';
 
@@ -10,8 +9,15 @@ export const TOOL_FRESH_MS = 60_000;
 export const CHANGE_FRESH_MS = 10_000;
 const SCAN = 400;
 
-/** A tool call that writes: a write-family built-in, or an MCP tool the shared classifier marks as a write. */
-const isWriteTool = (tool: AgentTool): boolean => (tool.access ?? classifyTool(tool.inner ?? tool.name).access) === 'write';
+/**
+ * Built-in write tools (the write, edit, patch, notebook and shell families in src/shared/tools.ts), and write verbs
+ * as a part of a tool name. Only for tools without `access`: the server sets it on MCP and gateway calls, but not on
+ * built-in tools, nor on events recorded before it did. The full classifier would cost the main chunk about 5 kB.
+ */
+const WRITE_NAME = /^(write|write_file|create_file|edit|multiedit|replace|edit_file|str_replace|bash|shell|run_shell_command|exec_command|apply_patch|notebookedit)$|(^|[_.-])(create|update|delete|push|execute|set|edit|write|patch)([_.-]|$)/i;
+
+/** A tool call that writes: what the server says (`access`), else its name. */
+const isWriteTool = (tool: AgentTool): boolean => (tool.access ? tool.access === 'write' : WRITE_NAME.test(tool.inner ?? tool.name));
 
 export interface Target { path: string; since: number }
 
