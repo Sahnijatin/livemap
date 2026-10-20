@@ -159,3 +159,13 @@ export function ago(at: number, now: number): string {
 }
 
 export const clock = (at: number): string => new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+/** A time of day for today, with the date for other days ("Oct 3, 10:42 AM") and the year for other years. */
+export function when(at: number, now = Date.now()): string {
+  const d = new Date(at);
+  const n = new Date(now);
+  if (d.toDateString() === n.toDateString()) return clock(at);
+  return d.toLocaleString([], {
+    month: 'short', day: 'numeric', ...(d.getFullYear() === n.getFullYear() ? {} : { year: 'numeric' }), hour: 'numeric', minute: '2-digit',
+  });
+}

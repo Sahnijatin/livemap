@@ -5,9 +5,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { Ticks } from '@shared/history.js';
 import { useStore } from '../store';
 import { restHistorySource, setHistorySource, STATE_THROTTLE_MS, type HistorySource } from '../history';
-import { clock } from '../agents';
+import { clock, when } from '../agents';
 import { file, emptyDomain } from '../fixtures';
-import { Timeline } from './Timeline';
+import { RewoundBanner, Timeline } from './Timeline';
 import { FlagBox } from './FlagBox';
 import { PauseButton, Toolbar } from './Toolbar';
 import { LiveHead, LiveSession } from './LiveSession';
@@ -228,9 +228,26 @@ describe('Timeline', () => {
     render(<Timeline />);
     await flush();
     expect(host.querySelector('.tl-state')!.textContent).toBe('REWOUND');
-    expect(host.querySelector('.tl-time')!.textContent).toBe(clock(at));
+    expect(host.querySelector('.tl-time')!.textContent).toBe(when(at));
     expect([...host.querySelectorAll('button')].some(b => b.textContent === 'Back to live')).toBe(true);
-    expect(thumb().getAttribute('aria-valuetext')).toBe(`${clock(at)}, 4 events`);
+    expect(thumb().getAttribute('aria-valuetext')).toBe(`${when(at)}, 4 events`);
+  });
+
+  it('dates a past day on the label, the slider and the banner, and shows only the time for today', async () => {
+    const past = new Date(2025, 2, 3, 9, 5).getTime();
+    useStore.getState().rewind({ ...projectState(), seq: 70, at: past });
+    render(<><Timeline /><RewoundBanner /></>);
+    await flush();
+    expect(when(past)).not.toBe(clock(past));
+    expect(host.querySelector('.tl-time')!.textContent).toBe(when(past));
+    expect(thumb().getAttribute('aria-valuetext')).toBe(`${when(past)}, 4 events`);
+    expect(host.querySelector('.rw-banner')!.textContent).toContain(`Viewing ${when(past)}.`);
+
+    const today = Date.now() - 1000;
+    act(() => useStore.getState().rewind({ ...projectState(), seq: 70, at: today }));
+    await flush();
+    expect(host.querySelector('.tl-time')!.textContent).toBe(clock(today));
+    expect(host.querySelector('.rw-banner')!.textContent).toContain(`Viewing ${clock(today)}.`);
   });
 
   it('reserves the REWOUND side in both states, so the track keeps its width when a drag rewinds', async () => {
@@ -241,9 +258,10 @@ describe('Timeline', () => {
     expect(ghost().getAttribute('aria-hidden')).toBe('true');
     expect(ghost().querySelector('.g-state')!.textContent).toBe('REWOUND');
     expect(ghost().querySelector('.g-back')!.textContent).toBe('Back to live');
-    // The time slot is sized by the widest times (two-digit hours, morning and evening).
+    // The time slot is sized by the widest times (two-digit hours, morning and evening, and a date with its year).
     expect([...ghost().querySelectorAll('.g-time > span')].map(e => e.textContent)).toEqual([
       clock(new Date(2000, 0, 1, 10, 58).getTime()), clock(new Date(2000, 0, 1, 22, 58).getTime()),
+      when(new Date(2000, 8, 28, 22, 58).getTime()),
     ]);
     expect(ghost().querySelectorAll('button, [tabindex]')).toHaveLength(0);
 

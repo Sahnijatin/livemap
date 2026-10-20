@@ -3,7 +3,7 @@ import type { ChangeSummary, FileModel } from '@shared/types.js';
 import { summaryRequests, useStore } from '../store';
 import { LAYERS, layerOf } from '../layers';
 import { flattenSymbols, latestChange, symbolTags } from '../changes';
-import { agentName, clock } from '../agents';
+import { agentName, when } from '../agents';
 import { baseName } from '../recent';
 import { CodeView } from './CodeView';
 import { FlagBox } from './FlagBox';
@@ -135,7 +135,7 @@ function WhyItChanged({ path }: { path: string }) {
             const verb = c.kind === 'created' ? 'Created' : c.kind === 'deleted' ? 'Deleted' : 'Edited';
             return (
               <div className="hrow fi" key={c.id}>
-                <span className="t">{clock(c.at)}</span>
+                <span className="t">{when(c.at)}</span>
                 {a ? <Avatar agent={a.agent} /> : <span className="av av-none" aria-hidden="true" />}
                 <span className="hx">
                   {a ? <><b>{verb}</b> by {agentName(a.agent)}{a.confidence === 'likely' ? ' (likely)' : ''}</> : <><b>{verb}</b>. Changed outside an agent</>}
