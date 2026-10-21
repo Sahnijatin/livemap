@@ -806,6 +806,33 @@ describe('versions rewritten in bulk', () => {
     expect(commit.reason).toBe('update set commit');
   });
 
+  it('marks a commit\'s delete versions with its reason, keeps them deletes, and leaves them out of the save counts', async () => {
+    const del = (n: number, at: number, by = 'admin') => ({
+      sys_id: `7d${String(n).padStart(30, '0')}`, name: `sys_script_${'d'.repeat(30)}${String(n).padStart(2, '0')}`, record_name: `Gone ${n}`, action: 'DELETE',
+      sys_created_by: by, sys_created_on: ts(at), application: scope.sys_id, state: 'current',
+    });
+    const { client, inventory } = instance(BULK_VERSIONS + 20, [
+      del(1, commitAt + 5_000), del(2, commitAt + 60_000),
+      // After the commit's last version, and by another user within it: real deletes.
+      del(3, commitAt + 3 * 60 * 60_000), del(4, commitAt + 10_000, 'jane.dev'),
+    ]);
+    const h = await importHistory(client, scope, inventory, { updateXml: [] });
+    const saves0 = h.versionEvents;
+    markBulkRewrites(h, []);
+    const dels = h.events.filter(e => e.kind === 'deleted');
+    expect(dels.map(e => [e.name, e.kind, e.reason])).toEqual([
+      ['Gone 1', 'deleted', 'update set commit'], ['Gone 4', 'deleted', undefined], ['Gone 2', 'deleted', 'update set commit'], ['Gone 3', 'deleted', undefined],
+    ]);
+    expect(h).toMatchObject({ commits: BULK_VERSIONS + 20, commitDeletes: 2, versionEvents: saves0 - (BULK_VERSIONS + 20) - 2 });
+    // Matching leaves them alone, even with a delete call naming the record, and does not count them.
+    const gone = dels[0];
+    const call: LogCall = { line: 1, at: gone.at - 1000, tool: 'sn_record_manage', kind: 'delete', tables: ['sys_script'], names: [], sysId: gone.sysId, host: 'acme' };
+    const counts = matchHistory(dels, [call], { instance: 'acme' });
+    expect(gone).toMatchObject({ confidence: 'history', reason: 'update set commit' });
+    expect(gone.log).toBeUndefined();
+    expect(counts).toMatchObject({ events: 2, unmatched: 2 });
+  });
+
   it('leaves the versions as saves when SkyForge was busy then, or when they are not that many', async () => {
     const busy = instance(BULK_VERSIONS + 20);
     const h = await importHistory(busy.client, scope, busy.inventory, { updateXml: [] });

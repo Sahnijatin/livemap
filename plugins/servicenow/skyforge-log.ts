@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
-import type { HistoryEvent, LogRef } from './history.js';
+import { COMMIT_REASON, type HistoryEvent, type LogRef } from './history.js';
 
 export const DEFAULT_SKYFORGE_LOG = path.join(os.homedir(), '.skyforge', 'skyforge-mcp.log');
 export const DEFAULT_LOG_WINDOW_MS = 60_000;
@@ -565,6 +565,8 @@ export function matchHistory(events: HistoryEvent[], calls: LogCall[], opts: Mat
     const near: LogCall[] = [];
     const named: LogCall[] = [];
     let unchecked = false;
+    // An update set commit's versions were written with no SkyForge call then: nothing to match.
+    if (e.reason === COMMIT_REASON) return { e, near, named, unchecked };
     const sysId = e.sysId?.toLowerCase();
     const author = e.author.toLowerCase();
     /** A call that does not name the record is a candidate only when the save's author is the agent's user. */
@@ -593,7 +595,8 @@ export function matchHistory(events: HistoryEvent[], calls: LogCall[], opts: Mat
   const used = new Set<LogCall>();
   for (const p of plans) if (p.named.length === 1 && tied(p.named[0], p.e)) used.add(p.named[0]);
   for (const { e, near, named, unchecked } of plans) {
-    const tally = e.kind !== 'captured';
+    // Recaptures, and deletes an update set commit wrote, are not saves.
+    const tally = e.kind !== 'captured' && e.reason !== COMMIT_REASON;
     if (tally) counts.events++;
     delete e.log;
     // Only the reason this sets; one the history gave (an update set commit) stays.

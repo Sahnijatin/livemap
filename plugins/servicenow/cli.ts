@@ -152,7 +152,7 @@ export async function runServiceNow(argv: string[], core: CoreHooks): Promise<vo
         liveHistory = new LiveTimeline(timeline.doc, { root, logFile: args.skyforgeLog, windowMs: args.logWindowSec * 1000 });
         const h = timeline.history;
         const recaptures = h.captured - h.commits ? `, plus ${n(h.captured - h.commits)} recaptures` : '';
-        const commits = h.commits ? `, ${n(h.commits)} rewritten by an update set commit` : '';
+        const commits = h.commits || h.commitDeletes ? `, ${n(h.commits + h.commitDeletes)} written by an update set commit` : '';
         const creations = h.recordEvents ? `, ${n(h.recordEvents)} creations from the records' own stamps` : '';
         say(`Versions imported: ${n(h.versionEvents + h.xmlEvents)} (${n(h.versionEvents)} from sys_update_version, ${n(h.xmlEvents)} from sys_update_xml${recaptures}${commits}${creations}) for ${n(h.fromVersions + h.fromUpdateXml)} records in ${secs(Date.now() - t1)} (${n(h.queries)} queries).`);
         for (const w of h.warnings) process.stderr.write(`livemap sn: warning: history: ${w}\n`);

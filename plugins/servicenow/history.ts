@@ -68,6 +68,8 @@ export interface HistoryResult {
   recordEvents: number;
   /** Versions found to be an update set commit's bulk rewrite (counted in `captured`; see markBulkRewrites). */
   commits: number;
+  /** Delete versions inside such a commit: still `deleted`, but not counted as saves. */
+  commitDeletes: number;
   /** Records (update names) whose history came from each source. */
   fromVersions: number;
   fromUpdateXml: number;
@@ -400,7 +402,7 @@ export async function importHistory(client: NexusClient, scope: ScopeInfo, inven
   const saves = (source: HistoryEvent['source']) => events.filter(e => e.source === source && e.kind !== 'captured').length;
   return {
     events, versions: versions.length, updateXml: xml.length,
-    versionEvents: saves('version'), xmlEvents: saves('update_xml'), captured: events.filter(e => e.kind === 'captured').length, recordEvents, commits: 0,
+    versionEvents: saves('version'), xmlEvents: saves('update_xml'), captured: events.filter(e => e.kind === 'captured').length, recordEvents, commits: 0, commitDeletes: 0,
     fromVersions: versionNames.size, fromUpdateXml: xmlNames.size, versionsBy, queries, partial, warnings,
   };
 }
@@ -414,7 +416,9 @@ export const COMMIT_REASON = 'update set commit';
  * Finds versions written in bulk, not saved one by one: more than BULK_VERSIONS by one author within
  * BULK_SPAN_MS, with no SkyForge call (`activity`, epoch ms) in that span. Committing or merging an update set
  * writes a version row for every record in it. Those events become `captured`, with reason `update set commit`,
- * so they do not look like hundreds of saves. Updates `result`'s counts and returns how many were marked.
+ * so they do not look like hundreds of saves. Delete versions by the same author within such a run keep kind
+ * `deleted` and get the same reason, and leave the save counts (here and in matchHistory). Updates `result`'s
+ * counts and returns how many saves were marked.
  */
 export function markBulkRewrites(result: HistoryResult, activity: number[]): number {
   const times = [...activity].sort((a, b) => a - b);
@@ -425,14 +429,18 @@ export function markBulkRewrites(result: HistoryResult, activity: number[]): num
     return lo < times.length && times[lo] <= to;
   };
   const byAuthor = new Map<string, HistoryEvent[]>();
+  const deletes = new Map<string, HistoryEvent[]>();
   for (const e of result.events) {
-    if (e.source !== 'version' || (e.kind !== 'modified' && e.kind !== 'created')) continue;
-    const list = byAuthor.get(e.author) ?? [];
+    if (e.source !== 'version') continue;
+    const into = e.kind === 'deleted' ? deletes : e.kind === 'modified' || e.kind === 'created' ? byAuthor : null;
+    if (!into) continue;
+    const list = into.get(e.author) ?? [];
     list.push(e);
-    byAuthor.set(e.author, list);
+    into.set(e.author, list);
   }
   let marked = 0;
-  for (const list of byAuthor.values()) {
+  let deleted = 0;
+  for (const [author, list] of byAuthor) {
     if (list.length <= BULK_VERSIONS) continue;
     list.sort((a, b) => a.at - b.at);
     // Every version in a span of BULK_SPAN_MS holding more than BULK_VERSIONS of them.
@@ -450,12 +458,18 @@ export function markBulkRewrites(result: HistoryResult, activity: number[]): num
       if (!busy(list[i].at - 60_000, list[j].at)) {
         for (let k = i; k <= j; k++) { list[k].kind = 'captured'; list[k].reason = COMMIT_REASON; }
         marked += j - i + 1;
+        for (const d of deletes.get(author) ?? []) {
+          if (d.at < list[i].at || d.at > list[j].at || d.reason === COMMIT_REASON) continue;
+          d.reason = COMMIT_REASON;
+          deleted++;
+        }
       }
       i = j + 1;
     }
   }
-  result.versionEvents -= marked;
+  result.versionEvents -= marked + deleted;
   result.captured += marked;
   result.commits += marked;
+  result.commitDeletes += deleted;
   return marked;
 }
