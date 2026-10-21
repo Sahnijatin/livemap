@@ -9,7 +9,8 @@
  *
  * Imported once per scope: the store keeps the import's id apart from its runs, so neither a restart nor the
  * cap brings it back. Saves after it reach the live runs through live polling. A build whose import format is
- * newer (`HISTORY_IMPORT_FORMAT`) rebuilds the run once, from the events the old import covered.
+ * newer (`HISTORY_IMPORT_FORMAT`) rebuilds the run once: the project's recorded timeline is reset, and the whole
+ * history is imported again as its first run.
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -24,7 +25,7 @@ import { historyPath } from './writer.js';
 
 /**
  * The version of what an import writes. Bump it when the run's content changes (its attributions, say): a start
- * on a newer format drops the old back-dated run and imports again.
+ * on a newer format resets the project's recorded timeline and imports the history again.
  */
 export const HISTORY_IMPORT_FORMAT = 1;
 
@@ -167,8 +168,8 @@ export interface ImportResult {
  * Imports the scope's history into `store` as a back-dated run, once per scope and import format. A partial
  * history (its read stopped at the time budget) is left for a later start that reads all of it.
  *
- * A rebuild for a newer format takes only the events the old import covered (up to its newest event): later
- * saves are in the live runs already, from live polling.
+ * A rebuild for a newer format deletes every recorded run, live ones included, so it imports the whole history:
+ * saves polled since the old import are in no run any more.
  */
 export async function importScopeHistory(store: HistoryStore, opts: { root: string; name: string; scope: string; files: FileModel[]; domainOf?: (files: FileModel[]) => DomainIndex; format?: number }): Promise<ImportResult> {
   const format = opts.format ?? HISTORY_IMPORT_FORMAT;
@@ -187,18 +188,11 @@ export async function importScopeHistory(store: HistoryStore, opts: { root: stri
   }
   if (!doc || !Array.isArray(doc.events) || !doc.events.length) return none;
   if (doc.sources?.partial) return { ...none, status: 'partial', ...(rebuild ? { stale: true as const } : {}) };
-  const until = rebuild ? before.until ?? lastAtOf(store, runId) : undefined;
-  const events = doc.events.filter(e => typeof e.at === 'number' && (until === undefined || e.at <= until));
+  const events = doc.events.filter(e => typeof e.at === 'number');
   const run = buildHistoryRun({ root: opts.root, name: opts.name, files: opts.files, events, ...(opts.domainOf ? { domainOf: opts.domainOf } : {}) });
   if (!run.records.length) return { ...none, skipped: run.skipped };
   const hash = crypto.createHash('sha256').update(text).digest('hex');
   const newest = events.reduce((m, e) => Math.max(m, e.at), -Infinity);
   const written = await store.importRun(runId, run.start, run.records, { format, hash, until: newest });
   return written ? { status: 'imported', imported: run.used, skipped: run.skipped, runId, rebuilt: rebuild } : none;
-}
-
-/** The time of the last record of run `id`, for an import recorded before imports kept their newest event. */
-function lastAtOf(store: HistoryStore, id: string): number | undefined {
-  const r = store.info().runs.find(x => x.id === id);
-  return r ? store.messages(r.lastSeq, r.lastSeq, 1)[0]?.at : undefined;
 }

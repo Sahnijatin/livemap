@@ -40,8 +40,8 @@ const IMPORTS_FILE = 'imports.json';
 const IMPORTS_VERSION = 2;
 
 /**
- * What an import recorded: the version of the source's import format, a hash of the source content it read, and
- * the time of the newest event it took in.
+ * What an import recorded: the version of the source's import format, which decides a rebuild, and for
+ * diagnostics a hash of the source content it read and the time of the newest event it took in.
  */
 export interface ImportMeta { format: number; hash?: string; until?: number }
 
@@ -154,9 +154,9 @@ export class HistoryStore {
    * own times (oldest first), e.g. a ServiceNow scope's version history, so rewind can go back before LiveMap ran.
    * Returns how many records it wrote: 0 when `id` was imported before with the same or a newer `meta.format` (an
    * import is done once, even after the cap deletes its run), when there is nothing to write, or when the store
-   * cannot write. An import of `id` with an older format is rebuilt: its run is deleted, with every run before it
-   * (runs are only ever deleted from the front, so seqs keep no gaps), and the new run is written. It must be
-   * called before `startRun`; the cap is checked when the live run starts.
+   * cannot write. An import of `id` with an older format is rebuilt: every run is deleted, so the project's
+   * recorded timeline starts over with the new run as its first. It must be called before `startRun`; the cap is
+   * checked when the live run starts.
    */
   async importRun(id: string, start: ProjectState, records: { at: number; msg: ServerMessage }[], meta: ImportMeta = { format: 0 }): Promise<number> {
     if (this.disabled || this.closed || this.readOnly || this.current || !records.length) return 0;
@@ -164,7 +164,18 @@ export class HistoryStore {
     const before = this.imports.get(id);
     if (before && before.format >= meta.format) return 0;
     if (!before && this.runs.some(r => r.id === id)) return 0;
-    // Recorded first: a run cut short is better than a run written twice.
+    if (before) {
+      // A rebuild resets the recorded timeline, so the rebuilt run is the first one again. The marker is written
+      // after the deletes: a rebuild that fails here is tried again on the next start.
+      this.flushSync();
+      try {
+        while (this.runs.length) this.deleteRun(this.runs[0]);
+      } catch (e) {
+        this.fail(e, 'trim');
+        return 0;
+      }
+    }
+    // Recorded before the run: a run cut short is better than a run written twice.
     this.imports.set(id, { ...meta });
     try {
       await this.writeImports();
@@ -172,17 +183,6 @@ export class HistoryStore {
       if (before) this.imports.set(id, before);
       else this.imports.delete(id);
       return 0;
-    }
-    const old = this.runs.find(r => r.id === id);
-    if (old) {
-      this.flushSync();
-      try {
-        while (this.runs.length && this.runs[0] !== old) this.deleteRun(this.runs[0]);
-        this.deleteRun(old);
-      } catch (e) {
-        this.fail(e, 'trim');
-        return 0;
-      }
     }
     const startAt = records[0].at;
     const run: Run = { no: this.nextRunNo++, id, file: path.join(this.dir, eventsName(id)), firstSeq: this.lastSeq + 1, lastSeq: this.lastSeq, startAt, size: 0 };
