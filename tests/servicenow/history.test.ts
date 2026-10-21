@@ -3,9 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pullScope, resolveScope, sessionUser } from '../../plugins/servicenow/backfill.js';
-import { importHistory, parsePayload, snTime, type HistoryEvent } from '../../plugins/servicenow/history.js';
+import { BULK_VERSIONS, collectionOf, importHistory, markBulkRewrites, parsePayload, snTime, updateTable, type HistoryEvent } from '../../plugins/servicenow/history.js';
 import { layoutMirror } from '../../plugins/servicenow/mirror.js';
-import { NexusClient, NexusDeadlineError } from '../../plugins/servicenow/nexus.js';
+import { NexusClient, NexusDeadlineError, type SnRecord } from '../../plugins/servicenow/nexus.js';
 import { DEFAULT_LOG_WINDOW_MS, LOG_LEAD_MS, instanceName, matchHistory, parseArgs, parseLog, toCall, toolRole, type LogCall } from '../../plugins/servicenow/skyforge-log.js';
 import { buildTimeline, homeRelative } from '../../plugins/servicenow/timeline.js';
 import { historyPath, readHistory, snRoot, writeHistory, writeMirror } from '../../plugins/servicenow/writer.js';
@@ -55,9 +55,12 @@ describe('history import from the BharatBank fixture', () => {
     const { scope, pulled } = await pull(c);
     const h = await importHistory(c, scope, pulled.inventory, { full: pulled.full });
     expect(h).toMatchObject({ versions: 0, updateXml: 183, versionsBy: null, partial: false, warnings: [] });
-    expect(h.xmlEvents).toBe(saves(h.events).length);
+    expect(h.xmlEvents + h.recordEvents).toBe(saves(h.events).length);
     expect(h.versionEvents).toBe(0);
-    expect(h.events.every(e => e.source === 'update_xml' && e.confidence === 'history')).toBe(true);
+    expect(h.events.every(e => e.source !== 'version' && e.confidence === 'history')).toBe(true);
+    // Records whose rows show no creation (only later saves) get one from their own stamps.
+    expect(h.recordEvents).toBe(53);
+    for (const e of h.events.filter(x => x.source === 'record')) expect(e.kind).toBe('created');
     // Oldest first, at the record's own save time (from the payload), not the rows' later bulk rewrite.
     const at = h.events.map(e => e.at);
     expect(at).toEqual([...at].sort((a, b) => a - b));
@@ -86,8 +89,9 @@ describe('history import from the BharatBank fixture', () => {
     // Every update name had its versions, so nothing more was looked up and there is nothing to warn about.
     expect(h.warnings).toEqual([]);
     // Each version row is its own save, even two of one record in the same second.
-    expect(saves(h.events)).toHaveLength(183);
-    expect(h.events.every(e => e.source === 'version')).toBe(true);
+    expect(saves(h.events).filter(e => e.source === 'version')).toHaveLength(183);
+    expect(saves(h.events)).toHaveLength(183 + h.recordEvents);
+    expect(h.events.every(e => e.source === 'version' || (e.source === 'record' && e.kind === 'created'))).toBe(true);
     expect(queriesOf(m, 'sys_update_version').some(x => String(x.args.query).startsWith('nameIN'))).toBe(false);
     expect(queriesOf(m, 'sys_update_xml').some(x => (x.args.fields as string[]).includes('payload'))).toBe(false);
     // Without payloads, a dictionary entry still finds its record through the pulled records.
@@ -232,6 +236,26 @@ describe('history import from the BharatBank fixture', () => {
 });
 
 describe('payloads and times', () => {
+  it('reads a form section\'s own element, not the section elements listed before it', () => {
+    const p = parsePayload([
+      '<?xml version="1.0" encoding="UTF-8"?><record_update table="sys_ui_section">',
+      '<sys_ui_element action="INSERT_OR_UPDATE"><element>state</element><sys_id>e1</sys_id></sys_ui_element>',
+      '<sys_ui_element action="INSERT_OR_UPDATE"><element>number</element><sys_id>e2</sys_id></sys_ui_element>',
+      '<sys_ui_section action="INSERT_OR_UPDATE"><name>x_app_t</name><title>Details</title><sys_id>s1</sys_id>',
+      '<sys_updated_on>2026-06-03 16:05:13</sys_updated_on></sys_ui_section>',
+      '</record_update>',
+    ].join(''));
+    expect(p).toEqual({ table: 'sys_ui_section', fields: { name: 'x_app_t', title: 'Details', sys_id: 's1', sys_updated_on: '2026-06-03 16:05:13' } });
+    // A section's name is its table: the collection its events carry.
+    expect(collectionOf('sys_ui_section', p.fields)).toBe('x_app_t');
+  });
+  it('names the table of name-keyed update names by their prefix', () => {
+    expect(updateTable(`sp_widget_${'ab'.repeat(16)}`)).toBe('sp_widget');
+    expect(updateTable('sys_dictionary_x_app_t_credit_score')).toBe('sys_dictionary');
+    expect(updateTable('sys_documentation_x_app_t_credit_score_en')).toBe('sys_documentation');
+    expect(updateTable('sys_choice_x_app_t_status')).toBe('sys_choice');
+    expect(updateTable('sys_ui_list_x_app_t_null')).toBeUndefined();
+  });
   it('reads ServiceNow UTC times', () => {
     expect(new Date(snTime('2026-06-03 16:01:44')).toISOString()).toBe('2026-06-03T16:01:44.000Z');
     expect(snTime('')).toBeNaN();
@@ -301,7 +325,7 @@ describe('SkyForge log parsing', () => {
     ['tool=sn_update_set_manage, action=add_artifact, update_set_id=' + 'cd'.repeat(16) + ', artifact_table=sp_widget, artifact_sys_id=' + id, { kind: 'capture', tables: ['sp_widget'], sysId: id }],
     ['tool=sn_update_set_manage, action=add_artifact, artifact_type=sp_page, artifact_sys_id=' + id + ', artifact_name=Home', { kind: 'capture', tables: ['sp_page'], sysId: id, names: ['home'] }],
     ['tool=sn_create_field, table=x_app_t, column_name=credit_score, column_label=Credit Score, internal_type=integer',
-      { kind: 'create', tables: ['sys_dictionary'], collection: 'x_app_t', names: ['credit score', 'credit_score'] }],
+      { kind: 'create', tables: ['sys_dictionary', 'sys_documentation'], collection: 'x_app_t', names: ['credit score', 'credit_score'] }],
     ['tool=sn_create_choice, table=x_app_t, element=status, label=Open, value=open', { kind: 'create', tables: ['sys_choice'], collection: 'x_app_t' }],
     ['tool=sn_create_table, name=x_app_t, label=Thing', { kind: 'create', tables: ['sys_db_object'], names: ['x_app_t', 'thing'] }],
     ['tool=sn_create_sp_page, short_description=Home page, id=home, title=A very long title tha..., public=true, ...+1 more', { kind: 'create', tables: ['sp_page'], names: ['home'] }],
@@ -428,18 +452,21 @@ describe('SkyForge log parsing', () => {
     expect(scan.calls.map(c => c.host)).toEqual([undefined, 'acme', undefined]);
     expect(scan.hosts).toEqual(['acme', 'other']);
   });
-  it('makes a call\'s instance unknown when another instance connected in the 10 minutes before it', () => {
+  it('knows a call\'s instance only when every connect line in the 7 days before the last one names it', () => {
     const t = (min: number) => new Date(Date.parse('2026-06-03T16:00:00Z') + min * 60_000).toISOString();
+    const day = 24 * 60;
     const write = (min: number) => `[${t(min)}] [INFO] [Tool] tool_execute | tool=sn_record_manage, table=t, action=update, sys_id=${id}`;
     const connect = (min: number, host: string) => `[${t(min)}] [INFO] [Auth] ✅ Connected to ${host}`;
     const scan = parseLog([
       connect(0, 'acme.service-now.com'), write(1),
-      connect(2, 'other.service-now.com'), connect(3, 'acme.service-now.com'), write(4),
-      write(14),
-      connect(20, 'intranet.example.com'), write(21),
-      connect(25, 'acme.service-now.com'), write(26),
+      // Another instance's process starts minutes later, and both write the log for days.
+      connect(3, 'other.service-now.com'), write(4), connect(5, 'acme.service-now.com'), write(6), write(6 * day),
+      // Eight days on, only acme connects: the other process's last line is out of the span.
+      connect(8 * day, 'acme.service-now.com'), write(8 * day + 1), write(9 * day),
+      // One LiveMap cannot name makes the instance unknown again.
+      connect(10 * day, 'intranet.example.com'), connect(10 * day + 1, 'acme.service-now.com'), write(10 * day + 2),
     ].join('\n'));
-    expect(scan.calls.map(c => c.host)).toEqual(['acme', undefined, 'acme', undefined, undefined]);
+    expect(scan.calls.map(c => c.host)).toEqual(['acme', undefined, undefined, undefined, 'acme', 'acme', undefined]);
   });
   it('learns the agent\'s ServiceNow user from scope and update set calls', () => {
     const scan = parseLog([
@@ -450,19 +477,20 @@ describe('SkyForge log parsing', () => {
     expect(scan.calls.map(c => c.user)).toEqual([undefined, undefined]);
   });
   it('keeps each agent user to the instance it was named on', () => {
-    const t = (min: number) => new Date(Date.parse('2026-06-03T16:00:00Z') + min * 60_000).toISOString();
-    const write = (min: number) => `[${t(min)}] [INFO] [Tool] tool_execute | tool=sn_record_manage, table=t, action=update, sys_id=${id}`;
+    // A week and more between instances, so each call's instance is known.
+    const t = (day: number) => new Date(Date.parse('2026-06-03T16:00:00Z') + day * 24 * 60 * 60_000).toISOString();
+    const write = (day: number) => `[${t(day)}] [INFO] [Tool] tool_execute | tool=sn_record_manage, table=t, action=update, sys_id=${id}`;
     const scan = parseLog([
       `[${t(0)}] [INFO] [Auth] ✅ Connected to acme.service-now.com`,
-      `[${t(1)}] [INFO] [Tool] tool_execute | tool=sn_switch_application_scope, scope=x_app, servicenow_username=Agent.User`,
-      write(2),
-      `[${t(20)}] [INFO] [Auth] ✅ Connected to other.service-now.com`,
-      `[${t(21)}] [INFO] [Tool] tool_execute | tool=sn_update_set_manage, action=switch, servicenow_username=other.bot`,
-      write(22),
-      `[${t(40)}] [INFO] [Auth] ✅ Connected to acme.service-now.com`,
-      write(41),
-      `[${t(42)}] [INFO] [Tool] tool_execute | tool=sn_switch_application_scope, scope=x_app, servicenow_username=second.bot`,
-      write(43),
+      `[${t(0.1)}] [INFO] [Tool] tool_execute | tool=sn_switch_application_scope, scope=x_app, servicenow_username=Agent.User`,
+      write(0.2),
+      `[${t(8)}] [INFO] [Auth] ✅ Connected to other.service-now.com`,
+      `[${t(8.1)}] [INFO] [Tool] tool_execute | tool=sn_update_set_manage, action=switch, servicenow_username=other.bot`,
+      write(8.2),
+      `[${t(16)}] [INFO] [Auth] ✅ Connected to acme.service-now.com`,
+      write(16.1),
+      `[${t(16.2)}] [INFO] [Tool] tool_execute | tool=sn_switch_application_scope, scope=x_app, servicenow_username=second.bot`,
+      write(16.3),
     ].join('\n'));
     // Back on acme, its own user applies again, never the other instance's; a newer user replaces it.
     expect(scan.calls.map(c => [c.host, c.user])).toEqual([['acme', 'agent.user'], ['other', 'other.bot'], ['acme', 'agent.user'], ['acme', 'second.bot']]);
@@ -585,13 +613,47 @@ describe('matching history to the log', () => {
     expect(after(DEFAULT_LOG_WINDOW_MS + 1000)).toBe('history');
   });
 
-  it('drops calls on another instance, and caps calls on an unknown one at likely', () => {
+  it('drops calls on another instance; one on an unknown instance gives log when it names the sys_id', () => {
     const e = ev({ sysId: id });
     expect(matchHistory([e], [call({ sysId: id, host: 'other' })], I).unmatched).toBe(1);
-    expect(matchHistory([e], [call({ sysId: id, host: undefined })], I)).toMatchObject({ matched: 0, hostUnknown: 1 });
-    expect(e.confidence).toBe('likely');
-    expect(matchHistory([e], [call({ sysId: id })], { instance: null }).hostUnknown).toBe(1);
+    expect(matchHistory([e], [call({ sysId: id, host: undefined })], I)).toMatchObject({ matched: 1, hostUnknown: 0 });
+    expect(e).toMatchObject({ confidence: 'log', log: [{ line: 1 }] });
+    expect(matchHistory([e], [call({ sysId: id })], { instance: null }).matched).toBe(1);
     expect(matchHistory([e], [call({ sysId: id, host: 'inmorphisdemo3' })], { instance: 'https://inmorphisdemo3.service-now.com' }).matched).toBe(1);
+  });
+
+  it('gives a global widget named by id on an unknown instance likely, as it may be any instance\'s', () => {
+    const e = ev({ kind: 'created', keys: ['bb-hero'] });
+    const c = call({ tool: 'sn_create_sp_widget', kind: 'create', names: ['bb-hero'], host: undefined });
+    expect(matchHistory([e], [c], { ...I, scope: 'x_app' })).toMatchObject({ matched: 0, hostUnknown: 1 });
+    expect(e).toMatchObject({ confidence: 'likely', log: [{ line: 1 }] });
+    // On the mirrored instance it is the record's.
+    expect(matchHistory([e], [{ ...c, host: 'inmorphisdemo3' }], I).matched).toBe(1);
+  });
+
+  it('ties a field named by its update name on a scoped table to the scope, on an unknown instance', () => {
+    // A field's label: its sys_documentation update name carries the language.
+    const doc = ev({ kind: 'created', table: 'sys_documentation', update: 'sys_documentation_x_app_t_credit_score_en', keys: [] });
+    const field = ev({ kind: 'created', table: 'sys_dictionary', update: 'sys_dictionary_x_app_t_credit_score', keys: [] });
+    const c = call({ tool: 'sn_create_field', kind: 'create', tables: ['sys_dictionary', 'sys_documentation'], collection: 'x_app_t', names: ['credit_score'], host: undefined });
+    expect(matchHistory([field], [c], { ...I, scope: 'x_app' }).matched).toBe(1);
+    expect(matchHistory([doc], [c], { ...I, scope: 'x_app' }).matched).toBe(1);
+    expect(doc).toMatchObject({ confidence: 'log', log: [{ line: 1, tool: 'sn_create_field' }] });
+    // Without the scope, nothing ties it to this instance.
+    expect(matchHistory([field], [c], I)).toMatchObject({ matched: 0, hostUnknown: 1 });
+    expect(field.confidence).toBe('likely');
+    // Another language suffix matches too; another element does not.
+    expect(matchHistory([ev({ ...doc, update: 'sys_documentation_x_app_t_credit_score_pt_br' })], [c], { ...I, scope: 'x_app' }).matched).toBe(1);
+    expect(matchHistory([ev({ ...doc, update: 'sys_documentation_x_app_t_credit_score_x' })], [c], { ...I, scope: 'x_app' }).matched).toBe(0);
+  });
+
+  it('ties a form section to a scoped table by its collection, and spends the call', () => {
+    const section = ev({ kind: 'created', table: 'sys_ui_section', update: `sys_ui_section_${id}`, sysId: id, collection: 'x_app_t', keys: ['details'] });
+    const second = ev({ kind: 'created', table: 'sys_ui_section', update: `sys_ui_section_${other}`, sysId: other, collection: 'x_app_t', keys: [] });
+    const c = call({ tool: 'sn_create_form_section', kind: 'create', tables: ['sys_ui_section'], collection: 'x_app_t', names: ['details'], host: undefined });
+    expect(matchHistory([section, second], [c], { ...I, scope: 'x_app' })).toMatchObject({ matched: 1, timeOnly: 0, unmatched: 1 });
+    expect(section.confidence).toBe('log');
+    expect(second.confidence).toBe('history');
   });
 
   it('matches recaptures to capture calls only, and leaves them out of the counts', () => {
@@ -632,7 +694,9 @@ describe('matching history to the log', () => {
       if (e.confidence === 'history') expect(e.log).toBeUndefined();
     }
     const byTable = (conf: string) => [...new Set(saves(t.doc.events).filter(e => e.confidence === conf).map(e => e.table))].sort();
-    expect(byTable('log')).toEqual(['sp_page', 'sp_widget', 'sys_dictionary']);
+    expect(byTable('log')).toEqual(['sp_page', 'sp_portal', 'sp_widget', 'sys_dictionary']);
+    // Creations known only from the records' own stamps are matched too.
+    expect(saves(t.doc.events).filter(e => e.source === 'record' && e.confidence === 'log')).toHaveLength(20);
     // Events of mirrored records point at their file.
     const withPath = t.doc.events.filter(e => e.path);
     expect(withPath.length).toBeGreaterThan(100);
@@ -643,12 +707,13 @@ describe('matching history to the log', () => {
     expect(fs.readFileSync(path.join(snRoot(dir), '.gitignore'), 'utf8')).toContain('*.history.json');
   });
 
-  it('matches nothing at log when the log never says which instance it is on', async () => {
+  it('matches only records on the scope\'s own tables at log when the log never says which instance it is on', async () => {
     const { c } = await setup();
     const { scope, pulled, manifest } = await pull(c);
     const t = await buildTimeline(c, scope, pulled.inventory, manifest, { logFile: logFile(false), full: pulled.full, agentUser: 'admin' });
-    expect(t.doc.counts.matched).toBe(0);
-    expect(t.doc.counts.hostUnknown).toBe(FIXTURE_COUNTS.matched);
+    // Fields of the scope's tables are tied to it; widgets and pages (global tables) need the instance.
+    expect(t.doc.counts).toMatchObject({ matched: 8, hostUnknown: 30 });
+    for (const e of t.doc.events.filter(x => x.confidence === 'log')) expect(e.update.startsWith(`sys_dictionary_${scope.scope}_`), e.update).toBe(true);
     expect(t.doc.log?.unknownInstance).toBe(t.doc.log?.calls);
   });
 
@@ -690,4 +755,90 @@ describe('matching history to the log', () => {
 });
 
 /** The fixture's attribution, as the PR states it. */
-const FIXTURE_COUNTS = { events: 112, matched: 18, ambiguous: 0, hostUnknown: 0, timeOnly: 3, authorUnchecked: 0, unmatched: 91 };
+const FIXTURE_COUNTS = { events: 165, matched: 38, ambiguous: 0, hostUnknown: 0, timeOnly: 7, authorUnchecked: 0, unmatched: 120 };
+
+describe('versions rewritten in bulk', () => {
+  const scope = { sys_id: '5f'.repeat(16), scope: 'x_app', name: 'App' };
+  const sid = (n: number) => `6a${String(n).padStart(30, '0')}`;
+  const ts = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+  const commitAt = Date.parse('2026-07-16T16:56:00Z');
+  /** Records created in June, each with one version row written by a commit on 16 July, a second apart. */
+  function instance(n: number, extra: SnRecord[] = []) {
+    const inventory = Array.from({ length: n }, (_, i) => ({
+      sys_id: sid(i), sys_class_name: 'sys_script', sys_name: `Rule ${i}`, sys_created_on: ts(Date.parse('2026-06-01T10:00:00Z') + i * 60_000), sys_created_by: 'dev.one',
+    }));
+    const versions: SnRecord[] = [...inventory.map((r, i) => ({
+      sys_id: `7a${String(i).padStart(30, '0')}`, name: `sys_script_${r.sys_id}`, record_name: r.sys_name, action: 'INSERT_OR_UPDATE',
+      sys_created_by: 'admin', sys_created_on: ts(commitAt + i * 1000), application: scope.sys_id, state: 'current',
+    })), ...extra];
+    const client = { query: async (table: string, o: { max?: number }) => (table === 'sys_update_version' ? versions.slice(0, o.max ?? versions.length) : []) } as unknown as NexusClient;
+    return { client, inventory };
+  }
+
+  it('adds each record\'s creation from its own stamps when no row shows it', async () => {
+    const { client, inventory } = instance(3, [
+      // A record created after its first version (a re-import) gets none; one with a row at its creation has one.
+      { sys_id: '7b'.padEnd(32, '0'), name: `sys_script_${sid(9)}`, record_name: 'Late', action: 'INSERT_OR_UPDATE', sys_created_by: 'admin', sys_created_on: '2026-05-01 00:00:00', application: scope.sys_id },
+      { sys_id: '7c'.padEnd(32, '0'), name: `sys_script_${sid(8)}`, record_name: 'Deleted', action: 'DELETE', sys_created_by: 'admin', sys_created_on: '2026-07-01 00:00:00', application: scope.sys_id },
+    ]);
+    inventory.push({ sys_id: sid(9), sys_class_name: 'sys_script', sys_name: 'Late', sys_created_on: '2026-06-01 00:00:00', sys_created_by: 'dev.one' });
+    inventory.push({ sys_id: sid(8), sys_class_name: 'sys_script', sys_name: 'Deleted', sys_created_on: '2026-06-01 00:00:00', sys_created_by: 'dev.one' });
+    const h = await importHistory(client, scope, inventory, { updateXml: [] });
+    expect(h.recordEvents).toBe(3);
+    const made = h.events.filter(e => e.source === 'record');
+    expect(made.map(e => [e.sysId, e.kind, e.author, new Date(e.at).toISOString()])).toEqual([0, 1, 2].map(i => [sid(i), 'created', 'dev.one', new Date(Date.parse('2026-06-01T10:00:00Z') + i * 60_000).toISOString()]));
+    expect(made[0]).toMatchObject({ table: 'sys_script', update: `sys_script_${sid(0)}`, name: 'Rule 0', confidence: 'history' });
+    // The commit's versions are still there, after the creations.
+    expect(h.events.filter(e => e.source === 'version' && e.kind === 'modified')).toHaveLength(4);
+  });
+
+  it('labels more than 100 versions by one author in 10 minutes, with no SkyForge activity, an update set commit', async () => {
+    const { client, inventory } = instance(BULK_VERSIONS + 20);
+    const h = await importHistory(client, scope, inventory, { updateXml: [] });
+    const versions = h.versionEvents;
+    expect(markBulkRewrites(h, [])).toBe(BULK_VERSIONS + 20);
+    expect(h).toMatchObject({ versionEvents: versions - (BULK_VERSIONS + 20), commits: BULK_VERSIONS + 20 });
+    for (const e of h.events.filter(x => x.source === 'version')) expect(e).toMatchObject({ kind: 'captured', reason: 'update set commit' });
+    // The creations stay saves, and the reason survives matching.
+    expect(h.events.filter(e => e.source === 'record' && e.kind === 'created')).toHaveLength(BULK_VERSIONS + 20);
+    const commit = h.events.find(e => e.source === 'version')!;
+    matchHistory([commit], [], { instance: 'acme' });
+    expect(commit.reason).toBe('update set commit');
+  });
+
+  it('marks a commit\'s delete versions with its reason, keeps them deletes, and leaves them out of the save counts', async () => {
+    const del = (n: number, at: number, by = 'admin') => ({
+      sys_id: `7d${String(n).padStart(30, '0')}`, name: `sys_script_${'d'.repeat(30)}${String(n).padStart(2, '0')}`, record_name: `Gone ${n}`, action: 'DELETE',
+      sys_created_by: by, sys_created_on: ts(at), application: scope.sys_id, state: 'current',
+    });
+    const { client, inventory } = instance(BULK_VERSIONS + 20, [
+      del(1, commitAt + 5_000), del(2, commitAt + 60_000),
+      // After the commit's last version, and by another user within it: real deletes.
+      del(3, commitAt + 3 * 60 * 60_000), del(4, commitAt + 10_000, 'jane.dev'),
+    ]);
+    const h = await importHistory(client, scope, inventory, { updateXml: [] });
+    const saves0 = h.versionEvents;
+    markBulkRewrites(h, []);
+    const dels = h.events.filter(e => e.kind === 'deleted');
+    expect(dels.map(e => [e.name, e.kind, e.reason])).toEqual([
+      ['Gone 1', 'deleted', 'update set commit'], ['Gone 4', 'deleted', undefined], ['Gone 2', 'deleted', 'update set commit'], ['Gone 3', 'deleted', undefined],
+    ]);
+    expect(h).toMatchObject({ commits: BULK_VERSIONS + 20, commitDeletes: 2, versionEvents: saves0 - (BULK_VERSIONS + 20) - 2 });
+    // Matching leaves them alone, even with a delete call naming the record, and does not count them.
+    const gone = dels[0];
+    const call: LogCall = { line: 1, at: gone.at - 1000, tool: 'sn_record_manage', kind: 'delete', tables: ['sys_script'], names: [], sysId: gone.sysId, host: 'acme' };
+    const counts = matchHistory(dels, [call], { instance: 'acme' });
+    expect(gone).toMatchObject({ confidence: 'history', reason: 'update set commit' });
+    expect(gone.log).toBeUndefined();
+    expect(counts).toMatchObject({ events: 2, unmatched: 2 });
+  });
+
+  it('leaves the versions as saves when SkyForge was busy then, or when they are not that many', async () => {
+    const busy = instance(BULK_VERSIONS + 20);
+    const h = await importHistory(busy.client, scope, busy.inventory, { updateXml: [] });
+    expect(markBulkRewrites(h, [commitAt + 30_000])).toBe(0);
+    expect(h.events.filter(e => e.kind === 'captured')).toHaveLength(0);
+    const few = instance(BULK_VERSIONS);
+    expect(markBulkRewrites(await importHistory(few.client, scope, few.inventory, { updateXml: [] }), [])).toBe(0);
+  });
+});

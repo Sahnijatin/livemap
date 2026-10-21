@@ -10,7 +10,7 @@ import type { SnRecord } from './nexus.js';
 
 export interface InventoryRow {
   sys_id: string; sys_class_name: string; sys_name: string;
-  sys_created_on?: string; sys_updated_on?: string; sys_updated_by?: string;
+  sys_created_on?: string; sys_created_by?: string; sys_updated_on?: string; sys_updated_by?: string;
 }
 export interface ScopeInfo { sys_id: string; scope: string; name: string; version?: string }
 
