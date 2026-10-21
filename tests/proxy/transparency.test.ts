@@ -150,6 +150,8 @@ describe('expired upstream session', () => {
     await client.connect(new LineEndpoint(p2c, c2p) as unknown as Transport);
     const first = await client.callTool({ name: 'echo', arguments: { text: 'one' } });
     const oldSession = http_.sessionId;
+    // The client's notifications/initialized is forwarded without waiting; let it land before the log is cleared.
+    await until(() => up.rpc.some((r) => r.method === 'notifications/initialized'));
     up.rpc.length = 0;
     await up.restart();
     const second = await client.callTool({ name: 'echo', arguments: { text: 'two' } });
