@@ -32,8 +32,18 @@ const DEFAULT_CAP_MB = 200;
 const INDEX_VERSION = 1;
 /** `events-<run>.jsonl.trim.tmp` (trimRun) and `index.json.<pid>.<hex>.tmp`, `imports.json.<pid>.<hex>.tmp` (writeFileAtomic). */
 const LEFTOVER_TMP = /^(events-.+\.jsonl\.trim|(index|imports)\.json\..+)\.tmp$/;
-/** The ids of every run `importRun` was asked to write, kept apart from the runs so the cap never deletes them. */
+/**
+ * Every run `importRun` was asked to write, by id, with what it imported (`ImportMeta`). Kept apart from the runs so
+ * the cap never deletes it. Version 1 held only ids (`{version: 1, ids}`); those read as format 0.
+ */
 const IMPORTS_FILE = 'imports.json';
+const IMPORTS_VERSION = 2;
+
+/**
+ * What an import recorded: the version of the source's import format, which decides a rebuild, and for
+ * diagnostics a hash of the source content it read and the time of the newest event it took in.
+ */
+export interface ImportMeta { format: number; hash?: string; until?: number }
 
 export interface HistoryOptions {
   home?: string; capMb?: number; snapshotEvery?: number; now?: () => number;
@@ -62,7 +72,7 @@ export class HistoryStore {
   private readonly now: () => number;
   private readonly readOnly: boolean;
   private runs: Run[] = [];
-  private imports = new Set<string>();
+  private imports = new Map<string, ImportMeta>();
   private nextRunNo = 1;
   private index = new EventIndex();
   /** Snapshot seq -> bytes on disk, and the same seqs sorted. */
@@ -128,27 +138,50 @@ export class HistoryStore {
     this.runCapIfDue();
   }
 
-  /**
-   * Writes a finished, back-dated run before the live one: `start` as its first record, then `records` with their
-   * own times (oldest first), e.g. a ServiceNow scope's version history, so rewind can go back before LiveMap ran.
-   * Returns how many records it wrote: 0 when `id` was imported before (an import is done once, even after the
-   * cap deletes its run), when there is nothing to write, or when the store cannot write. It must be called
-   * before `startRun`; the cap is checked when the live run starts.
-   */
   /** Whether `importRun` was asked to write `id` before, whether or not its run is still on disk. */
   imported(id: string): boolean {
     return this.imports.has(id);
   }
 
-  async importRun(id: string, start: ProjectState, records: { at: number; msg: ServerMessage }[]): Promise<number> {
+  /** What the import of `id` recorded, or undefined when there was none. */
+  importInfo(id: string): ImportMeta | undefined {
+    const m = this.imports.get(id);
+    return m && { ...m };
+  }
+
+  /**
+   * Writes a finished, back-dated run before the live one: `start` as its first record, then `records` with their
+   * own times (oldest first), e.g. a ServiceNow scope's version history, so rewind can go back before LiveMap ran.
+   * Returns how many records it wrote: 0 when `id` was imported before with the same or a newer `meta.format` (an
+   * import is done once, even after the cap deletes its run), when there is nothing to write, or when the store
+   * cannot write. An import of `id` with an older format is rebuilt: every run is deleted, so the project's
+   * recorded timeline starts over with the new run as its first. It must be called before `startRun`; the cap is
+   * checked when the live run starts.
+   */
+  async importRun(id: string, start: ProjectState, records: { at: number; msg: ServerMessage }[], meta: ImportMeta = { format: 0 }): Promise<number> {
     if (this.disabled || this.closed || this.readOnly || this.current || !records.length) return 0;
-    if (this.imported(id) || this.runs.some(r => r.id === id) || !/^[\w.-]+$/.test(id)) return 0;
-    // Recorded first: a run cut short is better than a run written twice.
-    this.imports.add(id);
+    if (!/^[\w.-]+$/.test(id)) return 0;
+    const before = this.imports.get(id);
+    if (before && before.format >= meta.format) return 0;
+    if (!before && this.runs.some(r => r.id === id)) return 0;
+    if (before) {
+      // A rebuild resets the recorded timeline, so the rebuilt run is the first one again. The marker is written
+      // after the deletes: a rebuild that fails here is tried again on the next start.
+      this.flushSync();
+      try {
+        while (this.runs.length) this.deleteRun(this.runs[0]);
+      } catch (e) {
+        this.fail(e, 'trim');
+        return 0;
+      }
+    }
+    // Recorded before the run: a run cut short is better than a run written twice.
+    this.imports.set(id, { ...meta });
     try {
-      await writeFileAtomic(path.join(this.dir, IMPORTS_FILE), JSON.stringify({ version: 1, ids: [...this.imports] }));
+      await this.writeImports();
     } catch {
-      this.imports.delete(id);
+      if (before) this.imports.set(id, before);
+      else this.imports.delete(id);
       return 0;
     }
     const startAt = records[0].at;
@@ -494,10 +527,23 @@ export class HistoryStore {
     if (!this.readOnly) this.enforceCap();
   }
 
+  private writeImports(): Promise<void> {
+    return writeFileAtomic(path.join(this.dir, IMPORTS_FILE), JSON.stringify({ version: IMPORTS_VERSION, imports: Object.fromEntries(this.imports) }));
+  }
+
   private loadImports(): void {
     try {
-      const j = JSON.parse(fs.readFileSync(path.join(this.dir, IMPORTS_FILE), 'utf8')) as { ids?: unknown };
-      if (Array.isArray(j.ids)) for (const id of j.ids) if (typeof id === 'string') this.imports.add(id);
+      const j = JSON.parse(fs.readFileSync(path.join(this.dir, IMPORTS_FILE), 'utf8')) as { ids?: unknown; imports?: unknown };
+      if (Array.isArray(j.ids)) for (const id of j.ids) if (typeof id === 'string') this.imports.set(id, { format: 0 });
+      if (j.imports && typeof j.imports === 'object') {
+        for (const [id, m] of Object.entries(j.imports as Record<string, Partial<ImportMeta>>)) {
+          if (!m || typeof m !== 'object') continue;
+          const meta: ImportMeta = { format: typeof m.format === 'number' ? m.format : 0 };
+          if (typeof m.hash === 'string') meta.hash = m.hash;
+          if (typeof m.until === 'number') meta.until = m.until;
+          this.imports.set(id, meta);
+        }
+      }
     } catch { /* none yet */ }
   }
 

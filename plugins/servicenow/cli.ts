@@ -193,8 +193,9 @@ export async function runServiceNow(argv: string[], core: CoreHooks): Promise<vo
         const domainOf = (files: FileModel[]) => buildDomainIndex(files, p => model.content(p), newDataRefCache());
         const t = Date.now();
         const r = await importScopeHistory(history, { root, name: scopeName, scope: scopeName, files: model.all(), domainOf });
-        if (r.status === 'imported') line(`Timeline: ${n(r.imported)} history events imported as a back-dated run in ${secs(Date.now() - t)}${r.skipped ? ` (${n(r.skipped)} without a mirrored file left out)` : ''}.`);
+        if (r.status === 'imported') line(`Timeline: ${n(r.imported)} history events ${r.rebuilt ? 'imported again for a newer import format' : 'imported'} as a back-dated run in ${secs(Date.now() - t)}${r.skipped ? ` (${n(r.skipped)} without a mirrored file left out)` : ''}.`);
         else if (r.status === 'already') line('Timeline: history already imported.');
+        else if (r.status === 'partial' && r.stale) line('Timeline: the history is partial, so the back-dated run keeps its older import format for now. A later start with the full history rebuilds it.');
         else if (r.status === 'partial') line('Timeline: the history is partial, so it is not in the timeline yet. A later start with the full history adds it.');
       },
     });

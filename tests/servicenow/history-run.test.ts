@@ -8,11 +8,13 @@ import { NexusClient } from '../../plugins/servicenow/nexus.js';
 import { snRoot, writeHistory, writeMirror, historyPath } from '../../plugins/servicenow/writer.js';
 import { serviceNowAnalyzer } from '../../plugins/servicenow/analyzer.js';
 import { buildTimeline, type TimelineDoc, type TimelineEvent } from '../../plugins/servicenow/timeline.js';
-import { attributionOf, buildHistoryRun, historyRunId, importScopeHistory } from '../../plugins/servicenow/history-run.js';
+import { attributionOf, buildHistoryRun, HISTORY_IMPORT_FORMAT, historyRunId, importScopeHistory } from '../../plugins/servicenow/history-run.js';
 import { ProjectModel } from '../../src/engine/project.js';
 import { ANALYZERS } from '../../src/engine/domain/index.js';
 import { buildDomainIndex } from '../../src/engine/domain/build-index.js';
 import { HistoryStore } from '../../src/history/store.js';
+import { projectDir } from '../../src/history/paths.js';
+import crypto from 'node:crypto';
 import { emptyState } from '../../src/shared/state.js';
 import type { ChangeSummary, FileModel } from '../../src/shared/types.js';
 import { rmTree } from '../helpers/platform.js';
@@ -135,7 +137,7 @@ describe('HistoryStore.importRun and importScopeHistory', () => {
     ]);
     const store = await s.open();
     const r = await importScopeHistory(store, { root: s.root, name: NS, scope: NS, files, domainOf: fs2 => buildDomainIndex(fs2, () => null) });
-    expect(r).toEqual({ status: 'imported', imported: 3, skipped: 0, runId: historyRunId(NS) });
+    expect(r).toEqual({ status: 'imported', imported: 3, skipped: 0, runId: historyRunId(NS), rebuilt: false });
     await store.startRun({ ...emptyState(s.root, NS), files });
     const info = store.info();
     expect(info.runs.map(x => x.id)).toEqual(['sn-history-x_snc_cc_offering', expect.any(String)]);
@@ -201,6 +203,144 @@ describe('HistoryStore.importRun and importScopeHistory', () => {
     await store.close();
   });
 
+  const sha = (root: string) => crypto.createHash('sha256').update(fs.readFileSync(historyPath(root, NS))).digest('hex');
+  const ids = (store: HistoryStore) => store.info().runs.map(r => r.id);
+
+  it('records the import format, a hash of history.json and its newest event', async () => {
+    const s = await setup();
+    writeDoc(s.root, [ev({ at: T0, kind: 'created', path: 'x/business_rule/t/a__1.js' }), ev({ at: T0 + DAY, kind: 'modified', path: 'x/business_rule/t/a__1.js' })]);
+    let store = await s.open();
+    await importScopeHistory(store, { root: s.root, name: NS, scope: NS, files });
+    await store.close();
+    store = await s.open();
+    expect(store.importInfo(historyRunId(NS))).toEqual({ format: HISTORY_IMPORT_FORMAT, hash: sha(s.root), until: T0 + DAY });
+    const onDisk = JSON.parse(fs.readFileSync(path.join(projectDir(s.root, s.home), 'imports.json'), 'utf8'));
+    expect(onDisk).toEqual({ version: 2, imports: { [historyRunId(NS)]: { format: HISTORY_IMPORT_FORMAT, hash: sha(s.root), until: T0 + DAY } } });
+    await store.close();
+  });
+
+  it('a newer import format resets the timeline: the rebuilt history run is runs[0], with every save', async () => {
+    const s = await setup();
+    const first = [ev({ at: T0, kind: 'created', path: 'x/business_rule/t/a__1.js' }), ev({ at: T0 + DAY, kind: 'modified', path: 'x/business_rule/t/a__1.js' })];
+    writeDoc(s.root, first);
+    let store = await s.open();
+    expect((await importScopeHistory(store, { root: s.root, name: NS, scope: NS, files, format: 1 })).imported).toBe(2);
+    await store.startRun({ ...emptyState(s.root, NS), files });
+    await store.close();
+
+    // Live polling appended a newer save; the live run has it, and the rebuild deletes that run.
+    writeDoc(s.root, [...first, ev({ at: T0 + 5 * DAY, kind: 'created', path: 'x/business_rule/t/b__2.js' })]);
+    store = await s.open();
+    const r = await importScopeHistory(store, { root: s.root, name: NS, scope: NS, files, format: 2 });
+    expect(r).toMatchObject({ status: 'imported', rebuilt: true, imported: 3 });
+    expect(ids(store)).toEqual([historyRunId(NS)]);
+    const [hist] = store.info().runs;
+    expect(store.info().first).toBe(hist.firstSeq);
+    expect(hist.startAt).toBe(T0);
+    expect((await store.stateAt(hist.lastSeq)).changes.map(c => c.at)).toEqual([T0, T0 + DAY, T0 + 5 * DAY]);
+    expect(store.importInfo(historyRunId(NS))).toEqual({ format: 2, hash: sha(s.root), until: T0 + 5 * DAY });
+    // The next live run follows it.
+    await store.startRun({ ...emptyState(s.root, NS), files });
+    expect(store.info().runs[0].id).toBe(historyRunId(NS));
+    expect(store.info().runs[1].firstSeq).toBe(store.info().runs[0].lastSeq + 1);
+    await store.close();
+
+    // Once: the same or an older format adds nothing.
+    for (const format of [2, 1]) {
+      store = await s.open();
+      const runs = store.info().runs;
+      expect(await importScopeHistory(store, { root: s.root, name: NS, scope: NS, files, format })).toMatchObject({ status: 'already', rebuilt: false });
+      expect(store.info().runs).toEqual(runs);
+      await store.close();
+    }
+  });
+
+  it('a rebuild drops live runs from before the old import too, and every seq still resolves', async () => {
+    const s = await setup();
+    writeDoc(s.root, [ev({ at: T0, kind: 'created', path: 'x/business_rule/t/a__1.js' })]);
+    let store = await s.open();
+    await store.startRun({ ...emptyState(s.root, NS), files });
+    store.append({ type: 'files', files: [], removed: [] });
+    await store.close();
+    store = await s.open();
+    await importScopeHistory(store, { root: s.root, name: NS, scope: NS, files, format: 1 });
+    expect(ids(store)[1]).toBe(historyRunId(NS));
+    await store.startRun({ ...emptyState(s.root, NS), files });
+    await store.close();
+
+    store = await s.open();
+    expect(await importScopeHistory(store, { root: s.root, name: NS, scope: NS, files, format: 2 })).toMatchObject({ rebuilt: true });
+    expect(ids(store)).toEqual([historyRunId(NS)]);
+    await store.startRun({ ...emptyState(s.root, NS), files });
+    const info = store.info();
+    expect(info.runs[0].id).toBe(historyRunId(NS));
+    expect(info.first).toBe(info.runs[0].firstSeq);
+    for (let seq = info.first; seq <= info.last; seq++) await expect(store.stateAt(seq)).resolves.toBeTruthy();
+    await store.close();
+    // And it survives a restart: the index on disk matches.
+    store = await s.open();
+    expect(ids(store)[0]).toBe(historyRunId(NS));
+    expect(ids(store)).toHaveLength(2);
+    await store.close();
+  });
+
+  it('a rebuild that cannot delete the old runs keeps the old marker, so the next start tries again', async () => {
+    const s = await setup();
+    writeDoc(s.root, [ev({ at: T0, kind: 'created', path: 'x/business_rule/t/a__1.js' })]);
+    let store = await s.open();
+    await importScopeHistory(store, { root: s.root, name: NS, scope: NS, files, format: 1 });
+    await store.close();
+    const dir = projectDir(s.root, s.home);
+    const events = path.join(dir, `events-${historyRunId(NS)}.jsonl`);
+    store = await s.open();
+    // A directory where the run's file was: deleting it throws.
+    fs.rmSync(events);
+    fs.mkdirSync(events);
+    fs.writeFileSync(path.join(events, 'keep'), '');
+    expect((await importScopeHistory(store, { root: s.root, name: NS, scope: NS, files, format: 2 })).status).toBe('none');
+    await store.close();
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'imports.json'), 'utf8')).imports[historyRunId(NS)].format).toBe(1);
+
+    fs.rmSync(events, { recursive: true });
+    store = await s.open();
+    expect(await importScopeHistory(store, { root: s.root, name: NS, scope: NS, files, format: 2 })).toMatchObject({ status: 'imported', rebuilt: true });
+    expect(ids(store)).toEqual([historyRunId(NS)]);
+    await store.close();
+  });
+
+  it('an import recorded before formats (ids only) is rebuilt from the whole history', async () => {
+    const s = await setup();
+    const first = [ev({ at: T0, kind: 'created', path: 'x/business_rule/t/a__1.js' }), ev({ at: T0 + DAY, kind: 'modified', path: 'x/business_rule/t/a__1.js' })];
+    writeDoc(s.root, first);
+    let store = await s.open();
+    await importScopeHistory(store, { root: s.root, name: NS, scope: NS, files });
+    await store.close();
+    fs.writeFileSync(path.join(projectDir(s.root, s.home), 'imports.json'), JSON.stringify({ version: 1, ids: [historyRunId(NS)] }));
+    writeDoc(s.root, [...first, ev({ at: T0 + 5 * DAY, kind: 'created', path: 'x/business_rule/t/b__2.js' })]);
+    store = await s.open();
+    expect(store.importInfo(historyRunId(NS))).toEqual({ format: 0 });
+    expect(await importScopeHistory(store, { root: s.root, name: NS, scope: NS, files })).toMatchObject({ status: 'imported', rebuilt: true, imported: 3 });
+    expect(ids(store)).toEqual([historyRunId(NS)]);
+    expect(store.importInfo(historyRunId(NS))).toMatchObject({ format: HISTORY_IMPORT_FORMAT, until: T0 + 5 * DAY });
+    await store.close();
+  });
+
+  it('a partial history leaves an older format\'s run in place', async () => {
+    const s = await setup();
+    const events = [ev({ at: T0, kind: 'created', path: 'x/business_rule/t/a__1.js' })];
+    writeDoc(s.root, events);
+    let store = await s.open();
+    await importScopeHistory(store, { root: s.root, name: NS, scope: NS, files, format: 1 });
+    await store.close();
+    writeDoc(s.root, events, true);
+    store = await s.open();
+    const runs = store.info().runs;
+    expect(await importScopeHistory(store, { root: s.root, name: NS, scope: NS, files, format: 2 })).toMatchObject({ status: 'partial', stale: true });
+    expect(store.info().runs).toEqual(runs);
+    expect(store.importInfo(historyRunId(NS))?.format).toBe(1);
+    await store.close();
+  });
+
   it('refuses once the live run started, a duplicate id, a bad id, and an empty run', async () => {
     const s = await setup();
     const store = await s.open();
@@ -221,7 +361,7 @@ describe('HistoryStore.importRun and importScopeHistory', () => {
   it('no history file: nothing happens', async () => {
     const s = await setup();
     const store = await s.open();
-    expect(await importScopeHistory(store, { root: s.root, name: NS, scope: NS, files })).toEqual({ status: 'none', imported: 0, skipped: 0, runId: historyRunId(NS) });
+    expect(await importScopeHistory(store, { root: s.root, name: NS, scope: NS, files })).toEqual({ status: 'none', imported: 0, skipped: 0, runId: historyRunId(NS), rebuilt: false });
     expect(store.info().runs).toEqual([]);
     await store.close();
   });
@@ -244,7 +384,7 @@ describe('HistoryStore.importRun and importScopeHistory', () => {
     expect(info.runs[0].lastSeq - info.runs[0].firstSeq).toBe(3001);
     expect((await store.stateAt(info.runs[0].lastSeq)).files).toHaveLength(1700);
     await store.close();
-  }, 60_000);
+  }, 60_000 * TIME_SCALE);
 });
 
 describe('the fixture history as a back-dated run', () => {
@@ -271,7 +411,7 @@ describe('the fixture history as a back-dated run', () => {
     }
     model = new ProjectModel(root, { analyzers: [...ANALYZERS, serviceNowAnalyzer(root)] });
     await model.scan();
-  }, 120_000);
+  }, 120_000 * TIME_SCALE);
   afterAll(() => rmTree(dir));
 
   it('replays the scope growing, and ends where the live run starts', async () => {
