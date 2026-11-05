@@ -1,9 +1,10 @@
 # Changelog
 
-LiveMap is not published yet. This file lists changes that affect data or settings on your machine.
+This file lists changes that affect data or settings on your machine.
 
-## Unreleased
+## 0.2.0 (2026-11-05)
 
+- **First public release on npm** (`npm install -g livemap`). LiveMap is free to use under the LiveMap License (see LICENSE). Requires Node 20 or later.
 - **Ask tab.** Ask questions about the project, or about the open file and its connections, answered by your AI summaries provider.
 - **AI summaries no longer vanish on failure.** The inspector shows why a summary could not be written and offers Try again. OpenAI requests use `max_completion_tokens`, and an empty reply is reported as an error.
 - **History location can change on Windows and macOS.** LiveMap now resolves a project's real path with the operating system's own call (`fs.realpathSync.native`). On Windows this gives long names instead of 8.3 short names (`C:\Users\RUNNER~1`) and the folder's real casing; on macOS it gives the real casing. History and the project lock are keyed by a hash of that path, so a project whose path resolves differently now starts a new history in `~/.livemap/projects/`. The old folder is left in place; delete it when you no longer need it.

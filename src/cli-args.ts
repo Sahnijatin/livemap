@@ -41,7 +41,7 @@ export interface CoreHooks {
   resolveRoot(dir: string): string;
 }
 
-export const USAGE = 'Usage: livemap [dir=.] [--port N] [--no-open] [--pull[=SEC]] [--no-history] [--summaries]\n       livemap init [dir=.] [--agents claude,codex,cursor] [--remove]\n       livemap export [dir=.] [--session ID] [--no-code] [--out FILE]\n       livemap sn [dir=.] --scope NAMESPACE|SYS_ID [--instance NAME] [--nexus URL] [--skyforge-log FILE|none] [--log-window SECONDS] [--poll SECONDS|off] [--port N] [--no-open] [--no-history] [--mirror-only]';
+export const USAGE = 'Usage: livemap [dir=.] [--port N] [--no-open] [--pull[=SEC]] [--no-history] [--summaries]\n       livemap init [dir=.] [--agents claude,codex,cursor] [--remove]\n       livemap export [dir=.] [--session ID] [--no-code] [--out FILE]';
 const DEFAULT_PULL_SEC = 15;
 
 export interface Args { dir: string; port: number; open: boolean; pullSec: number | null; history: boolean; summaries: boolean }
