@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import { DEFAULT_PORT } from './server/server.js';
 import type { ProjectModel } from './engine/project.js';
 import type { HistoryStore } from './history/store.js';
@@ -42,16 +41,10 @@ export interface CoreHooks {
   resolveRoot(dir: string): string;
 }
 
-export const USAGE = 'Usage: livemap [dir=.] [--port N] [--no-open] [--pull[=SEC]] [--no-history] [--summaries]\n       livemap init [dir=.] [--agents claude,codex,cursor] [--remove]\n       livemap export [dir=.] [--session ID] [--no-code] [--out FILE]\n       livemap --version';
+export const USAGE = 'Usage: livemap [dir=.] [--port N] [--no-open] [--pull[=SEC]] [--no-history] [--summaries]\n       livemap init [dir=.] [--agents claude,codex,cursor] [--remove]\n       livemap export [dir=.] [--session ID] [--no-code] [--out FILE]';
 const DEFAULT_PULL_SEC = 15;
 
 export interface Args { dir: string; port: number; open: boolean; pullSec: number | null; history: boolean; summaries: boolean }
-
-/** The installed version, read from package.json (one level above both src/ and dist/). */
-export function readVersion(): string {
-  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
-  return pkg.version;
-}
 
 export function fail(message: string): never {
   process.stderr.write(`livemap: ${message}\n${USAGE}\n`);
@@ -84,7 +77,6 @@ export function parseArgs(argv: string[]): Args {
     else if (a === '--port') args.port = parsePort(argv[++i]);
     else if (a.startsWith('--port=')) args.port = parsePort(a.slice('--port='.length));
     else if (a === '-h' || a === '--help') { process.stdout.write(`${USAGE}\n`); process.exit(0); }
-    else if (a === '-v' || a === '--version') { process.stdout.write(`${readVersion()}\n`); process.exit(0); }
     else if (a.startsWith('-')) fail(`unknown option: ${a}`);
     else if (sawDir) fail(`unexpected argument: ${a}`);
     else { args.dir = a; sawDir = true; }

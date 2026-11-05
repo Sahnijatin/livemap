@@ -36,5 +36,6 @@ git push origin v0.2.0
 ## After publishing
 
 - Check the package page: https://www.npmjs.com/package/livemap
-- Try it in an empty folder: `npx livemap@latest --version` (prints the version)
+- Check the published version: `npm view livemap version`
+- Try it in an empty folder: `npx livemap@latest --help`
 - A broken release can be deprecated with `npm deprecate livemap@<version> "<reason>"`. Unpublishing is only possible within 72 hours and is best avoided.
