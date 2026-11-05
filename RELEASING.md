@@ -1,6 +1,6 @@
 # Releasing
 
-How to publish a new version of `livemap` to npm. Run these on your own machine, from a clean checkout of `main`.
+How to publish a new version of `livemap` to npm. Run these on your own machine (Node 20 or later), from a clean checkout of `main`.
 
 ## Before you publish
 
