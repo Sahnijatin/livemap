@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parseArgs } from '../src/cli-args.js';
+import fs from 'node:fs';
+import { parseArgs, readVersion } from '../src/cli-args.js';
 
 describe('parseArgs --pull', () => {
   it('reads --pull 30 with a space and keeps the default dir', () => {
@@ -10,5 +11,12 @@ describe('parseArgs --pull', () => {
   });
   it('reads --pull=45', () => {
     expect(parseArgs(['--pull=45'])).toMatchObject({ pullSec: 45, dir: '.' });
+  });
+});
+
+describe('readVersion', () => {
+  it('returns the version from package.json', () => {
+    const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+    expect(readVersion()).toBe(pkg.version);
   });
 });

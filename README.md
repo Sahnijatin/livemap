@@ -2,50 +2,52 @@
 
 See what your AI coding agent is building, live.
 
-LiveMap watches your project while Claude Code, Codex, Cursor or a cloud builder works on it, and shows every file, function, route and table it touches as it happens. It runs locally as a CLI and a browser UI, so you can follow the build, rewind it, and flag or pause the agent when something looks wrong.
+LiveMap watches your project while a coding agent works on it, and shows every file, function, route and table it touches as it happens. It runs locally as a CLI and a browser UI, so you can follow the build, rewind it, and flag or pause the agent when something looks wrong.
 
-![The LiveMap Map following an agent as it writes a file, with a plain-English summary in the inspector](docs/images/hero.png)
+![The LiveMap Map following an agent as it writes a file, with a plain-English summary in the inspector](https://livemap.in/images/hero.png)
 
-**Try the demo:** download `livemap-demo.html` from the [latest GitHub Release](https://github.com/Sahnijatin/livemap/releases/latest) and open it in a browser. No install needed. Its AI summaries are sample text written for the demo; real summaries need a provider you configure, such as your own API key or a local Ollama (see [AI summaries](docs/guide.md#ai-summaries)).
+**Try it without installing:** [livemap.in/demo](https://livemap.in/demo) replays a real agent session in your browser.
 
-## Quickstart
+## Quick start
 
-LiveMap is not on npm yet; until it is, install from source (see [CONTRIBUTING](CONTRIBUTING.md#install-from-source)).
-
-Requires Node 18 or later. In the project your agent works on:
+Requires Node 20 or later. In the project your agent works on:
 
 ```sh
 npx livemap init      # adds hooks for the agents it finds
 npx livemap           # indexes the project and opens the UI in your browser
 ```
 
-`livemap init` sets up the agents whose config folder it finds; name them with `--agents claude,codex,cursor` if it finds none. All commands and flags are in [the guide](docs/guide.md#command-line).
+Or install it once:
+
+```sh
+npm install -g livemap
+livemap init
+livemap
+```
+
+`livemap init` sets up the agents whose config folder it finds; name them with `--agents claude,codex,cursor` if it finds none. Run `livemap --help` for every command and flag.
 
 ## What you get
 
 **Activity feed.** The agent's prompts, messages and tool calls, with a card for every change: functions, routes and tables added, changed or removed, and the diff.
 
-![The Activity feed](docs/images/activity.png)
-
-With AI summaries turned on (opt-in), change cards and the inspector also get a one-sentence summary in plain English.
-
-![A plain-English summary in the inspector](docs/images/summaries.png)
+![The Activity feed](https://livemap.in/images/activity.png)
 
 **Map.** Every code file as a card in its folder, linked by imports. The file being written glows, new files spring in, and the camera follows the agent.
 
-![The Map at the Files level](docs/images/map.png)
+![The Map at the Files level](https://livemap.in/images/map.png)
 
 **Schema, API and Stack.** The tables, routes and technologies LiveMap found, each linked to its source line.
 
-![The Schema view](docs/images/schema.png)
+**Inspector.** Select any file to see what is inside it, what it connects to, and why it changed. With AI summaries turned on (opt-in), changes also get a one-sentence summary in plain English.
 
-**Timeline.** Drag back through the session to see the whole project as it was at any moment, or replay it at eight times speed.
+**Timeline.** Drag back through the session to see the whole project as it was at any moment, or replay it.
 
-![The timeline, rewound](docs/images/timeline.png)
+![The timeline, rewound](https://livemap.in/images/timeline.png)
 
 **Steering.** Flag a file or the project with a note, or pause the agent. The agent gets the note at its next tool call.
 
-**Export.** `livemap export` writes the history as one HTML file that anyone can open offline. Add `--no-code` to leave out file contents, diffs and agent tool inputs and outputs, or `--session ID` to export one agent session.
+**Export.** `livemap export` writes the history as one HTML file that anyone can open offline. Add `--no-code` to leave out file contents, diffs and tool inputs and outputs, or `--session ID` to export one agent session.
 
 ## Works with
 
@@ -56,32 +58,19 @@ With AI summaries turned on (opt-in), change cards and the inspector also get a 
 | Cursor | Hooks |
 | Cloud builders | Git, via `--pull` |
 
-Any other tool still shows up through its file changes. Details in [docs/agents.md](docs/agents.md).
+Any other tool still shows up through its file changes.
 
 ## Privacy
 
-LiveMap runs entirely on your machine: the server listens on `127.0.0.1` only, and its API needs a token that changes every run. History, settings and caches stay in `~/.livemap`. LiveMap keeps only the key names from `.env` files, never their values. Nothing leaves your machine unless you turn on AI summaries, which send code only to the provider you choose, or run with `--pull`, which contacts your git remote. Read [docs/privacy.md](docs/privacy.md) for what is stored, what is sent, and how to delete it all.
-
-## Docs
-
-- [Guide](docs/guide.md): the command line, the UI, history, summaries, exports and supported frameworks.
-- [Agents](docs/agents.md): what `livemap init` writes, cloud builders, Flag and Pause, attribution.
-- [Privacy](docs/privacy.md): what runs where, what is stored and sent.
-- [ServiceNow](docs/servicenow.md): mirror a ServiceNow scope, see which agent call changed each record, and filter by scope, update set, session or confidence.
-- [How it works](docs/how-it-works.md): the architecture.
-- [Contributing](CONTRIBUTING.md): building, testing and house rules.
+LiveMap runs entirely on your machine: the server listens on `127.0.0.1` only, and its API needs a token that changes every run. History, settings and caches stay in `~/.livemap`. LiveMap keeps only the key names from `.env` files, never their values. Nothing leaves your machine unless you turn on AI summaries, which send code only to the provider you choose, or run with `--pull`, which contacts your git remote.
 
 ## License
 
-LiveMap is source-available under the MIT license with the [Commons Clause](https://commonsclause.com/) condition. In plain terms:
+LiveMap is free to use, including at work and for commercial projects. It is not open source: you may not resell, redistribute, modify or reverse engineer it. See the [LICENSE](LICENSE) file for the exact terms. This summary is not legal advice.
 
-- You may use, modify and share LiveMap for free, including at work.
-- Nobody may sell LiveMap, or sell a product or service whose value comes entirely or substantially from it. That includes paid hosting, consulting or support for LiveMap.
+LiveMap includes open source components under their own licenses, listed with their license texts in `THIRD_PARTY_NOTICES.md` inside the package. The Map and Schema views are drawn with React Flow (MIT) and laid out with ELK through elkjs (EPL-2.0, source at https://github.com/kieler/elkjs).
 
-Because of that condition, LiveMap is not open source as the OSI defines it. This summary is not legal advice; the [LICENSE](LICENSE) file has the exact terms.
+## Links
 
-## Credits
-
-The Map and Schema views are drawn with [React Flow](https://reactflow.dev) (MIT license) and laid out with [ELK](https://eclipse.dev/elk/) through elkjs (EPL-2.0 license). Motion uses [Framer Motion](https://github.com/motiondivision/motion) (framer-motion, MIT license), and the ⌘K palette uses [cmdk](https://github.com/pacocoursey/cmdk) (MIT license).
-
-The build writes `THIRD_PARTY_NOTICES.md` to `dist/`, `dist/ui/` and `dist/ui-export/`. It lists every package and parser grammar LiveMap includes or installs, with its license text, and the source of elkjs (https://github.com/kieler/elkjs). An exported replay carries a short license comment with the same elkjs link.
+- Website: [livemap.in](https://livemap.in)
+- Demo: [livemap.in/demo](https://livemap.in/demo)

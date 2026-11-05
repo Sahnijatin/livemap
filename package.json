@@ -1,13 +1,27 @@
 {
   "name": "livemap",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "description": "See what your AI coding agent is building, live: every file, function, route and table it touches, with rewind.",
+  "homepage": "https://livemap.in",
+  "keywords": [
+    "ai",
+    "coding-agent",
+    "agents",
+    "code-map",
+    "architecture",
+    "visualization",
+    "developer-tools",
+    "live",
+    "timeline",
+    "cli"
+  ],
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "bin": {
     "livemap": "dist/cli.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "files": [
     "dist",
