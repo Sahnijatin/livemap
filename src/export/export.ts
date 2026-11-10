@@ -250,7 +250,11 @@ function withoutCode(initial: ProjectState, messages: Rec[]): { initial: Project
     return { ...out, tool: { ...tool, label: toolFamily(tool.name) === 'shell' ? shellLabel(tool.label) : stripCode(tool.label) } };
   };
   const session = (s: AgentSession): AgentSession => ({ ...s, title: stripCode(s.title) });
-  const control = (c: ControlState): ControlState => ({ ...c, flags: c.flags.map(f => ({ ...f, note: stripCode(f.note) })) });
+  const control = (c: ControlState): ControlState => ({
+    ...c,
+    flags: c.flags.map(f => ({ ...f, note: stripCode(f.note) })),
+    ...(c.guard ? { guard: { ...c.guard, rules: c.guard.rules.map(r => (r.message ? { ...r, message: stripCode(r.message) } : r)) } } : {}),
+  });
   const summaries = (x: SummariesState): SummariesState => ({
     ...x, files: Object.fromEntries(Object.entries(x.files).map(([p, f]) => [p, { ...f, summary: stripCode(f.summary) }])),
   });

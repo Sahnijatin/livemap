@@ -4,6 +4,7 @@ This file lists changes that affect data or settings on your machine.
 
 ## Unreleased
 
+- **Guardrails.** Rules in `.livemap/guardrails.json` in your project block an agent's tool call before it runs: `paths` (as in `.gitignore`) for files it must not write, `commands` for text in shell commands, and `action: "pause"` to pause every agent as well. LiveMap only reads this file. The inspector lists the rules and the latest blocked calls, which are also recorded in history. See `docs/agents.md`.
 - **`livemap --version`** (or `-v`, `version`) prints the installed version, and `livemap help` prints the usage. A folder named `help` or `version` is now written `./help`.
 - **`.git/info/exclude` is honored.** Files listed there are skipped like `.gitignore`d ones. `livemap init` lists its own hook files there, so they no longer show in the map or as the first change in the Activity feed. Restart LiveMap after editing the file.
 - **Dependencies updated** for security advisories in the MCP SDK and its HTTP dependencies, used by `livemap sn` and `livemap mcp-proxy`.

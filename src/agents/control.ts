@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import type { AgentKind, ControlState, Flag } from '../shared/types.js';
+import type { AgentKind, ControlState, Flag, GuardState } from '../shared/types.js';
 
 const MAX_NOTE = 2000;
 export const PAUSE_MESSAGE = 'The user paused this session in LiveMap. Stop and wait for their instructions.';
@@ -10,9 +10,17 @@ export class Control extends EventEmitter {
   private paused = false;
   private flags: Flag[] = [];
   private nextId = 1;
+  private guard: GuardState | undefined;
 
   state(): ControlState {
-    return { paused: this.paused, flags: this.flags.map((f) => ({ ...f, ...(f.deliveredTo ? { deliveredTo: { ...f.deliveredTo } } : {}) })) };
+    const flags = this.flags.map((f) => ({ ...f, ...(f.deliveredTo ? { deliveredTo: { ...f.deliveredTo } } : {}) }));
+    return this.guard ? { paused: this.paused, flags, guard: this.guard } : { paused: this.paused, flags };
+  }
+
+  /** The guardrails' rules, errors and hits as the UI shows them (undefined: no rules file). */
+  setGuard(guard: GuardState | undefined): void {
+    this.guard = guard;
+    this.emit('change', this.state());
   }
 
   addFlag(target: string | null, note: string, now: number = Date.now()): Flag {

@@ -105,4 +105,20 @@ export interface Attribution {
   rule?: string; reason?: string; candidates?: AttributionCandidate[];
 }
 export interface Flag { id: number; target: string | null; note: string; createdAt: number; deliveredAt?: number; deliveredTo?: { agent: AgentKind; sessionId: string } }
-export interface ControlState { paused: boolean; flags: Flag[] }
+/** One rule of the project's `.livemap/guardrails.json`, with its defaults filled in. */
+export interface GuardRule {
+  /** Gitignore-style patterns, relative to the project folder. */
+  paths: string[];
+  /** Text a shell command must contain. */
+  commands: string[];
+  /** `pause` also pauses every agent. */
+  action: 'block' | 'pause';
+  /** `write`: path patterns apply to tools that write; `any`: to tools that read as well. */
+  on: 'write' | 'any';
+  message?: string;
+}
+/** A tool call a guardrail blocked. `target` is the path, or `command contains "<pattern>"` (never the command). */
+export interface GuardHit { at: number; rule: number; action: 'block' | 'pause'; target: string; agent: AgentKind; sessionId: string; tool: string }
+export interface GuardState { file: string; rules: GuardRule[]; errors: string[]; hits: GuardHit[] }
+/** `guard` is absent while the project has no guardrails file. */
+export interface ControlState { paused: boolean; flags: Flag[]; guard?: GuardState }

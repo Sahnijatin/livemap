@@ -719,6 +719,19 @@
   .flagrow .fl-tx span { color:var(--ink2); overflow-wrap:anywhere; }
   .flagrow .fl-tx small { font-size:11px; color:var(--orange); }
   .flagrow.done .fl-tx small { color:var(--green); }
+  .guardlist, .guardhits { display:flex; flex-direction:column; gap:6px; }
+  .guardhits { margin-top:8px; }
+  .guardrule { display:flex; gap:10px; align-items:flex-start; padding:9px 10px; border-radius:12px; background:var(--card); border:1px solid var(--hair); }
+  .guardrule .tg { margin-top:2px; }
+  .guardrule .gr-tx { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; font-size:12.5px; color:var(--ink2); }
+  .guardrule .gr-pats { display:flex; flex-wrap:wrap; gap:4px 6px; }
+  .guardrule code, .guardhit code { font:12px var(--mono); color:var(--ink); overflow-wrap:anywhere; }
+  .guardrule small { font-size:11px; color:var(--ink3); }
+  .guardhit { display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 8px; padding:7px 10px; border-radius:11px; background:var(--red-t); font-size:12.5px; }
+  .guardhit b { font:600 11.5px var(--sans); color:var(--red); }
+  .guardhit small { font-size:11px; color:var(--ink2); margin-left:auto; }
+  .guard-err { display:flex; flex-direction:column; gap:2px; margin-bottom:8px; padding:8px 10px; border-radius:11px; background:var(--orange-t); font-size:12.5px; color:var(--ink); overflow-wrap:anywhere; }
+  .guard-err b { font:600 12px var(--mono); }
   .fl-x { border:0; background:none; width:24px; height:24px; border-radius:50%; cursor:pointer; color:var(--ink3); font-size:17px; line-height:1; flex-shrink:0; }
   .fl-x:hover:not(:disabled) { background:var(--hair); color:var(--red); }
   .fl-x:disabled { opacity:.4; cursor:not-allowed; }

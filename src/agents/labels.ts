@@ -119,7 +119,7 @@ function inputPaths(input: unknown): string[] {
   return out;
 }
 
-function commandText(input: unknown): string | undefined {
+export function commandText(input: unknown): string | undefined {
   const c = rec(input).command;
   if (Array.isArray(c)) { const s = c.filter((x) => typeof x === 'string').join(' '); return s || undefined; }
   return str(c) ?? str(rec(input).cmd);

@@ -47,6 +47,8 @@ livemap
 
 **Steering.** Flag a file or the project with a note, or pause the agent. The agent gets the note at its next tool call.
 
+**Guardrails.** Rules in `.livemap/guardrails.json` stop the agent before it edits files or runs commands you ruled out, such as migrations, `.env` files or `git push`.
+
 **Export.** `livemap export` writes the history as one HTML file that anyone can open offline. Add `--no-code` to leave out file contents, diffs and tool inputs and outputs, or `--session ID` to export one agent session.
 
 ## Works with

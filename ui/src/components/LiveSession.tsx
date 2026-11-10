@@ -9,6 +9,7 @@ import { removeFlag } from '../api';
 import { READ_ONLY_TIP } from '../history';
 import { COUNTER_LABELS, CountUp, liveFlags, useLiveState } from './Activity';
 import { FlagBox } from './FlagBox';
+import { Guardrails } from './Guardrails';
 import { FlagIcon, GitIcon, LayerTile } from './icons';
 
 function YourFlags() {
@@ -126,6 +127,7 @@ export function LiveSession() {
           <FlagBox target={null} />
         </div>
       )}
+      <Guardrails />
       <div className="muted" style={{ fontSize: 12 }}>Select any file to see what is inside it, what it connects to, and why it changed.</div>
       {!replay && <a className="notices" href="/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer">Third-party notices</a>}
     </>
