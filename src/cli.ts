@@ -14,7 +14,7 @@ import { HistoryStore } from './history/store.js';
 import { buildExport, codeWarning } from './export/export.js';
 import { loadSummaryConfig } from './summarize/config.js';
 import { Summarizer } from './summarize/summarizer.js';
-import { USAGE, fail, parseArgs, type Args, type ServeOptions } from './cli-args.js';
+import { USAGE, fail, metaCommand, parseArgs, readVersion, type Args, type ServeOptions } from './cli-args.js';
 import { ANALYZERS } from './engine/domain/index.js';
 // The ServiceNow source registers here until the plugin loader (#53) can load it.
 import { runServiceNow } from '../plugins/servicenow/cli.js';
@@ -149,6 +149,11 @@ async function runExport(argv: string[]): Promise<void> {
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
+  const meta = metaCommand(argv);
+  if (meta) {
+    process.stdout.write(meta === 'version' ? `${readVersion()}\n` : `${USAGE}\n`);
+    return;
+  }
   if (argv[0] === 'init') return runInit(argv.slice(1));
   if (argv[0] === 'export') return runExport(argv.slice(1));
   if (argv[0] === 'mcp-proxy') return runMcpProxy(argv.slice(1));

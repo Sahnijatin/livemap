@@ -2,6 +2,12 @@
 
 This file lists changes that affect data or settings on your machine.
 
+## Unreleased
+
+- **`livemap --version`** (or `-v`, `version`) prints the installed version, and `livemap help` prints the usage. A folder named `help` or `version` is now written `./help`.
+- **`.git/info/exclude` is honored.** Files listed there are skipped like `.gitignore`d ones. `livemap init` lists its own hook files there, so they no longer show in the map or as the first change in the Activity feed. Restart LiveMap after editing the file.
+- **Dependencies updated** for security advisories in the MCP SDK and its HTTP dependencies, used by `livemap sn` and `livemap mcp-proxy`.
+
 ## 0.2.0 (2026-11-05)
 
 - **First public release on npm** (`npm install -g livemap`). LiveMap is free to use under the LiveMap License (see LICENSE). Requires Node 20 or later.
