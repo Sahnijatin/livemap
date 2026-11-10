@@ -1,4 +1,5 @@
-import type { Flag } from '@shared/types.js';
+import type { Flag, GuardRule } from '@shared/types.js';
+import type { SettingsView } from '@shared/settings.js';
 import { authHeaders } from './connection';
 
 /**
@@ -14,7 +15,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request(method: 'POST' | 'DELETE', url: string, body?: unknown): Promise<Response> {
+async function request(method: 'GET' | 'POST' | 'DELETE', url: string, body?: unknown): Promise<Response> {
   let res: Response;
   try {
     res = await fetch(url, {
@@ -50,4 +51,17 @@ export async function removeFlag(id: number): Promise<void> {
 
 export async function setPaused(paused: boolean): Promise<void> {
   await request('POST', '/api/pause', { paused });
+}
+
+export async function getSettings(): Promise<SettingsView> {
+  return (await (await request('GET', '/api/settings')).json()) as SettingsView;
+}
+
+/** `apiKey`: text sets it, null removes the saved one, absent keeps it. The reply never holds the key. */
+export async function saveAiSettings(ai: { enabled: boolean; provider: string; model?: string; url?: string; monthlyTokenCap?: number; apiKey?: string | null }): Promise<SettingsView> {
+  return (await (await request('POST', '/api/settings/ai', ai)).json()) as SettingsView;
+}
+
+export async function saveGuardrails(rules: GuardRule[]): Promise<void> {
+  await request('POST', '/api/settings/guardrails', { rules });
 }

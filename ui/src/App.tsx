@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import clsx from 'clsx';
 import { isGated, useStore } from './store';
 import { Toolbar } from './components/Toolbar';
@@ -13,6 +13,9 @@ import { closePanel, useSlideOvers } from './panels';
 import { Dock } from './components/Dock';
 import { PanelHandle } from './components/PanelHandle';
 
+// Loaded on first open, so the main chunk carries none of it.
+const Settings = lazy(() => import('./components/Settings'));
+
 export function App() {
   const panel = useStore(s => s.panel);
   const name = useStore(s => s.name);
@@ -20,6 +23,7 @@ export function App() {
   const root = useStore(s => s.root);
   // While the gate covers the workspace, nothing behind it is focusable or clickable.
   const gated = useStore(isGated);
+  const settingsOpen = useStore(s => s.settingsOpen);
 
   useEffect(() => {
     document.title = name ? `${name} · LiveMap` : 'LiveMap';
@@ -43,6 +47,7 @@ export function App() {
       </Dock>
       <Toast />
       <PaletteHost />
+      {settingsOpen && <Suspense fallback={null}><Settings /></Suspense>}
       <Gate />
     </MotionRoot>
   );

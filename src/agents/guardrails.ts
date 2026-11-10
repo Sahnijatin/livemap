@@ -50,7 +50,8 @@ function parseRule(v: unknown): GuardRule | string {
   if (v.message !== undefined && typeof v.message !== 'string') return '"message" must be text';
   // One line: the message is part of the block text the agent reads.
   const message = typeof v.message === 'string' ? v.message.trim().replace(/\s*\n\s*/g, ' ').slice(0, MAX_TEXT).trim() : '';
-  return { paths, commands, action, on, ...(message ? { message } : {}) };
+  if (v.enabled !== undefined && typeof v.enabled !== 'boolean') return '"enabled" must be true or false';
+  return { paths, commands, action, on, ...(message ? { message } : {}), ...(v.enabled === false ? { enabled: false as const } : {}) };
 }
 
 /** The valid rules of a guardrails file, and one error per rule that was skipped. */
@@ -155,6 +156,7 @@ export class Guardrails {
     this.refresh();
     for (let i = 0; i < this.rules.length; i++) {
       const rule = this.rules[i];
+      if (rule.enabled === false) continue;
       const m = matchRule(rule, call);
       if (!m) continue;
       const hit: GuardHit = { at: now, rule: i, action: rule.action, target: m.target, agent: who.agent, sessionId: who.sessionId, tool: call.tool };

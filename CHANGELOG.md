@@ -4,6 +4,7 @@ This file lists changes that affect data or settings on your machine.
 
 ## Unreleased
 
+- **Settings in the UI.** The gear button in the toolbar opens Settings. AI summaries and Ask can be turned on or off there, with the provider, model, address, token cap and API key, and take effect without a restart. Saving writes `~/.livemap/config.json` (mode 0600), keeping its other entries; the key is never shown again. Changing the provider or address removes a saved key. Guardrail rules can be added, turned off (`"enabled": false`) or removed there, which writes `.livemap/guardrails.json` in the project. The Ask tab's "AI is off" page now opens Settings.
 - **Guardrails.** Rules in `.livemap/guardrails.json` in your project block an agent's tool call before it runs: `paths` (as in `.gitignore`) for files it must not write, `commands` for text in shell commands, and `action: "pause"` to pause every agent as well. LiveMap only reads this file. The inspector lists the rules and the latest blocked calls, which are also recorded in history. See `docs/agents.md`.
 - **`livemap --version`** (or `-v`, `version`) prints the installed version, and `livemap help` prints the usage. A folder named `help` or `version` is now written `./help`.
 - **`.git/info/exclude` is honored.** Files listed there are skipped like `.gitignore`d ones. `livemap init` lists its own hook files there, so they no longer show in the map or as the first change in the Activity feed. Restart LiveMap after editing the file.

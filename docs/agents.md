@@ -95,6 +95,7 @@ Guardrails stop an agent before it touches files or runs commands you ruled out,
 | `action` | `block` (the default) refuses the tool call. `pause` refuses it and turns on Pause for every agent, until you click "Resume agent". |
 | `on` | `write` (the default): `paths` apply to tools that write, edit or patch files. `any`: also to tools that read them. |
 | `message` | Sent to the agent with the refusal, so it knows what to do instead. |
+| `enabled` | `false` keeps the rule in the file but turns it off. |
 
 A rule needs `paths` or `commands`. Rules are checked in file order and the first match wins. The agent is told, for example:
 
@@ -104,7 +105,8 @@ Blocked by a LiveMap guardrail: db/migrations/001.sql matches the rule "db/migra
 
 - **Where you see it.** The inspector's Live session view has a Guardrails section with the active rules and the latest blocked calls. The blocked tool call also shows in the Activity feed.
 - **Editing the rules.** LiveMap re-reads the file when it changes: before every tool call, and every 2 seconds for the UI. A rule it cannot read is skipped and named in the Guardrails section; the other rules stay active. Limits: 100 rules, 50 patterns per rule, 500 characters per pattern or message.
-- **Sharing.** The file is yours and LiveMap never writes it. Commit it to share the rules with your team.
+- **Settings.** The gear button in the toolbar opens Settings, where you can add a rule, turn one off or on, and remove one without editing the file. A rule that is off stays in the file with `"enabled": false` and blocks nothing. Saving from Settings rewrites the file as plain JSON with 2-space indentation.
+- **Sharing.** LiveMap writes the file only when you change rules in Settings. Commit it to share the rules with your team.
 - **Order.** Pause and waiting flags are delivered first. A tool call they already stop is not checked against the rules.
 - **Limits.** Guardrails work through the same hooks as Flag and Pause (see the table above), so they need `livemap init` and a running LiveMap. A shell command carries no file list: a rule can match the command's text, but not the files a script changes. Cursor file edits cannot be blocked. A hit records the path, or the rule's command pattern, never the command itself.
 

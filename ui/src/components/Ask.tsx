@@ -116,7 +116,7 @@ export function AskView() {
   const replay = useStore(s => s.replay);
   const selected = useStore(s => s.selected);
   const end = useRef<HTMLDivElement>(null);
-  const [copied, setCopied] = useState(false);
+  const openSettings = useStore(s => s.openSettings);
   const busy = items.some(i => i.answer === undefined && i.error === undefined);
   const last = items[items.length - 1];
 
@@ -134,14 +134,12 @@ export function AskView() {
     return <div className="askv"><div className="ask-off"><b>Ask needs a running LiveMap</b>This is an exported replay, so there is no project or AI provider to ask.</div></div>;
   }
   if (state === 'off') {
-    const example = `${JSON.stringify({ summaries: { enabled: true, provider: 'anthropic', apiKey: 'your-api-key' } }, null, 2)}\n`;
     return (
       <div className="askv">
         <div className="ask-off">
           <b>AI is off</b>
-          Asking questions about the project uses the same provider as AI summaries. Add this to <code>~/.livemap/config.json</code> (your home folder, not the project) and restart LiveMap:
-          <pre>{example}</pre>
-          <button type="button" className="linkbtn" onClick={() => navigator.clipboard.writeText(example).then(() => setCopied(true), () => undefined)}>{copied ? 'Copied' : 'Copy'}</button>
+          Asking questions about the project uses the same provider as AI summaries. Turn it on and add your API key in Settings; no restart is needed.
+          <div><button type="button" className="ask-send" style={{ marginTop: 12 }} onClick={openSettings}>Open Settings</button></div>
         </div>
       </div>
     );

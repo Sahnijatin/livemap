@@ -14,6 +14,8 @@ import { HistoryStore } from './history/store.js';
 import { buildExport, codeWarning } from './export/export.js';
 import { loadSummaryConfig } from './summarize/config.js';
 import { Summarizer } from './summarize/summarizer.js';
+import { SwitchableSummarizer } from './summarize/switch.js';
+import { createSettings } from './settings.js';
 import { USAGE, fail, metaCommand, parseArgs, readVersion, type Args, type ServeOptions } from './cli-args.js';
 import { ANALYZERS } from './engine/domain/index.js';
 // The ServiceNow source registers here until the plugin loader (#53) can load it.
@@ -207,7 +209,9 @@ async function serve(root: string, args: Args, opts: ServeOptions = {}): Promise
   // Summaries are opt-in: config.json `summaries.enabled` or --summaries; a key in the environment alone never enables them.
   const home = livemapHome();
   const summaryConfig = loadSummaryConfig({ env: process.env, home, flag: args.summaries });
-  const summarizer = 'disabled' in summaryConfig ? undefined : new Summarizer(summaryConfig, { home });
+  // One summarizer for the whole run: Settings switches it on, off or to another provider without a restart.
+  const summarizer = new SwitchableSummarizer(cfg => new Summarizer(cfg, { home }), 'disabled' in summaryConfig ? undefined : summaryConfig);
+  const settings = createSettings({ home, root, env: process.env, version: readVersion(), flag: args.summaries, apply: cfg => summarizer.set(cfg) });
   if ('disabled' in summaryConfig && summaryConfig.reason === 'bad-config') {
     const why = summaryConfig.detail ?? 'could not be read or has an invalid "summaries" setting';
     process.stderr.write(`livemap: warning: summaries are off: ${path.join(home, 'config.json')}: ${why}\n`);
@@ -217,7 +221,7 @@ async function serve(root: string, args: Args, opts: ServeOptions = {}): Promise
 
   let server: Awaited<ReturnType<typeof startServer>>;
   try {
-    server = await startServer({ model, watcher, port: args.port, uiDir, hub, attributor, history, summarizer, ...(opts.title ? { name: opts.title } : {}), lockId: () => lockId(root), warn: m => process.stderr.write(`livemap: warning: ${m}\n`) });
+    server = await startServer({ model, watcher, port: args.port, uiDir, hub, attributor, history, summarizer, settings, ...(opts.title ? { name: opts.title } : {}), lockId: () => lockId(root), warn: m => process.stderr.write(`livemap: warning: ${m}\n`) });
   } catch (e) {
     fail(`could not start server: ${(e as Error).message}`);
   }
@@ -262,7 +266,7 @@ async function serve(root: string, args: Args, opts: ServeOptions = {}): Promise
     setTimeout(() => process.exit(0), 3000).unref(); // failsafe if cleanup hangs
     try {
       git?.stop();
-      summarizer?.stop();
+      summarizer.stop();
       attributor.stop();
       hub.stop();
       await watcher.stop();

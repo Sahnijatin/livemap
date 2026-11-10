@@ -10,7 +10,7 @@ import { preloadPalette } from '../palette/PaletteHost';
 import { PANELS, shownLayout, togglePanel } from '../panels';
 import { NARROW_QUERY, useMedia } from '../media';
 import type { Panel } from '../panelLayout';
-import { MenuIcon, MoonIcon, PanelIcon, PauseIcon, PlayIcon, SearchIcon, SidebarIcon, SunIcon } from './icons';
+import { MenuIcon, GearIcon, MoonIcon, PanelIcon, PauseIcon, PlayIcon, SearchIcon, SidebarIcon, SunIcon } from './icons';
 
 export function StatusChip() {
   const connection = useStore(s => s.connection);
@@ -203,6 +203,14 @@ function PanelButton({ p }: { p: Panel }) {
   );
 }
 
+/** Opens Settings (AI, guardrails). An exported replay has no server to configure, so it has no button. */
+function SettingsButton() {
+  const open = useStore(s => s.openSettings);
+  const replay = useStore(s => s.replay);
+  if (replay) return null;
+  return <button type="button" className="iconbtn" aria-label="Settings" title="Settings" onClick={open}><GearIcon /></button>;
+}
+
 export function Toolbar() {
   const { theme, toggle } = useTheme();
 
@@ -219,6 +227,7 @@ export function Toolbar() {
       <button type="button" className="iconbtn theme" aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} onClick={toggle}>
         {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
       </button>
+      <SettingsButton />
       <PanelButton p="inspector" />
       <PauseButton />
     </header>

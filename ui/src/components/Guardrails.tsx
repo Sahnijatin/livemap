@@ -8,8 +8,10 @@ const FILE = '.livemap/guardrails.json';
 
 function RuleRow({ rule }: { rule: GuardRule }) {
   return (
-    <div className="guardrule">
-      <span className={`tg ${rule.action === 'pause' ? 't-chg' : 't-del'}`}>{rule.action === 'pause' ? 'Pause' : 'Block'}</span>
+    <div className={rule.enabled === false ? 'guardrule off' : 'guardrule'}>
+      {rule.enabled === false
+        ? <span className="tg t-off">Off</span>
+        : <span className={`tg ${rule.action === 'pause' ? 't-chg' : 't-del'}`}>{rule.action === 'pause' ? 'Pause' : 'Block'}</span>}
       <div className="gr-tx">
         <div className="gr-pats">
           {rule.paths.map(p => <code key={`p:${p}`}>{p}</code>)}

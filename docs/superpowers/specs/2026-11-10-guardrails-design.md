@@ -8,7 +8,7 @@ Solo developers and small teams running coding agents. Today LiveMap shows what 
 
 ## Rules file
 
-`.livemap/guardrails.json` in the project folder. It is the user's file: LiveMap only reads it.
+`.livemap/guardrails.json` in the project folder. LiveMap reads it, and writes it only when the user changes rules in Settings. A rule with `"enabled": false` is kept but not enforced.
 
 ```json
 {

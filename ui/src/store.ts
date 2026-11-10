@@ -205,6 +205,10 @@ export interface StoreState {
   /** Collapses or expands a docked panel, ending a peek at the inspector, and saves. */
   collapse(p: Panel, on: boolean): void;
   setDock(patch: Partial<StoreState['dock']>): void;
+  /** The Settings dialog is open. */
+  settingsOpen: boolean;
+  openSettings(): void;
+  closeSettings(): void;
   showToast(text: string, tone?: 'info' | 'error'): void;
   setTab(t: CenterTab): void;
   setMapLevel(level: Level): void;
@@ -556,6 +560,9 @@ export const useStore = create<StoreState>()((set, get) => ({
     if (Object.entries(patch).some(([k, v]) => d[k as keyof typeof d] !== v)) set({ dock: { ...d, ...patch } });
   },
 
+  settingsOpen: false,
+  openSettings() { set({ settingsOpen: true }); },
+  closeSettings() { set({ settingsOpen: false }); },
   showToast(text, tone = 'info') {
     set({ toast: { text, tone, seq: (get().toast?.seq ?? 0) + 1 } });
   },

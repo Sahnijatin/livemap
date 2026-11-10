@@ -248,6 +248,7 @@ LiveMap records what the UI receives (file changes, agent prompts, messages and 
 
 LiveMap can add one-line, plain-English summaries: a sentence on each change card that adds, removes or changes a function, route or table, and an "In plain English" block in the inspector for each file you open. Without summaries the inspector shows the agent's own words for the change, labeled "In the agent's words".
 
+- **Settings.** The gear button in the toolbar opens Settings. Turn AI on or off there, choose the provider and model, and paste your API key. It takes effect at once, with no restart. Settings saves to the same `config.json` described below. The key can be entered, replaced or removed there, but LiveMap never shows it again. Changing the provider or the address removes a saved key, so a key is never sent to a host it was not entered for.
 - **Opt-in.** Summaries are off by default. They turn on only when `~/.livemap/config.json` (or `$LIVEMAP_HOME/config.json`) has `"summaries": {"enabled": true}`, or when you start LiveMap with `--summaries`. An API key in your environment alone never turns them on.
 - **Config.**
 

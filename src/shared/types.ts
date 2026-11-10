@@ -116,6 +116,8 @@ export interface GuardRule {
   /** `write`: path patterns apply to tools that write; `any`: to tools that read as well. */
   on: 'write' | 'any';
   message?: string;
+  /** Only ever `false`: the rule is kept in the file but not enforced. */
+  enabled?: false;
 }
 /** A tool call a guardrail blocked. `target` is the path, or `command contains "<pattern>"` (never the command). */
 export interface GuardHit { at: number; rule: number; action: 'block' | 'pause'; target: string; agent: AgentKind; sessionId: string; tool: string }

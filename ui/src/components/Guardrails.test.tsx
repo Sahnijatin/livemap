@@ -53,6 +53,13 @@ describe('Guardrails', () => {
     expect(rows[1]).toContain('Pause');
     expect(rows[1]).toContain('git push');
   });
+  it('marks a rule that is turned off', () => {
+    show({ ...guard, rules: [{ ...guard.rules[0], enabled: false }] });
+    const row = host.querySelector('.guardrule')!;
+    expect(row.className).toContain('off');
+    expect(row.textContent).toContain('Off');
+    expect(row.textContent).not.toContain('Block');
+  });
   it('shows file errors and the latest blocked calls, newest first', () => {
     show({ ...guard, hits: [...guard.hits, { at: Date.now(), rule: 1, action: 'pause', target: 'command contains "git push"', agent: 'cursor', sessionId: 'c', tool: 'Shell' }] });
     expect(host.querySelector('.guard-err')?.textContent).toContain('rule 3: needs "paths" or "commands"');

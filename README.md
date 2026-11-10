@@ -49,6 +49,8 @@ livemap
 
 **Guardrails.** Rules in `.livemap/guardrails.json` stop the agent before it edits files or runs commands you ruled out, such as migrations, `.env` files or `git push`.
 
+**Settings.** The gear button opens Settings: turn AI summaries on or off, choose a provider and paste your API key, and add, disable or remove guardrails. Changes apply at once.
+
 **Export.** `livemap export` writes the history as one HTML file that anyone can open offline. Add `--no-code` to leave out file contents, diffs and tool inputs and outputs, or `--session ID` to export one agent session.
 
 ## Works with
