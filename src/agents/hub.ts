@@ -50,6 +50,8 @@ export interface HookOptions {
 }
 export interface HookResult {
   block: string | null;
+  /** A message for an agent that is stopping: the hook hands it back so the agent continues with it. */
+  followup?: string;
   /** The flags whose block this answer carries. */
   flags?: number[];
   /** With `settle` and a block: call once the answer was delivered (true) or lost (false). */
@@ -191,6 +193,11 @@ export class AgentHub extends EventEmitter {
         if (guard || reread) this.control.setGuard(this.guardrails.state());
       }
     } catch { /* a faulty rules file never blocks or breaks a hook */ }
+    // The agent finished its turn: hand over the messages waiting for it, so it carries on with them.
+    let followup: { text: string; flags: number[] } | null = null;
+    try {
+      if (n.stop && opts.canBlock !== false) followup = this.control.takeMessages(agent, sid, now);
+    } catch { /* a message that cannot be taken stays queued */ }
     const block = decision?.block ?? null;
     let blocked: { ids: string[]; ends: RawAgentEvent[] } = { ids: [], ends: [] };
     try {
@@ -218,6 +225,11 @@ export class AgentHub extends EventEmitter {
       }
     } catch { /* bookkeeping failure never changes the control decision */ }
     const result: HookResult = decision?.flags ? { block, flags: decision.flags } : { block };
+    if (followup) {
+      const flags = followup.flags;
+      result.followup = followup.text;
+      if (opts.settle) result.settle = (delivered) => { if (!delivered) this.control.undeliver(flags); };
+    }
     if (block !== null && opts.settle) {
       const settle = this.settler(sid, decision?.flags ?? [], blocked);
       const hit = guard?.hit;

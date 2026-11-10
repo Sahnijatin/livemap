@@ -125,3 +125,19 @@ describe('Guardrails store and the hub', () => {
     h.stop();
   });
 });
+
+describe('hub: a message is delivered at the stop hook', () => {
+  it('answers Stop with the follow-up for each agent, and puts it back when it was not delivered', () => {
+    const h = new AgentHub('/proj');
+    h.control.addFlag(null, 'Run the tests', 1, 'message');
+    expect(h.ingestHook('claude-code', 'PreToolUse', { session_id: 's', tool_name: 'Read', tool_use_id: 'a', tool_input: { file_path: 'x' } }, 2).followup).toBeUndefined();
+    const r = h.ingestHook('claude-code', 'Stop', { session_id: 's' }, 3, { settle: true });
+    expect(r.block).toBeNull();
+    expect(r.followup).toBe('The user sent this from LiveMap:\nRun the tests');
+    r.settle?.(false);
+    expect(h.ingestHook('codex', 'Stop', { session_id: 'x' }, 4, { canBlock: false }).followup).toBeUndefined();
+    expect(h.ingestHook('cursor', 'stop', { conversation_id: 'c' }, 5).followup).toContain('Run the tests');
+    expect(h.ingestHook('codex', 'Stop', { session_id: 'x' }, 6).followup).toBeUndefined();
+    h.stop();
+  });
+});

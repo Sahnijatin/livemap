@@ -104,7 +104,11 @@ export interface Attribution {
   agent: AgentKind; sessionId: string; eventId?: number; confidence: Confidence; intent?: string;
   rule?: string; reason?: string; candidates?: AttributionCandidate[];
 }
-export interface Flag { id: number; target: string | null; note: string; createdAt: number; deliveredAt?: number; deliveredTo?: { agent: AgentKind; sessionId: string } }
+/**
+ * A note for the agent. A flag interrupts it at its next tool call. A `message` waits until the agent finishes
+ * its turn and is then handed to it as its next instruction.
+ */
+export interface Flag { id: number; target: string | null; note: string; createdAt: number; kind?: 'message'; deliveredAt?: number; deliveredTo?: { agent: AgentKind; sessionId: string } }
 /** One rule of the project's `.livemap/guardrails.json`, with its defaults filled in. */
 export interface GuardRule {
   /** Gitignore-style patterns, relative to the project folder. */

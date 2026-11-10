@@ -692,6 +692,7 @@
   .flag-pending span { flex:1; min-width:0; overflow-wrap:anywhere; }
   .flag-err { margin:0; font-size:12.5px; color:var(--red); }
   .btn-red { border:0; border-radius:999px; background:var(--red); color:#fff; font-weight:600; font-size:13px; padding:7px 14px; cursor:pointer; flex-shrink:0; transition:transform .2s var(--spring),opacity .2s; }
+  .btn-red.btn-send { background:var(--blue); }
   .btn-red:active { transform:scale(.95); }
   .btn-red:disabled { opacity:.4; cursor:default; transform:none; }
   .why { display:flex; flex-direction:column; }

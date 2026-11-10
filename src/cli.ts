@@ -150,6 +150,8 @@ async function runExport(argv: string[]): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // A reader that closed early (`livemap init | head`) is not an error: stop quietly instead of a stack trace.
+  process.stdout.on('error', (e: NodeJS.ErrnoException) => { if (e.code === 'EPIPE') process.exit(0); });
   const argv = process.argv.slice(2);
   const meta = metaCommand(argv);
   if (meta) {

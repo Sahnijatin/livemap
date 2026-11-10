@@ -117,4 +117,21 @@ describe('LiveHead', () => {
     act(() => useStore.getState().apply({ type: 'session', session: session({ id: 's1', status: 'idle', hooks: true }) }));
     expect(tag()).toBeNull();
   });
+
+  it('Message the agent sends a message (not a flag) and lists it as waiting for the turn to end', async () => {
+    vi.mocked(api.addFlag).mockResolvedValue({ id: 9, target: null, note: 'Run the tests', createdAt: 2, kind: 'message' } as never);
+    act(() => root.render(<LiveSession />));
+    const box = host.querySelector('textarea[aria-label="Message for the agent"]') as HTMLTextAreaElement;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(box, 'Run the tests');
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const send = [...host.querySelectorAll('button')].find(b => b.textContent === 'Send')!;
+    await act(async () => { send.click(); });
+    expect(api.addFlag).toHaveBeenCalledWith(null, 'Run the tests', 'message');
+    act(() => useStore.getState().apply({ type: 'control', control: { paused: false, flags: [flag, { id: 9, target: null, note: 'Run the tests', createdAt: 2, kind: 'message' }] } }));
+    expect(host.textContent).toContain('Waiting for the agent to finish its turn');
+    // The project flag box still shows only the flag.
+    expect(host.querySelectorAll('.flag-pending')).toHaveLength(2);
+  });
 });

@@ -96,3 +96,28 @@ describe('Control', () => {
     expect(n).toBe(2);
   });
 });
+
+describe('messages for the agent (delivered when it stops)', () => {
+  it('a message waits through tool calls and is handed over when the agent stops, once', async () => {
+    const { Control } = await import('../../src/agents/control.js');
+    const c = new Control();
+    const m = c.addFlag(null, 'Now add tests', 10, 'message');
+    expect(m.kind).toBe('message');
+    expect(c.check('claude-code', 's1', 20)).toBeNull();
+    const taken = c.takeMessages('claude-code', 's1', 30);
+    expect(taken).toEqual({ text: 'The user sent this from LiveMap:\nNow add tests', flags: [m.id] });
+    expect(c.state().flags[0]).toMatchObject({ deliveredAt: 30, deliveredTo: { agent: 'claude-code', sessionId: 's1' } });
+    expect(c.takeMessages('claude-code', 's1', 40)).toBeNull();
+    c.undeliver(taken!.flags);
+    expect(c.takeMessages('codex', 's2', 50)?.flags).toEqual([m.id]);
+  });
+  it('flags are not handed over at a stop, and several messages go together in order', async () => {
+    const { Control } = await import('../../src/agents/control.js');
+    const c = new Control();
+    c.addFlag('a.ts', 'a flag', 1);
+    c.addFlag(null, 'first', 2, 'message');
+    c.addFlag(null, 'second', 3, 'message');
+    expect(c.takeMessages('cursor', 'c', 9)?.text).toBe('The user sent this from LiveMap:\nfirst\nsecond');
+    expect(c.check('cursor', 'c', 10)?.block).toContain('a flag');
+  });
+});

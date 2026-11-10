@@ -72,6 +72,14 @@ Both work by blocking the agent's next action that can be blocked and telling it
   ```
 
   The flag then shows "Delivered <when> to <agent>", for example "Delivered just now to Claude Code". You can remove a flag before it is delivered. While Pause is on, flags wait.
+- **Message.** "Message the agent" in the inspector's Live session view sends the agent its next instruction from LiveMap. The message waits ("Waiting for the agent to finish its turn") until a connected agent finishes its turn. LiveMap then answers the agent's stop hook, and the agent carries on with your message instead of stopping:
+
+  ```text
+  The user sent this from LiveMap:
+  Now add tests for the refunds route.
+  ```
+
+  Use a message to queue what comes next, and a flag to interrupt what the agent is doing now. A message goes to whichever connected agent finishes first, and several waiting messages go together. It needs an agent that is running a turn: LiveMap cannot start an agent that is not running. Claude Code and Codex continue through their `Stop` hook, and Cursor through its `stop` hook's follow-up message.
 - **Timing.** The agent sees a flag or pause only when it next tries a blockable action, not mid-step. If its hook already gave up waiting, nothing is blocked and the flag stays queued for the next action.
 - **Lifetime.** Flags and the pause state live in the running LiveMap. Restarting LiveMap clears them.
 

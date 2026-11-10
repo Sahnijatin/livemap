@@ -40,8 +40,9 @@ async function request(method: 'GET' | 'POST' | 'DELETE', url: string, body?: un
   return res;
 }
 
-export async function addFlag(target: string | null, note: string): Promise<Flag> {
-  const res = await request('POST', '/api/flags', { target, note });
+/** `kind: 'message'` sends a message the agent gets when it finishes its turn, not a flag. */
+export async function addFlag(target: string | null, note: string, kind?: 'message'): Promise<Flag> {
+  const res = await request('POST', '/api/flags', kind ? { target, note, kind } : { target, note });
   return (await res.json()) as Flag;
 }
 

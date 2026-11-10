@@ -45,7 +45,7 @@ livemap
 
 ![The timeline, rewound](https://livemap.in/images/timeline.png)
 
-**Steering.** Flag a file or the project with a note, or pause the agent. The agent gets the note at its next tool call.
+**Steering.** Flag a file or the project with a note, or pause the agent. The agent gets the note at its next tool call. Or send it a message from LiveMap: it gets it as its next instruction when it finishes its turn.
 
 **Guardrails.** Rules in `.livemap/guardrails.json` stop the agent before it edits files or runs commands you ruled out, such as migrations, `.env` files or `git push`.
 
