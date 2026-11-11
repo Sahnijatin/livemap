@@ -68,7 +68,7 @@ SkyForge declares `livemap` and `livemap-servicenow` as dependencies (or asks th
 
 ## Decisions for the owner
 
-1. **Licence.** LiveMap's licence forbids redistributing it or offering it as part of another product. Asking SkyForge users to install `livemap` from npm fits it. Shipping LiveMap inside SkyForge's installer would need a written grant from you.
+1. **Licence.** Settled: LiveMap is MIT licensed, so SkyForge may depend on it, bundle it or copy it.
 2. **Licence and visibility of `livemap-servicenow`.** It can be private, or carry the same licence as LiveMap.
 3. **Who owns it.** The repository can live under your account with your CTO as collaborator, or under SkyForge's.
 

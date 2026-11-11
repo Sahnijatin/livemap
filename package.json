@@ -15,7 +15,7 @@
     "timeline",
     "cli"
   ],
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "livemap": "dist/cli.js"

@@ -70,7 +70,7 @@ LiveMap runs entirely on your machine: the server listens on `127.0.0.1` only, a
 
 ## License
 
-LiveMap is free to use, including at work and for commercial projects. It is not open source: you may not resell, redistribute, modify or reverse engineer it. See the [LICENSE](LICENSE) file for the exact terms. This summary is not legal advice.
+LiveMap is open source under the [MIT License](LICENSE): you may use, copy, modify and share it, including at work and in commercial products, as long as the copyright and license notice stay with it.
 
 LiveMap includes open source components under their own licenses, listed with their license texts in `THIRD_PARTY_NOTICES.md` inside the package. The Map and Schema views are drawn with React Flow (MIT) and laid out with ELK through elkjs (EPL-2.0, source at https://github.com/kieler/elkjs).
 
