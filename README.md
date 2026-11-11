@@ -45,7 +45,11 @@ livemap
 
 ![The timeline, rewound](https://livemap.in/images/timeline.png)
 
-**Steering.** Flag a file or the project with a note, or pause the agent. The agent gets the note at its next tool call.
+**Steering.** Flag a file or the project with a note, or pause the agent. The agent gets the note at its next tool call. Or send it a message from LiveMap: it gets it as its next instruction when it finishes its turn.
+
+**Guardrails.** Rules in `.livemap/guardrails.json` stop the agent before it edits files or runs commands you ruled out, such as migrations, `.env` files or `git push`.
+
+**Settings.** The gear button opens Settings: turn AI summaries on or off, choose a provider and paste your API key, and add, disable or remove guardrails. Changes apply at once.
 
 **Export.** `livemap export` writes the history as one HTML file that anyone can open offline. Add `--no-code` to leave out file contents, diffs and tool inputs and outputs, or `--session ID` to export one agent session.
 
@@ -66,7 +70,7 @@ LiveMap runs entirely on your machine: the server listens on `127.0.0.1` only, a
 
 ## License
 
-LiveMap is free to use, including at work and for commercial projects. It is not open source: you may not resell, redistribute, modify or reverse engineer it. See the [LICENSE](LICENSE) file for the exact terms. This summary is not legal advice.
+LiveMap is open source under the [MIT License](LICENSE): you may use, copy, modify and share it, including at work and in commercial products, as long as the copyright and license notice stay with it.
 
 LiveMap includes open source components under their own licenses, listed with their license texts in `THIRD_PARTY_NOTICES.md` inside the package. The Map and Schema views are drawn with React Flow (MIT) and laid out with ELK through elkjs (EPL-2.0, source at https://github.com/kieler/elkjs).
 

@@ -26,6 +26,18 @@ describe('walk', () => {
     expect(files).toEqual(['.gitignore', 'keep.ts', 'src/a b/ü.ts']);
     expect(DEFAULT_IGNORES).toContain('node_modules');
   });
+  it('honors .git/info/exclude, with the root .gitignore winning over it', async () => {
+    put('.git/info/exclude', '.claude/settings.local.json\nnotes/\n*.scratch\n');
+    put('.gitignore', '!keep.scratch\n');
+    put('.claude/settings.local.json'); put('.claude/commands/a.md'); put('notes/todo.md'); put('a.scratch'); put('keep.scratch'); put('keep.ts');
+    const { files } = await walk(root, createIgnore(root));
+    expect(files).toEqual(['.claude/commands/a.md', '.gitignore', 'keep.scratch', 'keep.ts']);
+  });
+  it('ignores a missing or unreadable .git/info/exclude (a worktree, where .git is a file)', async () => {
+    put('.git', 'gitdir: /elsewhere\n'); put('keep.ts');
+    const { files } = await walk(root, createIgnore(root));
+    expect(files).toEqual(['keep.ts']);
+  });
   it('skips the editor temp names the watcher skips', async () => {
     const temps = ['a.ts~', 'b.ts.swp', 'c.ts.swx', 'd.ts.tmp', '.#e.ts', 'src/4913', '.env~'];
     for (const t of temps) put(t);

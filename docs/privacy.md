@@ -25,7 +25,7 @@ Everything LiveMap stores lives in its home folder, `~/.livemap` (or `$LIVEMAP_H
 | Path | What it holds |
 |---|---|
 | `projects/<id>/` | History per project: the messages the UI received (file structure, changes and diffs, prompts, agent messages, tool calls, flags, summaries). Folders are mode 0700 and files 0600. Capped at 200 MB per project (`LIVEMAP_HISTORY_MB`). |
-| `config.json` | Your settings, if you create the file. It can hold a summaries API key. |
+| `config.json` | Your settings: created when you save in Settings, or by hand. It can hold a summaries API key, so LiveMap writes it readable only by you (mode 0600). The key goes from the Settings dialog to the local server and into this file; it is never sent back to the browser, logged or recorded in history. |
 | `usage.json` | This month's summary token count, shared by every LiveMap process on the machine. |
 | `cache/summaries/` | Summaries already written, so they are not requested twice. |
 | `init/` | What `livemap init` created in each agent config file, so `--remove` can restore it. |
@@ -33,7 +33,7 @@ Everything LiveMap stores lives in its home folder, `~/.livemap` (or `$LIVEMAP_H
 | `run/` | The port and token of each running LiveMap, for the hooks. Removed when LiveMap stops. |
 | `bin/livemap-hook.mjs` | The hook script. |
 
-In your project, LiveMap writes only the agent config files `livemap init` creates or edits and the lines it adds to `.git/info/exclude`. With `--pull`, it also runs `git pull --ff-only`, which fast-forwards your working tree to the remote branch. In your browser, the tab keeps the run's token in sessionStorage (so a reload works; it is gone when the tab closes), and local storage keeps the theme, tab, Follow setting and map pins. The pins key includes the project's absolute path (`livemap:pins:<path>`). `livemap --no-history` records no history.
+In your project, LiveMap writes only the agent config files `livemap init` creates or edits, the lines it adds to `.git/info/exclude`, and `.livemap/guardrails.json` when you change guardrails in Settings. With `--pull`, it also runs `git pull --ff-only`, which fast-forwards your working tree to the remote branch. In your browser, the tab keeps the run's token in sessionStorage (so a reload works; it is gone when the tab closes), and local storage keeps the theme, tab, Follow setting and map pins. The pins key includes the project's absolute path (`livemap:pins:<path>`). `livemap --no-history` records no history.
 
 History holds the diff of each change (the changed lines plus up to 3 unchanged lines around each change), but not whole files: the code view always reads the file as it is now.
 

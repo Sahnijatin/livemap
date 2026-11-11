@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { DEFAULT_PORT } from './server/server.js';
 import type { ProjectModel } from './engine/project.js';
 import type { HistoryStore } from './history/store.js';
@@ -41,10 +42,28 @@ export interface CoreHooks {
   resolveRoot(dir: string): string;
 }
 
-export const USAGE = 'Usage: livemap [dir=.] [--port N] [--no-open] [--pull[=SEC]] [--no-history] [--summaries]\n       livemap init [dir=.] [--agents claude,codex,cursor] [--remove]\n       livemap export [dir=.] [--session ID] [--no-code] [--out FILE]';
+export const USAGE = 'Usage: livemap [dir=.] [--port N] [--no-open] [--pull[=SEC]] [--no-history] [--summaries]\n       livemap init [dir=.] [--agents claude,codex,cursor] [--remove]\n       livemap export [dir=.] [--session ID] [--no-code] [--out FILE]\n       livemap --version | --help';
 const DEFAULT_PULL_SEC = 15;
 
 export interface Args { dir: string; port: number; open: boolean; pullSec: number | null; history: boolean; summaries: boolean }
+
+/** `livemap --version` (or `-v`, `-V`, `version`) and `livemap help`: only as the first argument, so `./help` stays a folder. */
+export function metaCommand(argv: string[]): 'version' | 'help' | null {
+  const a = argv[0];
+  if (a === '--version' || a === '-v' || a === '-V' || a === 'version') return 'version';
+  if (a === 'help') return 'help';
+  return null;
+}
+
+/** The version in package.json, which sits one folder above both `src/` and the built `dist/`. */
+export function readVersion(): string {
+  try {
+    const v: unknown = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+    return typeof v === 'string' && v ? v : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
 
 export function fail(message: string): never {
   process.stderr.write(`livemap: ${message}\n${USAGE}\n`);

@@ -19,9 +19,10 @@ livemap sn [dir=.] --scope NAMESPACE|SYS_ID [--instance NAME] [--nexus URL] [--s
 livemap mcp-proxy --upstream URL [--header NAME=VALUE]... [--timeout SEC] | --upstream-cmd "COMMAND"
 livemap sn install-plugin [--uninstall]
 livemap sn backfill-sessions --since DATE [--url URL] [--limit N] [--dry-run]
+livemap --version | --help
 ```
 
-`dir` is the project folder in every command. It defaults to the current folder. `-h` or `--help` prints the usage. Options that take a value also accept `=` (`--port=5000`, `--agents=claude`, `--out=shop.html`).
+`dir` is the project folder in every command. It defaults to the current folder. `-h` or `--help` prints the usage. So does `livemap help`; `--version` (or `-v`, `version`) prints the installed version. For a folder named `help` or `version`, write `./help`. Options that take a value also accept `=` (`--port=5000`, `--agents=claude`, `--out=shop.html`).
 
 ### `livemap`
 
@@ -39,7 +40,7 @@ On start LiveMap prints `LiveMap is watching <project>` and the URL, which inclu
 
 One LiveMap runs per project. Starting a second one on the same folder exits with "LiveMap is already running for this project (pid N) at http://127.0.0.1:PORT"; use that one or stop it first. If another LiveMap is still starting on the same folder, the new one exits with "Another LiveMap is starting for this project; try again in a moment". The lock is a file in `~/.livemap/locks/` (or under `LIVEMAP_HOME`) that records the pid, port and a random id of the LiveMap holding it. The running LiveMap refreshes the lock every 30 seconds. A lock is replaced when its process is no longer running, or when the program on its port answers with another id or not as LiveMap, as after a crash or restart that left its pid or port to another program. A lock whose LiveMap does not answer at all (still starting, shutting down after Ctrl+C, or suspended) is kept while it is being refreshed, and replaced after 3 minutes without a refresh.
 
-LiveMap skips what your `.gitignore` files ignore and common build and dependency folders (`node_modules`, `dist`, `build`, `.next`, `.venv`, `target`, `vendor` and the like). It indexes at most 25,000 files and prints a warning when a project has more.
+LiveMap skips what your `.gitignore` files and the repository's `.git/info/exclude` ignore (which is where `livemap init` lists its own hook files, so they stay out of the map and the feed) and common build and dependency folders (`node_modules`, `dist`, `build`, `.next`, `.venv`, `target`, `vendor` and the like). It indexes at most 25,000 files and prints a warning when a project has more.
 
 ### `livemap init`
 
@@ -247,6 +248,7 @@ LiveMap records what the UI receives (file changes, agent prompts, messages and 
 
 LiveMap can add one-line, plain-English summaries: a sentence on each change card that adds, removes or changes a function, route or table, and an "In plain English" block in the inspector for each file you open. Without summaries the inspector shows the agent's own words for the change, labeled "In the agent's words".
 
+- **Settings.** The gear button in the toolbar opens Settings. Turn AI on or off there, choose the provider and model, and paste your API key. It takes effect at once, with no restart. Settings saves to the same `config.json` described below. The key can be entered, replaced or removed there, but LiveMap never shows it again. Changing the provider or the address removes a saved key, so a key is never sent to a host it was not entered for.
 - **Opt-in.** Summaries are off by default. They turn on only when `~/.livemap/config.json` (or `$LIVEMAP_HOME/config.json`) has `"summaries": {"enabled": true}`, or when you start LiveMap with `--summaries`. An API key in your environment alone never turns them on.
 - **Config.**
 

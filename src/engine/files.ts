@@ -47,7 +47,7 @@ export type IgnoreFn = ((rel: string, isDir: boolean) => boolean) & {
 };
 
 /**
- * Built-in ignores plus every `.gitignore` in the tree, each scoped to its own directory as git
+ * Built-in ignores, the root's `.git/info/exclude`, plus every `.gitignore` in the tree, each scoped to its own directory as git
  * does: a deeper file's rules win, and nothing under an ignored directory can be re-included.
  * Nested files are read on first use (or skipped when `prime` said there is none) and cached for
  * the life of the matcher. `reuse` keeps a previous matcher's rules, except for `changed` dirs and
@@ -56,6 +56,12 @@ export type IgnoreFn = ((rel: string, isDir: boolean) => boolean) & {
 export function createIgnore(root: string, reuse?: { previous: IgnoreFn; changed: string[] }): IgnoreFn {
   const defaults = ignore().add(DEFAULT_IGNORES);
   const top = ignore().add(DEFAULT_IGNORES);
+  // Git's per-clone excludes, where `livemap init` lists its own hook files. Added first: .gitignore outranks it, as in git.
+  try {
+    top.add(readFileSync(path.join(root, '.git', 'info', 'exclude'), 'utf8'));
+  } catch {
+    /* not a repository, a worktree (.git is a file), or no exclude file */
+  }
   try {
     top.add(readGitignore(root));
   } catch {

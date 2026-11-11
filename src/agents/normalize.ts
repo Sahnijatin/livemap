@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 import type { AgentKind, AgentTool, RawAgentEvent } from '../shared/types.js';
 import { isBlockable } from '../shared/blockable.js';
-import { toolLabel, toolMeta, toolPaths, redactSecretInput, touchesSecret, outputMentionsSecret } from './labels.js';
+import { commandText, toolLabel, toolMeta, toolPaths, redactSecretInput, touchesSecret, outputMentionsSecret } from './labels.js';
+import { classifyTool } from '../shared/tools.js';
+import type { GuardCall } from './guardrails.js';
 
 const MAX_OUTPUT = 4000;
 
@@ -23,6 +25,8 @@ export interface NormalizedHook {
   prompt?: string;
   /** The agent's own tool call id on tool events, when it sends one. */
   toolId?: string;
+  /** What a blockable tool or shell event is about to do, for guardrails. Never stored. */
+  call?: GuardCall;
 }
 
 type Obj = Record<string, unknown>;
@@ -89,6 +93,19 @@ export function normalizeHook(input: HookInput): NormalizedHook {
   const text = (type: 'prompt' | 'message' | 'thinking', t: string | undefined) => {
     if (t) out.events.push({ ...base, type, text: t });
   };
+
+  if (out.blockable) {
+    // Cursor's shell hook carries the command at the top level; every other blockable event names a tool.
+    const shell = agent === 'cursor' && event === 'beforeShellExecution' ? str(p.command) : undefined;
+    const callName = shell ? 'Shell' : name;
+    const callInput = shell ? { command: shell } : toolInput;
+    if (callName) {
+      const cls = classifyTool(callName, callInput);
+      // Only a shell call has a command: a patch tool keeps its patch text in the same field.
+      const command = shell ?? (cls.family === 'shell' ? commandText(callInput) : undefined);
+      out.call = { tool: callName, paths: toolPaths(callName, callInput, root, cwd), access: cls.access, ...(command ? { command } : {}) };
+    }
+  }
 
   if (agent === 'claude-code') {
     if (event === 'UserPromptSubmit') out.prompt = str(p.prompt);

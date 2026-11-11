@@ -1,12 +1,12 @@
 /**
  * `node hook.mjs <agent> <event>`: forwards an agent hook payload to the running LiveMap for this project.
  * Bundled standalone (node: built-ins only). It exits 2 only to block a blockable event the server asked
- * to block; every other path exits 0 and prints nothing on stdout.
+ * to block, or to hand a stopping agent a message from the user; every other path exits 0.
  */
 import http from 'node:http';
 import type { AgentKind } from '../shared/types.js';
 import { findRuntime } from '../agents/runtime.js';
-import { isBlockable } from '../shared/blockable.js';
+import { isBlockable, isStop } from '../shared/blockable.js';
 
 const MAX_STDIN = 8 * 1024 * 1024;
 const STDIN_WAIT_MS = 1000;
@@ -64,11 +64,14 @@ function startDir(payload: unknown): string {
   return process.cwd();
 }
 
-/** The server's block reason, or null on any failure, timeout or non-block answer. */
-function post(port: number, token: string, body: string, budgetMs: number): Promise<string | null> {
+interface Answer { block: string | null; followup: string | null }
+const NOTHING: Answer = { block: null, followup: null };
+
+/** The server's block reason and follow-up message; neither on any failure, timeout or plain answer. */
+function post(port: number, token: string, body: string, budgetMs: number): Promise<Answer> {
   return new Promise((resolve) => {
     let done = false;
-    const finish = (v: string | null) => {
+    const finish = (v: Answer) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
@@ -86,18 +89,19 @@ function post(port: number, token: string, body: string, budgetMs: number): Prom
       const chunks: Buffer[] = [];
       res.on('data', (c: Buffer) => chunks.push(c));
       res.on('end', () => {
-        if (res.statusCode !== 200) return finish(null);
+        if (res.statusCode !== 200) return finish(NOTHING);
         try {
-          const o = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { block?: unknown };
-          finish(typeof o.block === 'string' && o.block ? o.block : null);
+          const o = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { block?: unknown; followup?: unknown };
+          const text = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
+          finish({ block: text(o.block), followup: text(o.followup) });
         } catch {
-          finish(null);
+          finish(NOTHING);
         }
       });
-      res.on('error', () => finish(null));
+      res.on('error', () => finish(NOTHING));
     });
-    const timer = setTimeout(() => finish(null), budgetMs);
-    req.on('error', () => finish(null));
+    const timer = setTimeout(() => finish(NOTHING), budgetMs);
+    req.on('error', () => finish(NOTHING));
     req.end(body);
   });
 }
@@ -112,7 +116,15 @@ async function main(): Promise<number> {
   if (!rt) return 0;
   const budget = Math.min(REQUEST_BUDGET_MS, TOTAL_BUDGET_MS - (Date.now() - started));
   if (budget <= 0) return 0;
-  const reason = await post(rt.port, rt.token, JSON.stringify({ agent, event, payload }), budget);
+  const answer = await post(rt.port, rt.token, JSON.stringify({ agent, event, payload, followup: true }), budget);
+  // A message the user sent from LiveMap, for an agent that just finished its turn: it carries on with it.
+  if (answer.followup && isStop(agent as AgentKind, event)) {
+    // Cursor reads the follow-up from stdout; Claude Code and Codex continue on exit 2 with the text on stderr.
+    if (agent === 'cursor') { process.stdout.write(JSON.stringify({ followup_message: answer.followup })); return 0; }
+    process.stderr.write(`${answer.followup}\n`);
+    return 2;
+  }
+  const reason = answer.block;
   if (!reason || !isBlockable(agent as AgentKind, event)) return 0;
   process.stderr.write(`${reason}\n`);
   if (agent === 'cursor') process.stdout.write(JSON.stringify({ permission: 'deny', agent_message: reason, user_message: 'Blocked by LiveMap' }));

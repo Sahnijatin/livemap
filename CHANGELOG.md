@@ -2,6 +2,16 @@
 
 This file lists changes that affect data or settings on your machine.
 
+## Unreleased
+
+- **LiveMap is now open source under the MIT License.** Earlier versions stay under the LiveMap License they were published with.
+- **Message the agent.** The inspector's Live session view has a "Message the agent" box. The message is handed to the agent when it finishes its turn, through its stop hook, and the agent carries on with it. The installed hook script changes for this. LiveMap now updates an installed hook script (`~/.livemap/bin/livemap-hook.mjs`) when it starts, so no new `livemap init` is needed. A message waits while Pause is on.
+- **Settings in the UI.** The gear button in the toolbar opens Settings. AI summaries and Ask can be turned on or off there, with the provider, model, address, token cap and API key, and take effect without a restart. Saving writes `~/.livemap/config.json` (mode 0600), keeping its other entries; the key is never shown again. Changing the provider or address removes a saved key. Guardrail rules can be added, turned off (`"enabled": false`) or removed there, which writes `.livemap/guardrails.json` in the project. The Ask tab's "AI is off" page now opens Settings.
+- **Guardrails.** Rules in `.livemap/guardrails.json` in your project block an agent's tool call before it runs: `paths` (as in `.gitignore`) for files it must not write, `commands` for text in shell commands, and `action: "pause"` to pause every agent as well. LiveMap only reads this file. The inspector lists the rules and the latest blocked calls, which are also recorded in history. See `docs/agents.md`.
+- **`livemap --version`** (or `-v`, `version`) prints the installed version, and `livemap help` prints the usage. A folder named `help` or `version` is now written `./help`.
+- **`.git/info/exclude` is honored.** Files listed there are skipped like `.gitignore`d ones. `livemap init` lists its own hook files there, so they no longer show in the map or as the first change in the Activity feed. Restart LiveMap after editing the file.
+- **Dependencies updated** for security advisories in the MCP SDK and its HTTP dependencies, used by `livemap sn` and `livemap mcp-proxy`.
+
 ## 0.2.0 (2026-11-05)
 
 - **First public release on npm** (`npm install -g livemap`). LiveMap is free to use under the LiveMap License (see LICENSE). Requires Node 20 or later.

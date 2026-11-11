@@ -20,7 +20,7 @@ Run `livemap init` in the project folder. It detects agents by their config fold
 | Codex CLI | `.codex/hooks.json` | `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop` |
 | Cursor | `.cursor/hooks.json` | `beforeSubmitPrompt`, `afterAgentResponse`, `afterAgentThought`, `preToolUse`, `postToolUse`, `beforeShellExecution`, `afterShellExecution`, `afterFileEdit`, `stop` |
 
-- **The hook script.** Init copies `livemap-hook.mjs` to the `bin/` folder of the LiveMap home (`~/.livemap/bin/`, or `$LIVEMAP_HOME/bin/`). Each hook entry runs `node '<home>/bin/livemap-hook.mjs' <agent> <event>` (double quotes on Windows, where init refuses a LiveMap home whose path contains `"`, `%`, `!`, `^`, `&`, `|`, `<` or `>`), where `<agent>` is `claude-code`, `codex` or `cursor`. Claude Code and Codex entries have a 5 second timeout.
+- **The hook script.** Init copies `livemap-hook.mjs` to the `bin/` folder of the LiveMap home (`~/.livemap/bin/`, or `$LIVEMAP_HOME/bin/`). Once it is installed, LiveMap replaces it with its own version each time it starts, so the script always matches the LiveMap that runs. Each hook entry runs `node '<home>/bin/livemap-hook.mjs' <agent> <event>` (double quotes on Windows, where init refuses a LiveMap home whose path contains `"`, `%`, `!`, `^`, `&`, `|`, `<` or `>`), where `<agent>` is `claude-code`, `codex` or `cursor`. Claude Code and Codex entries have a 5 second timeout.
 - **Your settings are kept.** Init adds its entries next to yours and leaves your own hooks in place. Running it again updates LiveMap's entries in place, removes entries for events it no longer hooks (such as an older init's Claude Code `PostToolUse`), and prints `unchanged` when nothing differs. A file that is not valid JSON, or whose `hooks` has an unexpected shape, is skipped with the reason and left alone.
 - **Git excludes.** When the project has a `.git` folder, init adds `.claude/settings.local.json`, `.codex/hooks.json` and `.cursor/hooks.json` to `.git/info/exclude`, so the hook files (which hold a path on your machine) are not committed by accident.
 - **Codex.** Codex asks you to trust new hooks. Init reminds you: run `/hooks` inside Codex once.
@@ -72,8 +72,51 @@ Both work by blocking the agent's next action that can be blocked and telling it
   ```
 
   The flag then shows "Delivered <when> to <agent>", for example "Delivered just now to Claude Code". You can remove a flag before it is delivered. While Pause is on, flags wait.
+- **Message.** "Message the agent" in the inspector's Live session view sends the agent its next instruction from LiveMap. The message waits ("Waiting for the agent to finish its turn") until a connected agent finishes its turn. LiveMap then answers the agent's stop hook, and the agent carries on with your message instead of stopping:
+
+  ```text
+  The user sent this from LiveMap:
+  Now add tests for the refunds route.
+  ```
+
+  Use a message to queue what comes next, and a flag to interrupt what the agent is doing now. A message goes to whichever connected agent finishes first, and several waiting messages go together. It needs an agent that is running a turn: LiveMap cannot start an agent that is not running. While Pause is on, messages wait. Claude Code and Codex continue through their `Stop` hook, and Cursor through its `stop` hook's follow-up message.
 - **Timing.** The agent sees a flag or pause only when it next tries a blockable action, not mid-step. If its hook already gave up waiting, nothing is blocked and the flag stays queued for the next action.
 - **Lifetime.** Flags and the pause state live in the running LiveMap. Restarting LiveMap clears them.
+
+## Guardrails
+
+Guardrails stop an agent before it touches files or runs commands you ruled out, without you watching. Write the rules in `.livemap/guardrails.json` in the project folder:
+
+```json
+{
+  "rules": [
+    { "paths": ["db/migrations/**", ".env*"], "action": "block", "message": "Do not edit migrations; ask first." },
+    { "commands": ["git push", "rm -rf"], "action": "pause" }
+  ]
+}
+```
+
+| Field | What it does |
+|---|---|
+| `paths` | Patterns for files, relative to the project folder, written as in `.gitignore` (`db/migrations/`, `*.lock`, `src/**/secrets.ts`). `!` patterns are not supported. |
+| `commands` | Text to look for in a shell command (never in a file edit or patch). The match is case-sensitive: `git push` matches `cd app && git push origin main`. |
+| `action` | `block` (the default) refuses the tool call. `pause` refuses it and turns on Pause for every agent, until you click "Resume agent". |
+| `on` | `write` (the default): `paths` apply to tools that write, edit or patch files. `any`: also to tools that read them. |
+| `message` | Sent to the agent with the refusal, so it knows what to do instead. |
+| `enabled` | `false` keeps the rule in the file but turns it off. |
+
+A rule needs `paths` or `commands`. Rules are checked in file order and the first match wins. The agent is told, for example:
+
+```text
+Blocked by a LiveMap guardrail: db/migrations/001.sql matches the rule "db/migrations/**". Do not edit migrations; ask first.
+```
+
+- **Where you see it.** The inspector's Live session view has a Guardrails section with the active rules and the latest blocked calls. The blocked tool call also shows in the Activity feed.
+- **Editing the rules.** LiveMap re-reads the file when it changes: before every tool call, and every 2 seconds for the UI. A rule it cannot read is skipped and named in the Guardrails section; the other rules stay active. Limits: 100 rules, 50 patterns per rule, 500 characters per pattern or message.
+- **Settings.** The gear button in the toolbar opens Settings, where you can add a rule, turn one off or on, and remove one without editing the file. A rule that is off stays in the file with `"enabled": false` and blocks nothing. Saving from Settings rewrites the file as plain JSON with 2-space indentation. While the file has a rule LiveMap cannot read, Settings refuses to change it, so that rule is not lost: fix the file first.
+- **Sharing.** LiveMap writes the file only when you change rules in Settings. Commit it to share the rules with your team.
+- **Order.** Pause and waiting flags are delivered first. A tool call they already stop is not checked against the rules.
+- **Limits.** Guardrails work through the same hooks as Flag and Pause (see the table above), so they need `livemap init` and a running LiveMap. A shell command carries no file list: a rule can match the command's text, but not the files a script changes. Cursor file edits cannot be blocked. A hit records the path, or the rule's command pattern, never the command itself.
 
 ## Attribution: "exact" and "likely"
 

@@ -194,7 +194,7 @@ describe('hook: with a server', () => {
     expect(seen[0].url).toBe('/hook');
     expect(seen[0].headers['x-livemap-token']).toBe('secret-token');
     expect(seen[0].headers['content-type']).toMatch(/^application\/json/);
-    expect(seen[0].body).toEqual({ agent: 'claude-code', event: 'PostToolUse', payload: JSON.parse(claudePayload()) });
+    expect(seen[0].body).toEqual({ agent: 'claude-code', event: 'PostToolUse', payload: JSON.parse(claudePayload()), followup: true });
   });
 
   it('claude PreToolUse exits 2 with the reason on stderr when the server blocks', async () => {
@@ -221,6 +221,33 @@ describe('hook: with a server', () => {
     const r = await runHook(['codex', 'Stop'], JSON.stringify({ session_id: 'c1', cwd: root, hook_event_name: 'Stop' }));
     expect(r.code).toBe(0);
     expect(r.stdout).toBe('');
+  });
+
+  it('a follow-up at Stop makes Claude Code and Codex continue: exit 2 with the message on stderr', async () => {
+    const { port } = await fakeServer({ block: null, followup: 'do this next' });
+    writeRuntimeFile(port);
+    for (const agent of ['claude-code', 'codex']) {
+      const r = await runHook([agent, 'Stop'], JSON.stringify({ session_id: 'c1', cwd: root, hook_event_name: 'Stop' }));
+      expect(r.code).toBe(2);
+      expect(r.stderr.trim()).toBe('do this next');
+      expect(r.stdout).toBe('');
+    }
+  });
+
+  it('a follow-up at Cursor stop goes out as followup_message on stdout with exit 0', async () => {
+    const { port } = await fakeServer({ block: null, followup: 'do this next' });
+    writeRuntimeFile(port);
+    const r = await runHook(['cursor', 'stop'], JSON.stringify({ conversation_id: 'k1', workspace_roots: [root] }), os.tmpdir());
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ followup_message: 'do this next' });
+  });
+
+  it('a follow-up on any other event is ignored', async () => {
+    const { port } = await fakeServer({ block: null, followup: 'do this next' });
+    writeRuntimeFile(port);
+    const r = await runHook(['claude-code', 'PreToolUse'], claudePayload());
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe('');
   });
 
   it('codex PreToolUse exits 2 when the server blocks', async () => {

@@ -44,7 +44,10 @@ describe('AskView', () => {
   it('explains how to turn AI on when it is off', () => {
     mount({ ...READY, state: 'off' }, { status: 200, body: {} });
     expect(host.textContent).toContain('AI is off');
-    expect(host.textContent).toContain('~/.livemap/config.json');
+    expect(host.textContent).not.toContain('config.json');
+    const open = [...host.querySelectorAll('button')].find(b => b.textContent === 'Open Settings')!;
+    act(() => open.click());
+    expect(useStore.getState().settingsOpen).toBe(true);
     expect(host.querySelector('textarea')).toBeNull();
   });
 

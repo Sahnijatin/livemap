@@ -9,6 +9,7 @@ import { removeFlag } from '../api';
 import { READ_ONLY_TIP } from '../history';
 import { COUNTER_LABELS, CountUp, liveFlags, useLiveState } from './Activity';
 import { FlagBox } from './FlagBox';
+import { Guardrails } from './Guardrails';
 import { FlagIcon, GitIcon, LayerTile } from './icons';
 
 function YourFlags() {
@@ -22,7 +23,7 @@ function YourFlags() {
   const sorted = [...flags].sort((a, b) => Number(!!a.deliveredAt) - Number(!!b.deliveredAt) || b.createdAt - a.createdAt).slice(0, 12);
   return (
     <div className="sec">
-      <h4>Your flags</h4>
+      <h4>Your notes to the agent</h4>
       <div className="flaglist">
         {sorted.map(f => (
           <div className={clsx('flagrow fi', f.deliveredAt && 'done')} key={f.id}>
@@ -30,12 +31,12 @@ function YourFlags() {
             <div className="fl-tx">
               {f.target
                 ? <button type="button" className="linkbtn" onClick={() => select(f.target)} title={f.target}>{baseName(f.target)}</button>
-                : <b>Project</b>}
+                : <b>{f.kind === 'message' ? 'Message' : 'Project'}</b>}
               <span>{f.note}</span>
-              <small>{f.deliveredAt ? `Delivered to ${agentName(f.deliveredTo?.agent)}` : 'Waiting for the next action'}</small>
+              <small>{f.deliveredAt ? `Delivered to ${agentName(f.deliveredTo?.agent)}` : f.kind === 'message' ? 'Waiting for the agent to finish its turn' : 'Waiting for the next action'}</small>
             </div>
             {!f.deliveredAt && !replay && (
-              <button type="button" className="fl-x" aria-label={`Remove flag: ${f.note}`} disabled={rewound} title={rewound ? READ_ONLY_TIP : undefined} onClick={() => removeFlag(f.id).catch(e => showToast(e instanceof Error ? e.message : 'Could not remove the flag', 'error'))}>×</button>
+              <button type="button" className="fl-x" aria-label={`Remove ${f.kind === 'message' ? 'message' : 'flag'}: ${f.note}`} disabled={rewound} title={rewound ? READ_ONLY_TIP : undefined} onClick={() => removeFlag(f.id).catch(e => showToast(e instanceof Error ? e.message : 'Could not remove the flag', 'error'))}>×</button>
             )}
           </div>
         ))}
@@ -122,10 +123,17 @@ export function LiveSession() {
       <YourFlags />
       {!replay && (
         <div className="sec">
+          <h4>Message the agent</h4>
+          <FlagBox target={null} message />
+        </div>
+      )}
+      {!replay && (
+        <div className="sec">
           <h4>Flag the project</h4>
           <FlagBox target={null} />
         </div>
       )}
+      <Guardrails />
       <div className="muted" style={{ fontSize: 12 }}>Select any file to see what is inside it, what it connects to, and why it changed.</div>
       {!replay && <a className="notices" href="/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer">Third-party notices</a>}
     </>

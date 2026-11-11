@@ -23,6 +23,7 @@ import { handleControlApi, handleHook, MAX_API_BODY, readJsonBody } from './agen
 import { handleHistoryApi, sendJsonMaybeGzip } from './history-routes.js';
 import { serveStatic } from './static.js';
 import { isSnMirror, readSnIndex } from './sn-index.js';
+import type { SettingsApi } from '../settings.js';
 
 export interface ServerOptions {
   /** The project name the UI shows; the root folder's name by default. */
@@ -45,6 +46,8 @@ export interface ServerOptions {
   history?: HistoryStore;
   /** Writes AI summaries of files and changes. Without it summaries are off and `/api/summary` answers 503. */
   summarizer?: SummaryEngine;
+  /** The Settings panel's reads and writes; without it `/api/settings` answers 404. */
+  settings?: SettingsApi;
   /** The project lock's id, answered at `/__livemap/lock` so a later start can tell this LiveMap is alive. */
   lockId?: () => string | undefined;
 }
@@ -308,6 +311,8 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     if (!history && wss.clients.size === 0) return;
     recordAndSend(msg, JSON.stringify(msg));
   };
+  /** The summarizer while AI is on. Settings can switch it off and on during the run, so this is asked each time. */
+  const ai = (): SummaryEngine | undefined => (summarizer && summarizer.status().state !== 'off' ? summarizer : undefined);
   const summariesState = (): SummariesState => ({
     status: summarizer ? summarizer.status() : offStatus(new Date().toISOString().slice(0, 7)),
     files: Object.fromEntries(fileSummaries),
@@ -329,6 +334,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
 
   /** Writes a file summary unless one for this symbol set is already being written; broadcasts it when done. */
   const summarizeFile = (file: FileModel, text: string): void => {
+    const summarizer = ai();
     if (!summarizer) return;
     const hash = symbolSetHash(file);
     if (fileJobs.get(file.path) === hash) return;
@@ -356,9 +362,10 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
    * withdrawn, and the inspector asks again; a request still being answered is redone for the new symbols.
    */
   const summarizeAfter = (change: ChangeSummary): void => {
-    if (!summarizer) return;
+    // AI can be switched off mid-run with summaries still on show: an outdated one is withdrawn either way.
+    const summarizer = ai();
     const file = model.get(change.path) ?? null;
-    if (changeQualifies(change)) {
+    if (summarizer && changeQualifies(change)) {
       summarizer.summarizeChange(change, file).catch(() => null).then(summary => {
         if (!summary || closed) return;
         const i = changes.findIndex(c => c.id === change.id);
@@ -530,7 +537,8 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     const v = body.value as { question?: unknown; path?: unknown } | null;
     const question = typeof v?.question === 'string' ? v.question.trim() : '';
     if (!question || question.length > MAX_QUESTION) return json(res, 400, { error: `expected {question} of 1 to ${MAX_QUESTION} characters` });
-    if (!summarizer?.ask) return json(res, 503, { error: 'AI is off: enable summaries in ~/.livemap/config.json' });
+    const summarizer = ai();
+    if (!summarizer?.ask) return json(res, 503, { error: 'AI is off: turn it on in Settings' });
     if (!isReady) return json(res, 503, { error: 'still indexing' });
     const focus = typeof v?.path === 'string' ? safeRelPath(v.path) ?? undefined : undefined;
     const context = buildAskContext({
@@ -541,6 +549,28 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     if (closed) return;
     if ('error' in r) return json(res, 502, { error: r.error });
     return json(res, 200, { answer: r.answer });
+  };
+
+  /**
+   * `GET /api/settings`, `POST /api/settings/ai` and `POST /api/settings/guardrails` for an authenticated request.
+   * Writes take the same checks as flags and pause. An API key is accepted and never sent back, logged or recorded.
+   */
+  const handleSettings = async (req: http.IncomingMessage, res: http.ServerResponse, pathname: string): Promise<void> => {
+    const settings = opts.settings;
+    if (!settings) return json(res, 404, { error: 'not found' });
+    if (pathname === '/api/settings') {
+      if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method not allowed' }, { allow: 'GET, HEAD' });
+      return json(res, 200, settings.view());
+    }
+    const part = pathname === '/api/settings/ai' ? 'ai' : pathname === '/api/settings/guardrails' ? 'guardrails' : null;
+    if (!part) return json(res, 404, { error: 'not found' });
+    if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' }, { allow: 'POST' });
+    if (!originAllowed(req)) return json(res, 403, { error: 'forbidden origin' });
+    if (!/^application\/json\s*(;|$)/i.test(String(req.headers['content-type'] ?? ''))) return json(res, 415, { error: 'expected application/json' });
+    const body = await readJsonBody(req, MAX_API_BODY);
+    if (!body.ok) return json(res, body.status, { error: body.error });
+    const r = part === 'ai' ? settings.setAi(body.value) : settings.setGuardrails(body.value);
+    return r.ok ? json(res, 200, r.view) : json(res, 400, { error: r.error });
   };
 
   const handle = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
@@ -563,6 +593,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
     if (isApiPath(url.pathname) && !authenticate(req, url, token)) return json(res, 401, { error: 'unauthorized' });
     if (await handleControlApi(req, res, reply, url.pathname, hub, originAllowed(req))) return;
     if (url.pathname === '/api/ask') return handleAsk(req, res);
+    if (url.pathname === '/api/settings' || url.pathname.startsWith('/api/settings/')) return handleSettings(req, res, url.pathname);
     if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method not allowed' }, { allow: 'GET, HEAD' });
 
     // Only a real navigation spends a launch code: a HEAD, link check or browser prefetch/prerender
@@ -609,7 +640,7 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
       // The same checks as /api/file, so a secret, binary or too-large file is never sent.
       const r = readText(url.searchParams.get('path'));
       if (!('content' in r)) return json(res, r.status, { error: r.error });
-      if (!summarizer) return json(res, 503, { error: 'summaries are off' });
+      if (!ai()) return json(res, 503, { error: 'summaries are off' });
       const have = fileSummaries.get(r.file.path);
       if (have && have.hash === symbolSetHash(r.file)) return json(res, 200, { summary: have.summary, hash: have.hash });
       summarizeFile(r.file, r.content);

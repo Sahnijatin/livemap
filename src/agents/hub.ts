@@ -6,6 +6,7 @@ import { ClaudeTailer } from './claude.js';
 import { lastCodexAssistantText } from './codex.js';
 import { normalizeHook } from './normalize.js';
 import { Control } from './control.js';
+import { Guardrails, type GuardDecision } from './guardrails.js';
 import { findClaudeSessions } from './discovery.js';
 import { outputMentionsSecret, touchesSecret } from './labels.js';
 import { resultSysIds } from '../shared/tools.js';
@@ -23,6 +24,7 @@ const TAILER_IDLE_MS = 30 * 60_000;
 const MAX_OFFSETS = 1000;
 /** Output of the failed tool_end the hub adds after a tool start it blocked. */
 export const BLOCKED_OUTPUT = 'Blocked by LiveMap';
+const GUARD_POLL_MS = 2000;
 /** A started tool with no end and no other session activity for this long no longer keeps the session working. */
 export const STALE_TOOL_MS = 10 * 60_000;
 
@@ -38,6 +40,8 @@ export interface AgentHubOptions {
   tailerIdleMs?: number;
 }
 export interface HookOptions {
+  /** False when the hook script cannot hand a message back (one installed before messages existed): none is taken. */
+  followup?: boolean;
   /** False when the hook can no longer receive an answer: nothing is blocked or delivered. */
   canBlock?: boolean;
   /**
@@ -48,6 +52,8 @@ export interface HookOptions {
 }
 export interface HookResult {
   block: string | null;
+  /** A message for an agent that is stopping: the hook hands it back so the agent continues with it. */
+  followup?: string;
   /** The flags whose block this answer carries. */
   flags?: number[];
   /** With `settle` and a block: call once the answer was delivered (true) or lost (false). */
@@ -111,6 +117,8 @@ const tidyTitle = (s: string) => s.replace(/\s+/g, ' ').trim().slice(0, MAX_TITL
  */
 export class AgentHub extends EventEmitter {
   readonly control = new Control();
+  private readonly guardrails: Guardrails;
+  private guardPoll: NodeJS.Timeout | undefined;
   private readonly idleMs: number;
   private readonly ringSize: number;
   private readonly tailerFactory: (file: string, opts?: { startOffset?: number }) => ClaudeTailer;
@@ -142,6 +150,16 @@ export class AgentHub extends EventEmitter {
     this.discoveryMs = opts.discoveryMs ?? DISCOVERY_MS;
     this.sweep = setInterval(() => { this.sweepIdle(Date.now()); this.evictTailers(Date.now()); }, SWEEP_MS);
     this.sweep.unref?.();
+    this.guardrails = new Guardrails(root);
+    if (this.guardrails.state()) this.control.setGuard(this.guardrails.state());
+    // Hooks re-read the rules themselves; this keeps the UI's list current between hooks.
+    this.guardPoll = setInterval(() => { if (this.guardrails.refresh()) this.control.setGuard(this.guardrails.state()); }, GUARD_POLL_MS);
+    this.guardPoll.unref?.();
+  }
+
+  /** Re-reads the guardrails file now (Settings just wrote it) and tells the UI when it changed. */
+  reloadGuardrails(): void {
+    if (this.guardrails.refresh()) this.control.setGuard(this.guardrails.state());
   }
 
   /** Resolves once every hook-triggered emission that waited on an async tail read has been emitted. */
@@ -168,6 +186,25 @@ export class AgentHub extends EventEmitter {
     try {
       decision = n.blockable && opts.canBlock !== false ? this.control.check(agent, sid, now) : null;
     } catch { /* the decision below must not depend on emission */ }
+    // Guardrails come after pause and flags: a call those already stop needs no second reason.
+    let guard: GuardDecision | null = null;
+    try {
+      if (!decision && n.blockable && n.call && opts.canBlock !== false) {
+        const reread = this.guardrails.refresh();
+        guard = this.guardrails.check(n.call, { agent, sessionId: sid }, now);
+        if (guard) {
+          decision = { block: guard.block };
+          if (guard.pause) this.control.setPaused(true);
+        }
+        // Only a hit, or rules the hook just re-read, changes what the UI shows.
+        if (guard || reread) this.control.setGuard(this.guardrails.state());
+      }
+    } catch { /* a faulty rules file never blocks or breaks a hook */ }
+    // The agent finished its turn: hand over the messages waiting for it, so it carries on with them.
+    let followup: { text: string; flags: number[] } | null = null;
+    try {
+      if (n.stop && opts.canBlock !== false && opts.followup !== false) followup = this.control.takeMessages(agent, sid, now);
+    } catch { /* a message that cannot be taken stays queued */ }
     const block = decision?.block ?? null;
     let blocked: { ids: string[]; ends: RawAgentEvent[] } = { ids: [], ends: [] };
     try {
@@ -195,7 +232,21 @@ export class AgentHub extends EventEmitter {
       }
     } catch { /* bookkeeping failure never changes the control decision */ }
     const result: HookResult = decision?.flags ? { block, flags: decision.flags } : { block };
-    if (block !== null && opts.settle) result.settle = this.settler(sid, decision?.flags ?? [], blocked);
+    if (followup) {
+      const flags = followup.flags;
+      result.followup = followup.text;
+      if (opts.settle) result.settle = (delivered) => { if (!delivered) this.control.undeliver(flags); };
+    }
+    if (block !== null && opts.settle) {
+      const settle = this.settler(sid, decision?.flags ?? [], blocked);
+      const hit = guard?.hit;
+      result.settle = !hit ? settle : (delivered) => {
+        settle(delivered);
+        if (delivered) return;
+        this.guardrails.withdraw(hit);
+        this.control.setGuard(this.guardrails.state());
+      };
+    }
     return result;
   }
 
@@ -315,6 +366,8 @@ export class AgentHub extends EventEmitter {
     this.sweep = undefined;
     if (this.discovery) clearInterval(this.discovery);
     this.discovery = undefined;
+    if (this.guardPoll) clearInterval(this.guardPoll);
+    this.guardPoll = undefined;
     for (const t of this.tailers.values()) {
       try { t.stop(); } catch { /* ignore */ }
     }

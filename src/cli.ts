@@ -14,7 +14,9 @@ import { HistoryStore } from './history/store.js';
 import { buildExport, codeWarning } from './export/export.js';
 import { loadSummaryConfig } from './summarize/config.js';
 import { Summarizer } from './summarize/summarizer.js';
-import { USAGE, fail, parseArgs, type Args, type ServeOptions } from './cli-args.js';
+import { SwitchableSummarizer } from './summarize/switch.js';
+import { createSettings } from './settings.js';
+import { USAGE, fail, metaCommand, parseArgs, readVersion, type Args, type ServeOptions } from './cli-args.js';
 import { ANALYZERS } from './engine/domain/index.js';
 // The ServiceNow source registers here until the plugin loader (#53) can load it.
 import { runServiceNow } from '../plugins/servicenow/cli.js';
@@ -148,7 +150,14 @@ async function runExport(argv: string[]): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // A reader that closed early (`livemap init | head`) is not an error: stop quietly instead of a stack trace.
+  process.stdout.on('error', (e: NodeJS.ErrnoException) => { if (e.code === 'EPIPE') process.exit(0); });
   const argv = process.argv.slice(2);
+  const meta = metaCommand(argv);
+  if (meta) {
+    process.stdout.write(meta === 'version' ? `${readVersion()}\n` : `${USAGE}\n`);
+    return;
+  }
   if (argv[0] === 'init') return runInit(argv.slice(1));
   if (argv[0] === 'export') return runExport(argv.slice(1));
   if (argv[0] === 'mcp-proxy') return runMcpProxy(argv.slice(1));
@@ -202,7 +211,9 @@ async function serve(root: string, args: Args, opts: ServeOptions = {}): Promise
   // Summaries are opt-in: config.json `summaries.enabled` or --summaries; a key in the environment alone never enables them.
   const home = livemapHome();
   const summaryConfig = loadSummaryConfig({ env: process.env, home, flag: args.summaries });
-  const summarizer = 'disabled' in summaryConfig ? undefined : new Summarizer(summaryConfig, { home });
+  // One summarizer for the whole run: Settings switches it on, off or to another provider without a restart.
+  const summarizer = new SwitchableSummarizer(cfg => new Summarizer(cfg, { home }), 'disabled' in summaryConfig ? undefined : summaryConfig);
+  const settings = createSettings({ home, root, env: process.env, version: readVersion(), flag: args.summaries, apply: cfg => summarizer.set(cfg), onGuardrails: () => hub.reloadGuardrails() });
   if ('disabled' in summaryConfig && summaryConfig.reason === 'bad-config') {
     const why = summaryConfig.detail ?? 'could not be read or has an invalid "summaries" setting';
     process.stderr.write(`livemap: warning: summaries are off: ${path.join(home, 'config.json')}: ${why}\n`);
@@ -212,7 +223,7 @@ async function serve(root: string, args: Args, opts: ServeOptions = {}): Promise
 
   let server: Awaited<ReturnType<typeof startServer>>;
   try {
-    server = await startServer({ model, watcher, port: args.port, uiDir, hub, attributor, history, summarizer, ...(opts.title ? { name: opts.title } : {}), lockId: () => lockId(root), warn: m => process.stderr.write(`livemap: warning: ${m}\n`) });
+    server = await startServer({ model, watcher, port: args.port, uiDir, hub, attributor, history, summarizer, settings, ...(opts.title ? { name: opts.title } : {}), lockId: () => lockId(root), warn: m => process.stderr.write(`livemap: warning: ${m}\n`) });
   } catch (e) {
     fail(`could not start server: ${(e as Error).message}`);
   }
@@ -240,6 +251,12 @@ async function serve(root: string, args: Args, opts: ServeOptions = {}): Promise
   } catch (e) {
     process.stderr.write(`livemap: could not write runtime file, agent hooks will not reach this run: ${(e as Error).message}\n`);
   }
+  // An installed hook script follows the LiveMap that runs: a newer LiveMap may answer hooks in ways an older script ignores.
+  try {
+    if (fs.existsSync(path.join(home, 'bin', 'livemap-hook.mjs'))) installHookScript(home);
+  } catch (e) {
+    process.stderr.write(`livemap: warning: could not update the hook script: ${(e as Error).message}\n`);
+  }
   hub.startDiscovery();
   const git = opts.git === false ? null : new GitWatcher(root, { pullSec: args.pullSec });
   git?.on('events', evs => hub.ingestRaw(evs, { agent: 'git', cwd: root, hooks: false }));
@@ -257,7 +274,7 @@ async function serve(root: string, args: Args, opts: ServeOptions = {}): Promise
     setTimeout(() => process.exit(0), 3000).unref(); // failsafe if cleanup hangs
     try {
       git?.stop();
-      summarizer?.stop();
+      summarizer.stop();
       attributor.stop();
       hub.stop();
       await watcher.stop();

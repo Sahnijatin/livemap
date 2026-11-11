@@ -62,7 +62,8 @@ jobs:
   # Docs, licenses, size budget, browser e2e and the packed-tarball smoke test once, on Ubuntu with Node 22.
   e2e:
     name: E2E, docs, budget and smoke (ubuntu, Node 22)
-    runs-on: ubuntu-latest
+    # Pinned: Playwright 1.56 has no browser build for Ubuntu 26.04, which ubuntu-latest now is. Move on when Playwright is upgraded.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4

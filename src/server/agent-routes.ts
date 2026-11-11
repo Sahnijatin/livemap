@@ -93,14 +93,14 @@ export async function handleHook(req: http.IncomingMessage, res: http.ServerResp
     return json(400, { error: 'expected {agent, event, payload}' });
   }
   // A hook that already gave up (its 2 s budget) cannot be blocked: record only, keep flags queued.
-  const result = hub.ingestHook(v.agent as 'claude-code' | 'codex' | 'cursor', v.event, v.payload, Date.now(), { canBlock: !req.socket.destroyed, settle: true });
+  const result = hub.ingestHook(v.agent as 'claude-code' | 'codex' | 'cursor', v.event, v.payload, Date.now(), { canBlock: !req.socket.destroyed, settle: true, followup: v.followup === true });
   // A block that never reaches the hook did not stop the tool: the hub undoes it (flags, blocked marks).
   const settle = result.settle;
   if (settle) {
     res.once('finish', () => settle(true));
     res.once('close', () => settle(res.writableFinished));
   }
-  json(200, { block: result.block });
+  json(200, result.followup ? { block: result.block, followup: result.followup } : { block: result.block });
 }
 
 const isJsonType = (req: http.IncomingMessage): boolean =>
@@ -166,7 +166,8 @@ export async function handleControlApi(
     return true;
   }
   try {
-    json(201, control.addFlag(target === '' ? null : (target as string | null), v.note));
+    if (v.kind !== undefined && v.kind !== 'message') throw new Error('unknown kind');
+    json(201, control.addFlag(target === '' ? null : (target as string | null), v.note, Date.now(), v.kind === 'message' ? 'message' : undefined));
   } catch (e) {
     json(400, { error: e instanceof Error ? e.message : 'invalid flag' });
   }
