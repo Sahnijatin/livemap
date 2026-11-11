@@ -100,8 +100,10 @@ export function normalizeHook(input: HookInput): NormalizedHook {
     const callName = shell ? 'Shell' : name;
     const callInput = shell ? { command: shell } : toolInput;
     if (callName) {
-      const command = commandText(callInput);
-      out.call = { tool: callName, paths: toolPaths(callName, callInput, root, cwd), access: classifyTool(callName, callInput).access, ...(command ? { command } : {}) };
+      const cls = classifyTool(callName, callInput);
+      // Only a shell call has a command: a patch tool keeps its patch text in the same field.
+      const command = shell ?? (cls.family === 'shell' ? commandText(callInput) : undefined);
+      out.call = { tool: callName, paths: toolPaths(callName, callInput, root, cwd), access: cls.access, ...(command ? { command } : {}) };
     }
   }
 

@@ -40,6 +40,8 @@ export interface AgentHubOptions {
   tailerIdleMs?: number;
 }
 export interface HookOptions {
+  /** False when the hook script cannot hand a message back (one installed before messages existed): none is taken. */
+  followup?: boolean;
   /** False when the hook can no longer receive an answer: nothing is blocked or delivered. */
   canBlock?: boolean;
   /**
@@ -155,6 +157,11 @@ export class AgentHub extends EventEmitter {
     this.guardPoll.unref?.();
   }
 
+  /** Re-reads the guardrails file now (Settings just wrote it) and tells the UI when it changed. */
+  reloadGuardrails(): void {
+    if (this.guardrails.refresh()) this.control.setGuard(this.guardrails.state());
+  }
+
   /** Resolves once every hook-triggered emission that waited on an async tail read has been emitted. */
   async flush(): Promise<void> {
     while (this.chains.size) await Promise.all([...this.chains.values()].map((c) => c.tail));
@@ -196,7 +203,7 @@ export class AgentHub extends EventEmitter {
     // The agent finished its turn: hand over the messages waiting for it, so it carries on with them.
     let followup: { text: string; flags: number[] } | null = null;
     try {
-      if (n.stop && opts.canBlock !== false) followup = this.control.takeMessages(agent, sid, now);
+      if (n.stop && opts.canBlock !== false && opts.followup !== false) followup = this.control.takeMessages(agent, sid, now);
     } catch { /* a message that cannot be taken stays queued */ }
     const block = decision?.block ?? null;
     let blocked: { ids: string[]; ends: RawAgentEvent[] } = { ids: [], ends: [] };

@@ -362,10 +362,10 @@ export async function startServer(opts: ServerOptions): Promise<LiveMapServer> {
    * withdrawn, and the inspector asks again; a request still being answered is redone for the new symbols.
    */
   const summarizeAfter = (change: ChangeSummary): void => {
+    // AI can be switched off mid-run with summaries still on show: an outdated one is withdrawn either way.
     const summarizer = ai();
-    if (!summarizer) return;
     const file = model.get(change.path) ?? null;
-    if (changeQualifies(change)) {
+    if (summarizer && changeQualifies(change)) {
       summarizer.summarizeChange(change, file).catch(() => null).then(summary => {
         if (!summary || closed) return;
         const i = changes.findIndex(c => c.id === change.id);

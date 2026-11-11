@@ -16,7 +16,8 @@ const PROVIDERS: { id: SummaryProvider; name: string; key: string | null; model:
 function AiSection({ ai, configFile, onSaved }: { ai: AiSettings; configFile: string; onSaved: (v: SettingsView) => void }) {
   const [enabled, setEnabled] = useState(ai.enabled);
   const [provider, setProvider] = useState<SummaryProvider>(ai.provider ?? 'anthropic');
-  const [model, setModel] = useState(ai.provider === 'ollama' || !ai.active ? ai.model ?? '' : '');
+  // Only a model the user saved: the field stays blank for the provider's default, and saving never drops a saved one.
+  const [model, setModel] = useState(ai.savedModel ?? '');
   const [url, setUrl] = useState(ai.url ?? '');
   const [cap, setCap] = useState(ai.monthlyTokenCap ? String(ai.monthlyTokenCap) : '');
   const [key, setKey] = useState('');
@@ -106,8 +107,8 @@ function GuardSection() {
   const [patterns, setPatterns] = useState('');
   const [action, setAction] = useState<'block' | 'pause'>('block');
   const [message, setMessage] = useState('');
-  // The server re-reads the file within 2 seconds of a save, or of an edit made by hand.
-  useEffect(() => { if (guard) setRules(guard.rules); }, [guard]);
+  // The server sends the rules again right after a save, and within 2 seconds of an edit made by hand.
+  useEffect(() => { setRules(guard?.rules ?? []); }, [guard]);
 
   const write = async (next: GuardRule[]): Promise<boolean> => {
     if (busy) return false;

@@ -115,6 +115,16 @@ describe('Guardrails store and the hub', () => {
     h.stop();
   });
 
+  it('a command rule looks only at shell commands, not at a patch whose text holds the words', () => {
+    write({ rules: [{ commands: ['git push'], action: 'pause' }] });
+    const h = hub();
+    const patch = '*** Begin Patch\n*** Update File: README.md\n+Run git push when done\n*** End Patch';
+    expect(h.ingestHook('codex', 'PreToolUse', { session_id: 'x', cwd: root, tool_name: 'apply_patch', tool_input: { command: patch } }, 1).block).toBeNull();
+    expect(h.control.state().paused).toBe(false);
+    expect(h.ingestHook('codex', 'PreToolUse', { session_id: 'x', cwd: root, tool_name: 'Bash', tool_input: { command: 'git push' } }, 2).block).toMatch(/guardrail/);
+    h.stop();
+  });
+
   it('reloads edited rules on the next hook and surfaces file errors', () => {
     write({ rules: [{ paths: ['a.txt'] }] });
     const h = hub();

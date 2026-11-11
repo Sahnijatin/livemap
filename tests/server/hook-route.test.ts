@@ -97,3 +97,25 @@ describe('#33: a block lost before it reached the hook', () => {
     expect(hub.isBlocked('k', start.tool!.id!)).toBe(true);
   });
 });
+
+describe('a message at the stop hook', () => {
+  it('goes only to a hook script that says it can hand it back', async () => {
+    const hub = new AgentHub('/proj');
+    hubs.push(hub);
+    hub.control.addFlag(null, 'next', 1, 'message');
+    const stop = { agent: 'claude-code', event: 'Stop', payload: { session_id: 's' } };
+    const ask = async (body: unknown): Promise<unknown> => {
+      const replies: unknown[] = [];
+      const res = fakeRes();
+      await handleHook(fakeReq(body, false), res as never, (_s, b) => { replies.push(b); }, TOKEN, hub);
+      res.writableFinished = true;
+      res.emit('finish');
+      return replies[0];
+    };
+    // An older installed script sends no `followup`: the message stays queued instead of being lost.
+    expect(await ask(stop)).toEqual({ block: null });
+    expect(hub.control.state().flags[0].deliveredAt).toBeUndefined();
+    expect(await ask({ ...stop, followup: true })).toEqual({ block: null, followup: 'The user sent this from LiveMap:\nnext' });
+    expect(hub.control.state().flags[0].deliveredAt).toBeDefined();
+  });
+});

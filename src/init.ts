@@ -95,7 +95,7 @@ function livemapHome(): string {
  * Replaces `file` atomically: writes a temp file next to the real target (symlinks are kept),
  * fsyncs it, copies the original mode and renames it over the target.
  */
-function atomicWrite(file: string, content: string | Buffer, newMode = 0o644): void {
+export function atomicWrite(file: string, content: string | Buffer, newMode = 0o644): void {
   let target = file;
   let mode = newMode;
   try {

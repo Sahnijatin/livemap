@@ -194,7 +194,7 @@ describe('hook: with a server', () => {
     expect(seen[0].url).toBe('/hook');
     expect(seen[0].headers['x-livemap-token']).toBe('secret-token');
     expect(seen[0].headers['content-type']).toMatch(/^application\/json/);
-    expect(seen[0].body).toEqual({ agent: 'claude-code', event: 'PostToolUse', payload: JSON.parse(claudePayload()) });
+    expect(seen[0].body).toEqual({ agent: 'claude-code', event: 'PostToolUse', payload: JSON.parse(claudePayload()), followup: true });
   });
 
   it('claude PreToolUse exits 2 with the reason on stderr when the server blocks', async () => {

@@ -120,4 +120,13 @@ describe('messages for the agent (delivered when it stops)', () => {
     expect(c.takeMessages('cursor', 'c', 9)?.text).toBe('The user sent this from LiveMap:\nfirst\nsecond');
     expect(c.check('cursor', 'c', 10)?.block).toContain('a flag');
   });
+  it('a message waits while paused, since the agent could not act on it', async () => {
+    const { Control } = await import('../../src/agents/control.js');
+    const c = new Control();
+    c.addFlag(null, 'later', 1, 'message');
+    c.setPaused(true);
+    expect(c.takeMessages('claude-code', 's', 2)).toBeNull();
+    c.setPaused(false);
+    expect(c.takeMessages('claude-code', 's', 3)?.text).toContain('later');
+  });
 });

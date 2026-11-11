@@ -116,7 +116,7 @@ async function main(): Promise<number> {
   if (!rt) return 0;
   const budget = Math.min(REQUEST_BUDGET_MS, TOTAL_BUDGET_MS - (Date.now() - started));
   if (budget <= 0) return 0;
-  const answer = await post(rt.port, rt.token, JSON.stringify({ agent, event, payload }), budget);
+  const answer = await post(rt.port, rt.token, JSON.stringify({ agent, event, payload, followup: true }), budget);
   // A message the user sent from LiveMap, for an agent that just finished its turn: it carries on with it.
   if (answer.followup && isStop(agent as AgentKind, event)) {
     // Cursor reads the follow-up from stdout; Claude Code and Codex continue on exit 2 with the text on stderr.

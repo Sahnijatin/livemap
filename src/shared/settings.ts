@@ -7,7 +7,10 @@ export interface AiSettings {
   /** A provider is configured and in use right now. */
   active: boolean;
   provider?: SummaryProvider;
+  /** The model in use, or the saved one while AI is off. */
   model?: string;
+  /** The model saved in the settings; absent when the provider's default is used. */
+  savedModel?: string;
   url?: string;
   monthlyTokenCap?: number;
   /** Where the key in use comes from: the saved settings, the environment, or nowhere. */

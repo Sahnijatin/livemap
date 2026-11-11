@@ -213,7 +213,7 @@ async function serve(root: string, args: Args, opts: ServeOptions = {}): Promise
   const summaryConfig = loadSummaryConfig({ env: process.env, home, flag: args.summaries });
   // One summarizer for the whole run: Settings switches it on, off or to another provider without a restart.
   const summarizer = new SwitchableSummarizer(cfg => new Summarizer(cfg, { home }), 'disabled' in summaryConfig ? undefined : summaryConfig);
-  const settings = createSettings({ home, root, env: process.env, version: readVersion(), flag: args.summaries, apply: cfg => summarizer.set(cfg) });
+  const settings = createSettings({ home, root, env: process.env, version: readVersion(), flag: args.summaries, apply: cfg => summarizer.set(cfg), onGuardrails: () => hub.reloadGuardrails() });
   if ('disabled' in summaryConfig && summaryConfig.reason === 'bad-config') {
     const why = summaryConfig.detail ?? 'could not be read or has an invalid "summaries" setting';
     process.stderr.write(`livemap: warning: summaries are off: ${path.join(home, 'config.json')}: ${why}\n`);
@@ -250,6 +250,12 @@ async function serve(root: string, args: Args, opts: ServeOptions = {}): Promise
     writeRuntime(root, server.port, server.token, { takeover: locked });
   } catch (e) {
     process.stderr.write(`livemap: could not write runtime file, agent hooks will not reach this run: ${(e as Error).message}\n`);
+  }
+  // An installed hook script follows the LiveMap that runs: a newer LiveMap may answer hooks in ways an older script ignores.
+  try {
+    if (fs.existsSync(path.join(home, 'bin', 'livemap-hook.mjs'))) installHookScript(home);
+  } catch (e) {
+    process.stderr.write(`livemap: warning: could not update the hook script: ${(e as Error).message}\n`);
   }
   hub.startDiscovery();
   const git = opts.git === false ? null : new GitWatcher(root, { pullSec: args.pullSec });

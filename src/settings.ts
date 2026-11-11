@@ -1,7 +1,7 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadSummaryConfig } from './summarize/config.js';
+import { atomicWrite } from './init.js';
 import type { SummaryConfig, SummaryProvider } from './shared/summaries.js';
 import type { AiSettings, SettingsView } from './shared/settings.js';
 import { GUARDRAILS_FILE, parseGuardrails } from './agents/guardrails.js';
@@ -25,6 +25,8 @@ export interface SettingsOptions {
   version: string;
   /** `--summaries` for this run: counts as enabled until the first save from Settings. */
   flag?: boolean;
+  /** Called after the guardrails file was written, so the running rules and the UI follow at once. */
+  onGuardrails?(): void;
   /** Switches the running summarizer to the saved configuration (undefined: off). */
   apply(cfg: SummaryConfig | undefined): void;
 }
@@ -34,19 +36,6 @@ const MAX_FIELD = 500;
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => !!v && typeof v === 'object' && !Array.isArray(v);
 const text = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
-
-/** Replaces `file` through a temp file beside it, readable by the owner only (it can hold an API key). */
-function writePrivate(file: string, content: string, dirMode?: number): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true, ...(dirMode ? { mode: dirMode } : {}) });
-  const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-  try {
-    fs.writeFileSync(tmp, content, { mode: 0o600, flag: 'wx' });
-    fs.renameSync(tmp, file);
-  } catch (e) {
-    try { fs.unlinkSync(tmp); } catch { /* never created */ }
-    throw e;
-  }
-}
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -89,6 +78,7 @@ export function createSettings(opts: SettingsOptions): SettingsApi {
       enabled, active: on, keySource,
       ...(provider ? { provider } : {}),
       ...(on ? { model: resolved.model } : text(s.model) ? { model: text(s.model) } : {}),
+      ...(text(s.model) ? { savedModel: text(s.model) } : {}),
       ...(text(s.url) ? { url: text(s.url) } : {}),
       ...(typeof s.monthlyTokenCap === 'number' ? { monthlyTokenCap: s.monthlyTokenCap } : {}),
       ...(problem ? { problem } : {}),
@@ -136,7 +126,10 @@ export function createSettings(opts: SettingsOptions): SettingsApi {
       else if (typeof key === 'string' && key.trim()) next.apiKey = key.trim();
       else if (key === null || key === '' || moved) delete next.apiKey;
       try {
-        writePrivate(configFile, `${JSON.stringify({ ...config, summaries: next }, null, 2)}\n`, 0o700);
+        fs.mkdirSync(opts.home, { recursive: true, mode: 0o700 });
+        // Through a symlink to its real file, as init writes agent configs. It can hold an API key: owner only.
+        atomicWrite(configFile, `${JSON.stringify({ ...config, summaries: next }, null, 2)}\n`, 0o600);
+        fs.chmodSync(fs.realpathSync.native(configFile), 0o600);
       } catch (e) {
         return { ok: false, error: `could not write ${configFile}: ${message(e)}` };
       }
@@ -150,6 +143,14 @@ export function createSettings(opts: SettingsOptions): SettingsApi {
       if (!isObj(body) || !Array.isArray(body.rules)) return { ok: false, error: 'expected {rules: [...]}' };
       const parsed = parseGuardrails(JSON.stringify({ rules: body.rules }));
       if (parsed.errors.length) return { ok: false, error: parsed.errors.join('; ') };
+      // The list the UI sends holds only the rules LiveMap could read. Rewriting a file that has rules it skipped
+      // (or that is not valid JSON) would delete them: the user fixes the file first.
+      try {
+        const current = parseGuardrails(fs.readFileSync(guardFile, 'utf8').replace(/^\uFEFF/, ''));
+        if (current.errors.length) return { ok: false, error: `${GUARDRAILS_FILE} has a problem (${current.errors.join('; ')}). Fix the file, then change rules here.` };
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return { ok: false, error: `could not read ${GUARDRAILS_FILE}: ${message(e)}` };
+      }
       // Written without the defaults, so the file stays as short as a hand-written one.
       const rules = parsed.rules.map((r: GuardRule) => ({
         ...(r.paths.length ? { paths: r.paths } : {}),
@@ -160,9 +161,8 @@ export function createSettings(opts: SettingsOptions): SettingsApi {
         ...(r.enabled === false ? { enabled: false } : {}),
       }));
       try {
-        writePrivate(guardFile, `${JSON.stringify({ rules }, null, 2)}\n`);
-        // Guardrails are meant to be shared: the usual file mode, not the private one a config needs.
-        fs.chmodSync(guardFile, 0o644);
+        atomicWrite(guardFile, `${JSON.stringify({ rules }, null, 2)}\n`);
+        opts.onGuardrails?.();
       } catch (e) {
         return { ok: false, error: `could not write ${GUARDRAILS_FILE}: ${message(e)}` };
       }

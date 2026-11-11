@@ -74,9 +74,17 @@ export function parseGuardrails(text: string): { rules: GuardRule[]; errors: str
   return { rules, errors };
 }
 
+/** One compiled matcher per pattern, kept while the rules file is unchanged (cleared on every re-read). */
+const matchers = new Map<string, ReturnType<typeof ignore>>();
+
 function pathMatches(pattern: string, rel: string): boolean {
   try {
-    return ignore().add(pattern).ignores(rel);
+    let m = matchers.get(pattern);
+    if (!m) {
+      m = ignore().add(pattern);
+      matchers.set(pattern, m);
+    }
+    return m.ignores(rel);
   } catch {
     return false; // a path or pattern the matcher cannot express never matches
   }
@@ -126,6 +134,7 @@ export class Guardrails {
     } catch { /* no file */ }
     if (stamp === this.stamp) return false;
     this.stamp = stamp;
+    matchers.clear();
     this.present = stamp !== '';
     if (!this.present) {
       this.rules = [];
@@ -151,9 +160,8 @@ export class Guardrails {
     return { file: GUARDRAILS_FILE, rules: this.rules.map(r => ({ ...r, paths: [...r.paths], commands: [...r.commands] })), errors: [...this.errors], hits: this.hits.map(h => ({ ...h })) };
   }
 
-  /** The first rule (in file order) that forbids the call, recorded as a hit; null when none does. */
+  /** The first rule (in file order) that forbids the call, recorded as a hit; null when none does. Call `refresh` first. */
   check(call: GuardCall, who: { agent: AgentKind; sessionId: string }, now: number): GuardDecision | null {
-    this.refresh();
     for (let i = 0; i < this.rules.length; i++) {
       const rule = this.rules[i];
       if (rule.enabled === false) continue;

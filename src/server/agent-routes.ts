@@ -93,7 +93,7 @@ export async function handleHook(req: http.IncomingMessage, res: http.ServerResp
     return json(400, { error: 'expected {agent, event, payload}' });
   }
   // A hook that already gave up (its 2 s budget) cannot be blocked: record only, keep flags queued.
-  const result = hub.ingestHook(v.agent as 'claude-code' | 'codex' | 'cursor', v.event, v.payload, Date.now(), { canBlock: !req.socket.destroyed, settle: true });
+  const result = hub.ingestHook(v.agent as 'claude-code' | 'codex' | 'cursor', v.event, v.payload, Date.now(), { canBlock: !req.socket.destroyed, settle: true, followup: v.followup === true });
   // A block that never reaches the hook did not stop the tool: the hub undoes it (flags, blocked marks).
   const settle = result.settle;
   if (settle) {

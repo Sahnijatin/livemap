@@ -253,7 +253,14 @@ function withoutCode(initial: ProjectState, messages: Rec[]): { initial: Project
   const control = (c: ControlState): ControlState => ({
     ...c,
     flags: c.flags.map(f => ({ ...f, note: stripCode(f.note) })),
-    ...(c.guard ? { guard: { ...c.guard, rules: c.guard.rules.map(r => (r.message ? { ...r, message: stripCode(r.message) } : r)) } } : {}),
+    // A command pattern is shell text, like the tool labels cut elsewhere: neither it nor a hit that quotes it stays.
+    ...(c.guard ? {
+      guard: {
+        ...c.guard,
+        rules: c.guard.rules.map(r => ({ ...r, commands: r.commands.map(() => CODE_REMOVED), ...(r.message ? { message: stripCode(r.message) } : {}) })),
+        hits: c.guard.hits.map(h => (h.target.startsWith('command contains') ? { ...h, target: `command contains ${CODE_REMOVED}` } : h)),
+      },
+    } : {}),
   });
   const summaries = (x: SummariesState): SummariesState => ({
     ...x, files: Object.fromEntries(Object.entries(x.files).map(([p, f]) => [p, { ...f, summary: stripCode(f.summary) }])),

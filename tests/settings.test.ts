@@ -62,6 +62,26 @@ describe('settings: AI', () => {
     expect(config().summaries.apiKey).toBeUndefined();
   });
 
+  it('reports a saved model apart from the default in use, so a save from the form never drops it', () => {
+    const s = make();
+    s.setAi({ enabled: true, provider: 'anthropic', apiKey: 'k' });
+    expect(s.view().ai.savedModel).toBeUndefined();
+    expect(s.view().ai.model).toBeTruthy();
+    const r = s.setAi({ enabled: true, provider: 'anthropic', model: 'my-model' });
+    expect(r.ok && r.view.ai).toMatchObject({ model: 'my-model', savedModel: 'my-model' });
+  });
+
+  it.skipIf(process.platform === 'win32')('writes through a symlinked config file and keeps the link', () => {
+    fs.mkdirSync(home);
+    const real = path.join(dir, 'dotfiles-config.json');
+    fs.writeFileSync(real, '{}');
+    fs.symlinkSync(real, path.join(home, 'config.json'));
+    expect(make().setAi({ enabled: true, provider: 'anthropic', apiKey: 'k' }).ok).toBe(true);
+    expect(fs.lstatSync(path.join(home, 'config.json')).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(fs.readFileSync(real, 'utf8')).summaries.apiKey).toBe('k');
+    expect(fs.statSync(real).mode & 0o777).toBe(0o600);
+  });
+
   it('uses a key from the environment and says so', () => {
     const r = make({ ANTHROPIC_API_KEY: 'envkey' }).setAi({ enabled: true, provider: 'anthropic' });
     expect(r.ok && r.view.ai).toMatchObject({ active: true, keySource: 'env' });
@@ -124,6 +144,26 @@ describe('settings: guardrails', () => {
     expect(s.setGuardrails({ rules: [{ action: 'block' }] })).toEqual({ ok: false, error: 'rule 1: needs "paths" or "commands"' });
     expect(s.setGuardrails({ rules: 'x' }).ok).toBe(false);
     expect(fs.readFileSync(path.join(root, GUARDRAILS_FILE), 'utf8')).toBe(before);
+  });
+  it('never rewrites a file that has rules it could not read, so they are not lost', () => {
+    const file = path.join(root, GUARDRAILS_FILE);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const hand = JSON.stringify({ rules: [{ paths: ['a'] }, { paths: ['b'], action: 'blok' }] });
+    fs.writeFileSync(file, hand);
+    const r = make().setGuardrails({ rules: [{ paths: ['a'], enabled: false }] });
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error).toMatch(/has a problem \(rule 2: "action" must be "block" or "pause"\)/);
+    expect(fs.readFileSync(file, 'utf8')).toBe(hand);
+    fs.writeFileSync(file, '{broken');
+    expect(make().setGuardrails({ rules: [{ paths: ['c'] }] }).ok).toBe(false);
+    expect(fs.readFileSync(file, 'utf8')).toBe('{broken');
+  });
+  it('tells the running LiveMap after a write', () => {
+    let told = 0;
+    const s = createSettings({ home, root, env: {}, version: '1', apply: () => undefined, onGuardrails: () => { told++; } });
+    s.setGuardrails({ rules: [{ paths: ['a'] }] });
+    s.setGuardrails({ rules: [{}] });
+    expect(told).toBe(1);
   });
   it('a rule keeps enabled: false through parsing, and only a boolean is accepted', () => {
     expect(parseGuardrails(JSON.stringify({ rules: [{ paths: ['a'], enabled: false }, { paths: ['b'], enabled: true }] })).rules.map(r => r.enabled)).toEqual([false, undefined]);

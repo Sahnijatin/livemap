@@ -64,9 +64,11 @@ export class Control extends EventEmitter {
 
   /**
    * The waiting messages for an agent that is about to stop, marked delivered: the stop hook hands the text back
-   * and the agent carries on with it as its next instruction. Null when none waits.
+   * and the agent carries on with it as its next instruction. Null when none waits, or while paused.
    */
   takeMessages(agent: AgentKind, sessionId: string, now: number = Date.now()): { text: string; flags: number[] } | null {
+    // While paused the agent could not act on it: every tool call is blocked. The message waits for Resume.
+    if (this.paused) return null;
     const pending = this.flags.filter((f) => f.deliveredAt === undefined && f.kind === 'message');
     if (!pending.length) return null;
     for (const f of pending) {
